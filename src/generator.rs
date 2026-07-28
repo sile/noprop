@@ -95,7 +95,7 @@ fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
 /// let _c = noprop::gen_choice(&mut rng, &['α', 'β', 'γ']);
 /// ```
 #[track_caller]
-pub fn gen_choice<T: Clone + std::fmt::Debug>(rng: &mut Rng, choices: &[T]) -> T {
+pub fn gen_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choices: &[T]) -> T {
     assert!(!choices.is_empty(), "gen_choice: empty slice");
     let loc = Location::caller();
     let idx = usize::from_le_bytes(raw_bytes(rng)) % choices.len();

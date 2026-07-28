@@ -1,5 +1,16 @@
 //! Non-cryptographic seedable PRNG (xoshiro256** with SplitMix64 seed expansion).
 
+use std::collections::VecDeque;
+use std::panic::Location;
+
+/// How many first values at the same location are kept verbatim in the
+/// trace before elision starts.
+const DEDUP_HEAD: usize = 8;
+
+/// How many trailing values at the same location are kept in a rolling
+/// buffer once the head is full.
+const DEDUP_TAIL: usize = 8;
+
 /// Seedable non-cryptographic PRNG used by all noprop generators.
 ///
 /// The underlying algorithm is `xoshiro256**` with the initial 256-bit
@@ -18,53 +29,103 @@
 /// let b = rng.next_u64();
 /// assert_ne!(a, b);
 /// ```
-#[derive(Debug, Clone)]
 pub struct Rng {
     state: [u64; 4],
     generated: Vec<GeneratedValue>,
+    dedup: DedupState,
 }
 
-/// A single value recorded by a primitive generator during a case.
+/// Per-location deduplication state for the generated-value trace.
 ///
-/// Collected by [`Rng`] as each primitive generator is called, and
-/// exposed via [`Error::generated`](crate::Error::generated) when a
-/// case fails. Carries the type name, a `Debug`-formatted value string,
-/// and the source location at which the generator was called (relayed
-/// through `#[track_caller]`).
-#[derive(Clone)]
+/// Compared by [`Location`] (file/line/column) only — the value's type
+/// is not part of the equality check, so a loop that produces multiple
+/// types at the same call site (typical for `#[track_caller]`-propagated
+/// user-defined generators) still deduplicates correctly.
+#[derive(Default)]
+struct DedupState {
+    location: Option<&'static Location<'static>>,
+    head_count: usize,
+    tail: VecDeque<GeneratedValue>,
+    elided: usize,
+}
+
+/// A single entry in the generated-value trace collected during a case.
+///
+/// Entries fall into two kinds, distinguishable via [`is_elided`](Self::is_elided):
+///
+/// - **Value entries** carry a `Debug`-formattable value at a source
+///   location. The Rust type name and formatted representation are
+///   available via [`type_name`](Self::type_name) and
+///   [`value_repr`](Self::value_repr).
+/// - **Elision markers** stand in for a run of same-location entries
+///   that were skipped to keep the trace compact. See the docs on
+///   [`Error::generated`](crate::Error::generated) for the elision
+///   policy, and use [`elided_count`](Self::elided_count) to inspect.
 pub struct GeneratedValue {
     type_name: &'static str,
-    value_repr: String,
-    location: &'static std::panic::Location<'static>,
+    kind: EntryKind,
+    location: &'static Location<'static>,
+}
+
+enum EntryKind {
+    Value(Box<dyn std::fmt::Debug + 'static>),
+    Elided { count: usize },
 }
 
 impl GeneratedValue {
-    /// The Rust type name of the generated value (e.g. `"u32"`).
+    /// The Rust type name of the entry (for elision markers, the type
+    /// of the values that were elided).
     pub fn type_name(&self) -> &'static str {
         self.type_name
     }
 
-    /// `Debug`-formatted string of the generated value.
-    pub fn value_repr(&self) -> &str {
-        &self.value_repr
+    /// Source location at which the generator was called.
+    pub fn location(&self) -> &'static Location<'static> {
+        self.location
     }
 
-    /// Source location at which the generator was called.
-    pub fn location(&self) -> &'static std::panic::Location<'static> {
-        self.location
+    /// `Debug`-formatted string of the generated value, or `None` if
+    /// this entry is an elision marker.
+    pub fn value_repr(&self) -> Option<String> {
+        match &self.kind {
+            EntryKind::Value(v) => Some(format!("{v:?}")),
+            EntryKind::Elided { .. } => None,
+        }
+    }
+
+    /// True if this entry marks a run of skipped same-location values.
+    pub fn is_elided(&self) -> bool {
+        matches!(self.kind, EntryKind::Elided { .. })
+    }
+
+    /// Number of skipped values, or `None` if this is a value entry.
+    pub fn elided_count(&self) -> Option<usize> {
+        if let EntryKind::Elided { count } = self.kind {
+            Some(count)
+        } else {
+            None
+        }
     }
 }
 
 impl std::fmt::Debug for GeneratedValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "- {} = {}  (at {}:{})",
-            self.type_name,
-            self.value_repr,
-            self.location.file(),
-            self.location.line()
-        )
+        match &self.kind {
+            EntryKind::Value(v) => write!(
+                f,
+                "- {} = {v:?}  (at {}:{})",
+                self.type_name,
+                self.location.file(),
+                self.location.line(),
+            ),
+            EntryKind::Elided { count } => write!(
+                f,
+                "... {count} more {} elided at {}:{} ...",
+                self.type_name,
+                self.location.file(),
+                self.location.line(),
+            ),
+        }
     }
 }
 
@@ -79,6 +140,7 @@ impl Rng {
         Self {
             state: [sm.next(), sm.next(), sm.next(), sm.next()],
             generated: Vec::new(),
+            dedup: DedupState::default(),
         }
     }
 
@@ -123,26 +185,95 @@ impl Rng {
     /// the top of the primitive (which itself carries `#[track_caller]`),
     /// so that the recorded position points at the call site in the
     /// user's property closure rather than at the primitive's own body.
+    ///
+    /// The value is stored `Box<dyn Debug>` (format-lazy): its Debug
+    /// representation is only rendered if the trace is actually
+    /// displayed at failure time, not on every generator call.
+    ///
+    /// A run of many same-location entries is deduplicated: the first
+    /// 8 and last 8 are kept verbatim; the middle is replaced with a
+    /// single elision-marker entry that carries the skipped count.
+    /// Comparison is by location only, so a `#[track_caller]`-propagated
+    /// composite generator (e.g. a user-defined `gen_person` called
+    /// inside a loop) also folds correctly.
     #[doc(hidden)]
-    pub fn record_generated<T: std::fmt::Debug>(
+    #[track_caller]
+    pub fn record_generated<T: std::fmt::Debug + Clone + 'static>(
         &mut self,
         value: &T,
-        location: &'static std::panic::Location<'static>,
+        location: &'static Location<'static>,
     ) {
-        self.generated.push(GeneratedValue {
+        let same_as_last = self
+            .dedup
+            .location
+            .is_some_and(|l| same_location(l, location));
+
+        if !same_as_last {
+            self.flush_dedup_tail();
+            self.dedup.location = Some(location);
+            self.dedup.head_count = 0;
+            // `elided` and `tail` are drained/reset in `flush_dedup_tail`.
+        }
+
+        let entry = GeneratedValue {
             type_name: std::any::type_name::<T>(),
-            value_repr: format!("{value:?}"),
+            kind: EntryKind::Value(Box::new(value.clone())),
             location,
-        });
+        };
+
+        if self.dedup.head_count < DEDUP_HEAD {
+            self.generated.push(entry);
+            self.dedup.head_count += 1;
+        } else {
+            if self.dedup.tail.len() == DEDUP_TAIL {
+                self.dedup.tail.pop_front();
+                self.dedup.elided += 1;
+            }
+            self.dedup.tail.push_back(entry);
+        }
+    }
+
+    /// Flush the trailing tail buffer for the current same-location run
+    /// into [`generated`](Self::generated), preceded by an elision
+    /// marker if any entries were dropped.
+    fn flush_dedup_tail(&mut self) {
+        if self.dedup.elided > 0 {
+            let location = self
+                .dedup
+                .location
+                .expect("elided implies a prior location");
+            let type_name = self.dedup.tail.front().map(|e| e.type_name).unwrap_or("?");
+            self.generated.push(GeneratedValue {
+                type_name,
+                kind: EntryKind::Elided {
+                    count: self.dedup.elided,
+                },
+                location,
+            });
+        }
+        self.generated.extend(self.dedup.tail.drain(..));
+        self.dedup.elided = 0;
     }
 
     pub(crate) fn take_generated(&mut self) -> Vec<GeneratedValue> {
+        self.flush_dedup_tail();
+        self.dedup = DedupState::default();
         std::mem::take(&mut self.generated)
     }
 
     pub(crate) fn clear_generated(&mut self) {
         self.generated.clear();
+        self.dedup = DedupState::default();
     }
+}
+
+/// Compare two `Location`s by their surface fields.
+///
+/// We don't rely on pointer equality even though `Location::caller()`
+/// typically returns the same static instance for a given call site —
+/// value comparison is robust to any compiler dedup differences.
+fn same_location(a: &Location<'_>, b: &Location<'_>) -> bool {
+    a.file() == b.file() && a.line() == b.line() && a.column() == b.column()
 }
 
 /// SplitMix64 — a small-state PRNG used only for expanding the user seed
