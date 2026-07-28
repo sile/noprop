@@ -5,8 +5,9 @@ mod generator;
 mod rng;
 
 pub use generator::{
-    Generate, bool, i8, i16, i32, i64, i128, isize, non_zero_i8, non_zero_i16, non_zero_i32,
-    non_zero_i64, non_zero_i128, non_zero_isize, non_zero_u8, non_zero_u16, non_zero_u32,
-    non_zero_u64, non_zero_u128, non_zero_usize, u8, u16, u32, u64, u128, usize,
+    gen_bool, gen_i8, gen_i16, gen_i32, gen_i64, gen_i128, gen_isize, gen_non_zero_i8,
+    gen_non_zero_i16, gen_non_zero_i32, gen_non_zero_i64, gen_non_zero_i128, gen_non_zero_isize,
+    gen_non_zero_u8, gen_non_zero_u16, gen_non_zero_u32, gen_non_zero_u64, gen_non_zero_u128,
+    gen_non_zero_usize, gen_u8, gen_u16, gen_u32, gen_u64, gen_u128, gen_usize,
 };
 pub use rng::Rng;
