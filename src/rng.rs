@@ -55,15 +55,7 @@ impl Rng {
         result
     }
 
-    /// Fill `dst` with random bytes.
-    ///
-    /// Primitive generators should draw randomness through `fill` rather
-    /// than [`next_u64`](Self::next_u64) so that every generator is
-    /// expressible as "consume a fixed-size byte slice." That lets a
-    /// future bytes-based shrink implementation substitute a fixed byte
-    /// source for the RNG without touching any generator.
-    ///
-    /// An empty slice consumes no RNG state.
+    /// Fill `dst` with random bytes. An empty slice consumes no RNG state.
     pub fn fill(&mut self, dst: &mut [u8]) {
         let mut i = 0;
         while i + 8 <= dst.len() {

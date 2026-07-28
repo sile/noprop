@@ -91,10 +91,9 @@ pub fn gen_choice<T: Clone>(rng: &mut Rng, choices: &[T]) -> T {
 // === Boolean generator ===
 
 /// Uniformly-distributed `bool`.
-///
-/// Consumes one byte from the RNG per call to preserve the invariant
-/// that every primitive draws a fixed-size byte slice (see [`Rng::fill`]).
 pub fn gen_bool(rng: &mut Rng) -> bool {
+    // Consume one byte so this primitive shares the "read a fixed-size
+    // byte slice" shape with the integer generators.
     let mut buf = [0u8; 1];
     rng.fill(&mut buf);
     buf[0] & 1 != 0
@@ -331,11 +330,10 @@ pub fn gen_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
 
 /// Uniformly-distributed `char` over the valid Unicode scalar values
 /// (`0..=0x10FFFF`, excluding the surrogate range `0xD800..=0xDFFF`).
-///
-/// Uses rejection sampling on a 21-bit mask; expected rejection rate is
-/// about 47%, so the 64-attempt bound is unreachable in practice
-/// (P(all 64 fail) < 10^-20).
 pub fn gen_char(rng: &mut Rng) -> char {
+    // Rejection sampling on a 21-bit mask; expected rejection rate is
+    // about 47%, so the 64-attempt bound is unreachable in practice
+    // (P(all 64 fail) < 10^-20).
     for _ in 0..64 {
         let n = gen_u32(rng) & 0x1F_FFFF;
         if let Some(c) = char::from_u32(n) {

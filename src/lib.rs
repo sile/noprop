@@ -1,9 +1,12 @@
 //! Imperative property-based testing library with no dependencies, no macros, and no unsafe.
 #![forbid(unsafe_code)]
 
+mod error;
 mod generator;
 mod rng;
+mod runner;
 
+pub use error::{Error, Result};
 pub use generator::{
     gen_ascii_char, gen_ascii_printable_char, gen_bool, gen_char, gen_choice, gen_i8, gen_i16,
     gen_i32, gen_i64, gen_i128, gen_isize, gen_non_zero_i8, gen_non_zero_i16, gen_non_zero_i32,
@@ -12,3 +15,4 @@ pub use generator::{
     gen_u32, gen_u64, gen_u128, gen_usize,
 };
 pub use rng::Rng;
+pub use runner::Runner;
