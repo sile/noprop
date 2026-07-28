@@ -19,13 +19,11 @@ Example
 -------
 
 ```rust
-use noprop::{Runner, gen_u32};
-
 #[test]
 fn addition_is_commutative() -> noprop::Result<()> {
-    Runner { seed: 0xDEAD_BEEF, iterations: 1024 }.run(|rng| {
-        let a = gen_u32(rng);
-        let b = gen_u32(rng);
+    noprop::Runner { seed: 0xDEAD_BEEF, iterations: 1024 }.run(|rng| {
+        let a = noprop::gen_u32(rng);
+        let b = noprop::gen_u32(rng);
         assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
         Ok(())
     })
