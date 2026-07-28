@@ -293,6 +293,38 @@ fn error_debug_output_includes_generated_values() {
 }
 
 #[test]
+fn gen_bytes_records_the_array_as_one_trace_entry() {
+    let result = noprop::Runner {
+        seed: 5,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let _key: [u8; 16] = noprop::gen_bytes(rng);
+        panic!("stop");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 1);
+    assert_eq!(generated[0].type_name(), "[u8; 16]");
+}
+
+#[test]
+fn gen_bytes_vec_records_the_vec_as_one_trace_entry() {
+    let result = noprop::Runner {
+        seed: 5,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let _buf = noprop::gen_bytes_vec(rng, 42);
+        panic!("stop");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 1);
+    assert_eq!(generated[0].type_name(), "alloc::vec::Vec<u8>");
+}
+
+#[test]
 fn error_display_output_includes_generated_values() {
     let result = noprop::Runner {
         seed: 42,

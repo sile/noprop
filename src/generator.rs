@@ -104,6 +104,51 @@ pub fn gen_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choices: 
     v
 }
 
+// === Byte generators ===
+
+/// Uniformly-distributed fixed-size byte array.
+///
+/// The generic parameter `N` sets the array length at compile time, so
+/// the whole result is stack-allocated and recorded as a single trace
+/// entry (`[u8; N] = [...]`) rather than N separate `u8` entries.
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let key: [u8; 32] = noprop::gen_bytes(&mut rng);
+/// assert_eq!(key.len(), 32);
+/// ```
+#[track_caller]
+pub fn gen_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
+    let loc = Location::caller();
+    let bytes = raw_bytes::<N>(rng);
+    rng.record_generated(&bytes, loc);
+    bytes
+}
+
+/// Uniformly-distributed `Vec<u8>` of length `len`.
+///
+/// Use this when the byte-buffer length is known only at runtime
+/// (`gen_bytes_vec(rng, gen_u32(rng) as usize % 1024)`). The whole
+/// buffer is recorded as a single trace entry.
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let bytes = noprop::gen_bytes_vec(&mut rng, 100);
+/// assert_eq!(bytes.len(), 100);
+/// ```
+#[track_caller]
+pub fn gen_bytes_vec(rng: &mut Rng, len: usize) -> Vec<u8> {
+    let loc = Location::caller();
+    let mut bytes = vec![0u8; len];
+    rng.fill(&mut bytes);
+    rng.record_generated(&bytes, loc);
+    bytes
+}
+
 // === Boolean generator ===
 
 /// Uniformly-distributed `bool`.

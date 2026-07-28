@@ -21,12 +21,18 @@ const DEDUP_TAIL: usize = 8;
 /// must always be provided by the caller. This makes every property test
 /// exactly reproducible from its seed.
 ///
+/// The only public method is [`Rng::new`]; all byte/word production
+/// happens through the `noprop::gen_*` free functions, which record the
+/// generated values into an internal trace surfaced on failure. Raw
+/// PRNG state access is deliberately hidden so users cannot accidentally
+/// bypass that trace.
+///
 /// # Examples
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0xDEAD_BEEF);
-/// let a = rng.next_u64();
-/// let b = rng.next_u64();
+/// let a = noprop::gen_u32(&mut rng);
+/// let b = noprop::gen_u32(&mut rng);
 /// assert_ne!(a, b);
 /// ```
 pub struct Rng {
@@ -146,8 +152,10 @@ impl Rng {
 
     /// Advance the PRNG by one step and return the next 64 random bits.
     ///
-    /// This is the raw `xoshiro256**` step function.
-    pub fn next_u64(&mut self) -> u64 {
+    /// This is the raw `xoshiro256**` step function. `pub(crate)`
+    /// so that primitive generators can build on it without exposing
+    /// a trace-bypassing entry point.
+    pub(crate) fn next_u64(&mut self) -> u64 {
         let result = self.state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
 
         let t = self.state[1] << 17;
@@ -164,7 +172,9 @@ impl Rng {
     }
 
     /// Fill `dst` with random bytes. An empty slice consumes no RNG state.
-    pub fn fill(&mut self, dst: &mut [u8]) {
+    ///
+    /// `pub(crate)` — see the [`Rng`] type-level docs for why.
+    pub(crate) fn fill(&mut self, dst: &mut [u8]) {
         let mut i = 0;
         while i + 8 <= dst.len() {
             let bytes = self.next_u64().to_le_bytes();
@@ -196,9 +206,8 @@ impl Rng {
     /// Comparison is by location only, so a `#[track_caller]`-propagated
     /// composite generator (e.g. a user-defined `gen_person` called
     /// inside a loop) also folds correctly.
-    #[doc(hidden)]
     #[track_caller]
-    pub fn record_generated<T: std::fmt::Debug + Clone + 'static>(
+    pub(crate) fn record_generated<T: std::fmt::Debug + Clone + 'static>(
         &mut self,
         value: &T,
         location: &'static Location<'static>,
