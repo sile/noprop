@@ -1,5 +1,7 @@
 //! Value generation: the [`Generate`] trait and built-in generators.
 
+use std::num::NonZero;
+
 use crate::Rng;
 
 /// A value generator.
@@ -202,6 +204,157 @@ pub fn isize() -> impl Generate<Output = isize> {
     }
 }
 
+// === Non-zero integer generators ===
+//
+// Each `non_zero_*` uses rejection sampling: read the underlying integer
+// and retry on zero. P(zero) is at most 1/256 per attempt for every type
+// below, so the 64-attempt bound is effectively unreachable (worst-case
+// P(all zero) < (1/256)^64 ~ 10^-154 for u8; even smaller elsewhere).
+
+/// A generator that emits uniformly-distributed non-zero `u8` values.
+pub fn non_zero_u8() -> impl Generate<Output = NonZero<u8>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(u8().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_u8: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `u16` values.
+pub fn non_zero_u16() -> impl Generate<Output = NonZero<u16>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(u16().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_u16: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `u32` values.
+pub fn non_zero_u32() -> impl Generate<Output = NonZero<u32>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(u32().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_u32: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `u64` values.
+pub fn non_zero_u64() -> impl Generate<Output = NonZero<u64>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(u64().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_u64: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `u128` values.
+pub fn non_zero_u128() -> impl Generate<Output = NonZero<u128>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(u128().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_u128: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `usize` values.
+pub fn non_zero_usize() -> impl Generate<Output = NonZero<usize>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(usize().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_usize: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `i8` values.
+pub fn non_zero_i8() -> impl Generate<Output = NonZero<i8>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(i8().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_i8: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `i16` values.
+pub fn non_zero_i16() -> impl Generate<Output = NonZero<i16>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(i16().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_i16: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `i32` values.
+pub fn non_zero_i32() -> impl Generate<Output = NonZero<i32>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(i32().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_i32: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `i64` values.
+pub fn non_zero_i64() -> impl Generate<Output = NonZero<i64>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(i64().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_i64: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `i128` values.
+pub fn non_zero_i128() -> impl Generate<Output = NonZero<i128>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(i128().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_i128: rejection sampling exhausted")
+    }
+}
+
+/// A generator that emits uniformly-distributed non-zero `isize` values.
+pub fn non_zero_isize() -> impl Generate<Output = NonZero<isize>> {
+    |rng: &mut Rng| {
+        for _ in 0..64 {
+            if let Some(nz) = NonZero::new(isize().generate(rng)) {
+                return nz;
+            }
+        }
+        panic!("non_zero_isize: rejection sampling exhausted")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +433,69 @@ mod tests {
             }
         }
         panic!("i8 samples covered only one sign");
+    }
+
+    #[test]
+    fn non_zero_primitives_are_deterministic() {
+        let mut a = Rng::new(456);
+        let mut b = Rng::new(456);
+        assert_eq!(
+            non_zero_u8().generate(&mut a),
+            non_zero_u8().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_u16().generate(&mut a),
+            non_zero_u16().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_u32().generate(&mut a),
+            non_zero_u32().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_u64().generate(&mut a),
+            non_zero_u64().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_u128().generate(&mut a),
+            non_zero_u128().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_usize().generate(&mut a),
+            non_zero_usize().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_i8().generate(&mut a),
+            non_zero_i8().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_i16().generate(&mut a),
+            non_zero_i16().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_i32().generate(&mut a),
+            non_zero_i32().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_i64().generate(&mut a),
+            non_zero_i64().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_i128().generate(&mut a),
+            non_zero_i128().generate(&mut b)
+        );
+        assert_eq!(
+            non_zero_isize().generate(&mut a),
+            non_zero_isize().generate(&mut b)
+        );
+    }
+
+    #[test]
+    fn non_zero_u8_exercises_rejection_loop() {
+        // Type invariant already guarantees non-zero; this just exercises
+        // the rejection loop over many samples without panicking.
+        let mut rng = Rng::new(1);
+        for _ in 0..1000 {
+            let _ = non_zero_u8().generate(&mut rng);
+        }
     }
 }
