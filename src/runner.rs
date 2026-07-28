@@ -13,6 +13,7 @@ use crate::{Error, Result, Rng};
 /// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, cases: 16 }.run(|rng| {
 ///     let x = noprop::gen_u32(rng);
 ///     assert_eq!(x, x);
+///     Ok(())
 /// });
 /// ```
 ///
@@ -49,11 +50,40 @@ use crate::{Error, Result, Rng};
 ///
 /// let _: noprop::Result<()> = noprop::Runner { seed: seed(), cases: cases() }.run(|_rng| {
 ///     // property
+///     Ok(())
 /// });
 /// ```
 ///
 /// The env var names shown above are project-specific placeholders;
 /// pick names that fit the calling project.
+///
+/// # Failing a case via `Err` or panic
+///
+/// The property closure signals success by returning `Ok(())`. A
+/// failure can be signalled either by returning `Err` or by panicking
+/// (typically via `assert!` / `assert_eq!`); both are captured into the
+/// resulting [`Error`] uniformly.
+///
+/// The `Err` variant is `Box<dyn std::error::Error>`, so the `?`
+/// operator works for any error type that implements [`Error`]:
+///
+/// ```
+/// let _: noprop::Result<()> = noprop::Runner { seed: 0, cases: 1 }.run(|_rng| {
+///     let _n: u32 = "42".parse()?;   // ParseIntError -> Box<dyn Error>
+///     Ok(())
+/// });
+/// ```
+///
+/// Ad-hoc messages work via `Into`:
+///
+/// ```
+/// let _: noprop::Result<()> = noprop::Runner { seed: 0, cases: 1 }.run(|_rng| {
+///     if false { return Err("something bad".into()); }
+///     Ok(())
+/// });
+/// ```
+///
+/// [`Error`]: std::error::Error
 pub struct Runner {
     /// The seed used to construct the internal [`Rng`].
     pub seed: u64,
@@ -65,26 +95,28 @@ impl Runner {
     /// Run `f` for `cases` iterations against a shared [`Rng`] seeded
     /// with `seed`.
     ///
-    /// Each case invokes `f(&mut rng)`. If `f` panics (via `assert!`,
-    /// `assert_eq!`, or an explicit `panic!`), the panic is caught by
-    /// `catch_unwind`, wrapped in an [`Error`] carrying the seed and
-    /// the failing case index, and returned as `Err`. Subsequent cases
-    /// are skipped.
-    ///
-    /// If every case completes without panicking, returns `Ok(())`.
+    /// Each case invokes `f(&mut rng)`. A returned `Ok(())` counts as a
+    /// pass; a returned `Err` or a panic (via `assert!`, `assert_eq!`,
+    /// or explicit `panic!`) counts as a failure. Panics are caught by
+    /// `catch_unwind`. Either failure mode is wrapped in an [`Error`]
+    /// carrying the seed, the failing case index, the failure message,
+    /// and the generated-value trace, and returned as `Err`. Subsequent
+    /// cases past the first failure are skipped.
     pub fn run<F>(self, mut f: F) -> Result<()>
     where
-        F: FnMut(&mut Rng),
+        F: FnMut(&mut Rng) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
         let mut rng = Rng::new(self.seed);
         for case_index in 0..self.cases {
             rng.clear_generated();
-            let payload = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
-            if let Err(panic) = payload {
-                let message = panic_message(panic);
-                let generated = rng.take_generated();
-                return Err(Error::from_panic(self.seed, case_index, message, generated));
-            }
+            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
+            let message = match outcome {
+                Ok(Ok(())) => continue,
+                Ok(Err(err)) => format!("{err}"),
+                Err(panic) => panic_message(panic),
+            };
+            let generated = rng.take_generated();
+            return Err(Error::from_panic(self.seed, case_index, message, generated));
         }
         Ok(())
     }

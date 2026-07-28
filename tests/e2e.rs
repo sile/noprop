@@ -14,6 +14,7 @@ fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
     .run(|rng| {
         let x = noprop::gen_u32(rng);
         assert_eq!(x, x);
+        Ok(())
     })
 }
 
@@ -27,6 +28,7 @@ fn run_returns_err_on_failed_assertion() {
     .run(|rng| {
         let x = noprop::gen_u32(rng);
         assert_eq!(x, 0, "expected zero, got {x}");
+        Ok(())
     });
 
     let err = result.expect_err("expected Err, got Ok");
@@ -44,6 +46,7 @@ fn same_seed_reproduces_same_failure() {
             // Roughly half of cases fail — enough to guarantee an Err
             // within 32 cases with vanishing probability of Ok.
             assert!(x < 0x8000_0000, "high bit set: {x:#010x}");
+            Ok(())
         })
     };
 
@@ -64,6 +67,7 @@ fn zero_cases_returns_ok_without_invoking_property() -> noprop::Result<()> {
     let mut invoked = false;
     noprop::Runner { seed: 0, cases: 0 }.run(|_rng| {
         invoked = true;
+        Ok(())
     })?;
     assert!(!invoked, "property should not be invoked when cases is 0");
     Ok(())
@@ -94,6 +98,7 @@ fn subsequent_cases_are_skipped_after_failure() {
         if count == 3 {
             panic!("stop here");
         }
+        Ok(())
     });
     // The failing case counts, but nothing after it runs.
     assert_eq!(count, 3);
@@ -218,6 +223,7 @@ fn generated_trace_is_isolated_per_case() {
             panic!("fail on case {case}");
         }
         case += 1;
+        Ok(())
     });
 
     let err = result.expect_err("expected Err");
