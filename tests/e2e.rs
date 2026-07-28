@@ -68,17 +68,17 @@ fn same_seed_reproduces_same_failure() {
 
 #[test]
 fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> {
-    let mut invoked = false;
+    let invoked = std::cell::Cell::new(false);
     noprop::Runner {
         seed: 0,
         iterations: 0,
     }
     .run(|_rng| {
-        invoked = true;
+        invoked.set(true);
         Ok(())
     })?;
     assert!(
-        !invoked,
+        !invoked.get(),
         "property should not be invoked when iterations is 0"
     );
     Ok(())
@@ -103,20 +103,23 @@ fn error_debug_output_contains_seed_and_case() {
 
 #[test]
 fn subsequent_cases_are_skipped_after_failure() {
-    let mut count = 0usize;
+    // Count iterations via a Cell so that the property closure stays a
+    // pure `Fn`. Panic on the third invocation and verify the runner
+    // stopped there (no fourth invocation).
+    let count = std::cell::Cell::new(0usize);
     let _ = noprop::Runner {
         seed: 0,
         iterations: 100,
     }
     .run(|_rng| {
-        count += 1;
-        if count == 3 {
+        let n = count.get() + 1;
+        count.set(n);
+        if n == 3 {
             panic!("stop here");
         }
         Ok(())
     });
-    // The failing case counts, but nothing after it runs.
-    assert_eq!(count, 3);
+    assert_eq!(count.get(), 3);
 }
 
 #[test]
@@ -245,19 +248,22 @@ fn generated_trace_treats_different_locations_independently() {
 fn generated_trace_is_isolated_per_case() {
     // Generate one value in case 0, then fail in case 1 after generating
     // a different value. The trace should reflect only case 1's values.
-    let mut case = 0;
+    // Cell keeps the closure a pure `Fn` while still stepping through
+    // per-iteration branches.
+    let case = std::cell::Cell::new(0usize);
     let result = noprop::Runner {
         seed: 7,
         iterations: 5,
     }
     .run(|rng| {
-        if case == 0 {
+        let c = case.get();
+        if c == 0 {
             let _ = noprop::gen_u64(rng);
         } else {
             let _ = noprop::gen_u16(rng);
-            panic!("fail on case {case}");
+            panic!("fail on case {c}");
         }
-        case += 1;
+        case.set(c + 1);
         Ok(())
     });
 

@@ -108,9 +108,23 @@ impl Runner {
     /// an [`Error`] carrying the seed, the failing case's index, the
     /// failure message, and the generated-value trace, and returned as
     /// `Err`. Subsequent iterations past the first failure are skipped.
-    pub fn run<F>(self, mut f: F) -> Result<()>
+    ///
+    /// # Property purity
+    ///
+    /// The closure is bound as `Fn`, not `FnMut`, so it cannot capture
+    /// enclosing variables by mutable reference. Property tests are
+    /// meant to be pure functions of the `Rng`-derived input: keeping
+    /// mutation off the closure's captures makes each iteration
+    /// independent and each failure reproducible from the seed alone.
+    ///
+    /// If a test genuinely needs shared state (a debug counter, a
+    /// cache, a report sink), reach for interior mutability
+    /// (`std::cell::Cell` / `std::cell::RefCell` / atomics) so the
+    /// escape from purity is spelled out in the code rather than
+    /// hidden behind an unassuming `let mut`.
+    pub fn run<F>(self, f: F) -> Result<()>
     where
-        F: FnMut(&mut Rng) -> std::result::Result<(), Box<dyn std::error::Error>>,
+        F: Fn(&mut Rng) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
         let mut rng = Rng::new(self.seed);
         for case_index in 0..self.iterations {
