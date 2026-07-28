@@ -4,40 +4,61 @@ use std::panic::AssertUnwindSafe;
 
 use crate::{Error, Result, Rng};
 
-/// Default number of cases per [`Runner::run`].
-const DEFAULT_CASES: usize = 256;
-
 /// A property-based test runner.
 ///
-/// # Examples
+/// # Basic usage
 ///
-/// ```no_run
-/// #[test]
-/// fn round_trip() -> noprop::Result<()> {
-///     noprop::Runner::new(0xDEAD_BEEF).run(|rng| {
-///         let x = noprop::gen_u32(rng);
-///         assert_eq!(x, x);
-///     })
-/// }
 /// ```
+/// let _: noprop::Result<()> = noprop::Runner::new(0xDEAD_BEEF, 16).run(|rng| {
+///     let x = noprop::gen_u32(rng);
+///     assert_eq!(x, x);
+/// });
+/// ```
+///
+/// # Configuring seed and cases
+///
+/// [`Runner::new`] takes `seed` and `cases` as required arguments and
+/// does not prescribe how to obtain them. A common setup reads both
+/// from project-specific environment variables, so that failures are
+/// reproducible from a failure report (via the seed) and case counts
+/// can differ between local and CI runs:
+///
+/// ```
+/// fn seed() -> u64 {
+///     std::env::var("MYAPP_SEED")
+///         .ok()
+///         .and_then(|s| s.parse().ok())
+///         .unwrap_or_else(|| {
+///             std::time::SystemTime::now()
+///                 .duration_since(std::time::UNIX_EPOCH)
+///                 .map(|d| d.as_nanos() as u64)
+///                 .unwrap_or(0)
+///         })
+/// }
+///
+/// fn cases() -> usize {
+///     std::env::var("MYAPP_CASES")
+///         .ok()
+///         .and_then(|s| s.parse().ok())
+///         .unwrap_or(256)
+/// }
+///
+/// let _: noprop::Result<()> = noprop::Runner::new(seed(), cases()).run(|_rng| {
+///     // property
+/// });
+/// ```
+///
+/// The env var names shown above are project-specific placeholders;
+/// pick names that fit the calling project.
 pub struct Runner {
     seed: u64,
     cases: usize,
 }
 
 impl Runner {
-    /// Create a runner seeded with `seed`. Default case count is 256.
-    pub fn new(seed: u64) -> Self {
-        Self {
-            seed,
-            cases: DEFAULT_CASES,
-        }
-    }
-
-    /// Override the number of cases (default 256).
-    pub fn with_cases(mut self, cases: usize) -> Self {
-        self.cases = cases;
-        self
+    /// Create a runner with the given seed and case count.
+    pub fn new(seed: u64, cases: usize) -> Self {
+        Self { seed, cases }
     }
 
     /// Run `f` for `cases` iterations against a shared [`Rng`] seeded

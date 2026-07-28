@@ -6,7 +6,7 @@ noprop
 [![Actions Status](https://github.com/sile/noprop/workflows/CI/badge.svg)](https://github.com/sile/noprop/actions)
 ![License](https://img.shields.io/crates/l/noprop)
 
-An imperative property-based testing library for Rust with no dependencies, no macros, and no unsafe.
+An imperative property-based testing library for Rust with no dependencies, no macros, no unsafe, and no implicit I/O.
 
 > [!WARNING]
 > Not implemented yet (project scaffold only).

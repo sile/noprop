@@ -7,7 +7,7 @@
 
 #[test]
 fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
-    noprop::Runner::new(0xDEAD_BEEF).with_cases(16).run(|rng| {
+    noprop::Runner::new(0xDEAD_BEEF, 16).run(|rng| {
         let x = noprop::gen_u32(rng);
         assert_eq!(x, x);
     })
@@ -16,7 +16,7 @@ fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
 #[test]
 fn run_returns_err_on_failed_assertion() {
     // Property "every u32 is zero" fails almost immediately.
-    let result = noprop::Runner::new(0x1234).with_cases(64).run(|rng| {
+    let result = noprop::Runner::new(0x1234, 64).run(|rng| {
         let x = noprop::gen_u32(rng);
         assert_eq!(x, 0, "expected zero, got {x}");
     });
@@ -31,7 +31,7 @@ fn same_seed_reproduces_same_failure() {
     let seed = 0xABCD_1234_5678_9ABC;
 
     let run = || {
-        noprop::Runner::new(seed).with_cases(32).run(|rng| {
+        noprop::Runner::new(seed, 32).run(|rng| {
             let x = noprop::gen_u32(rng);
             // Roughly half of cases fail — enough to guarantee an Err
             // within 32 cases with vanishing probability of Ok.
@@ -52,29 +52,19 @@ fn same_seed_reproduces_same_failure() {
 }
 
 #[test]
-fn default_case_count_is_256() -> noprop::Result<()> {
-    let mut count = 0usize;
-    noprop::Runner::new(0).run(|_rng| {
-        count += 1;
+fn zero_cases_returns_ok_without_invoking_property() -> noprop::Result<()> {
+    let mut invoked = false;
+    noprop::Runner::new(0, 0).run(|_rng| {
+        invoked = true;
     })?;
-    assert_eq!(count, 256);
-    Ok(())
-}
-
-#[test]
-fn with_cases_overrides_default() -> noprop::Result<()> {
-    let mut count = 0usize;
-    noprop::Runner::new(0).with_cases(7).run(|_rng| {
-        count += 1;
-    })?;
-    assert_eq!(count, 7);
+    assert!(!invoked, "property should not be invoked when cases is 0");
     Ok(())
 }
 
 #[test]
 fn error_debug_output_contains_seed_and_case() {
     let seed = 0xFEED_FACE_C0DE_BABE;
-    let result = noprop::Runner::new(seed).with_cases(1).run(|_rng| {
+    let result = noprop::Runner::new(seed, 1).run(|_rng| {
         panic!("boom");
     });
     let err = result.expect_err("expected panic to become Err");
@@ -87,7 +77,7 @@ fn error_debug_output_contains_seed_and_case() {
 #[test]
 fn subsequent_cases_are_skipped_after_failure() {
     let mut count = 0usize;
-    let _ = noprop::Runner::new(0).with_cases(100).run(|_rng| {
+    let _ = noprop::Runner::new(0, 100).run(|_rng| {
         count += 1;
         if count == 3 {
             panic!("stop here");
