@@ -9,7 +9,7 @@
 fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
     noprop::Runner {
         seed: 0xDEAD_BEEF,
-        cases: 16,
+        iterations: 16,
     }
     .run(|rng| {
         let x = noprop::gen_u32(rng);
@@ -23,7 +23,7 @@ fn run_returns_err_on_failed_assertion() {
     // Property "every u32 is zero" fails almost immediately.
     let result = noprop::Runner {
         seed: 0x1234,
-        cases: 64,
+        iterations: 64,
     }
     .run(|rng| {
         let x = noprop::gen_u32(rng);
@@ -41,10 +41,14 @@ fn same_seed_reproduces_same_failure() {
     let seed = 0xABCD_1234_5678_9ABC;
 
     let run = || {
-        noprop::Runner { seed, cases: 32 }.run(|rng| {
+        noprop::Runner {
+            seed,
+            iterations: 32,
+        }
+        .run(|rng| {
             let x = noprop::gen_u32(rng);
-            // Roughly half of cases fail — enough to guarantee an Err
-            // within 32 cases with vanishing probability of Ok.
+            // Roughly half of iterations fail — enough to guarantee an
+            // Err within 32 iterations with vanishing probability of Ok.
             assert!(x < 0x8000_0000, "high bit set: {x:#010x}");
             Ok(())
         })
@@ -63,20 +67,31 @@ fn same_seed_reproduces_same_failure() {
 }
 
 #[test]
-fn zero_cases_returns_ok_without_invoking_property() -> noprop::Result<()> {
+fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> {
     let mut invoked = false;
-    noprop::Runner { seed: 0, cases: 0 }.run(|_rng| {
+    noprop::Runner {
+        seed: 0,
+        iterations: 0,
+    }
+    .run(|_rng| {
         invoked = true;
         Ok(())
     })?;
-    assert!(!invoked, "property should not be invoked when cases is 0");
+    assert!(
+        !invoked,
+        "property should not be invoked when iterations is 0"
+    );
     Ok(())
 }
 
 #[test]
 fn error_debug_output_contains_seed_and_case() {
     let seed = 0xFEED_FACE_C0DE_BABE;
-    let result = noprop::Runner { seed, cases: 1 }.run(|_rng| {
+    let result = noprop::Runner {
+        seed,
+        iterations: 1,
+    }
+    .run(|_rng| {
         panic!("boom");
     });
     let err = result.expect_err("expected panic to become Err");
@@ -91,7 +106,7 @@ fn subsequent_cases_are_skipped_after_failure() {
     let mut count = 0usize;
     let _ = noprop::Runner {
         seed: 0,
-        cases: 100,
+        iterations: 100,
     }
     .run(|_rng| {
         count += 1;
@@ -106,7 +121,11 @@ fn subsequent_cases_are_skipped_after_failure() {
 
 #[test]
 fn generated_values_are_recorded_in_error() {
-    let result = noprop::Runner { seed: 42, cases: 1 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 42,
+        iterations: 1,
+    }
+    .run(|rng| {
         let x = noprop::gen_u32(rng);
         let b = noprop::gen_bool(rng);
         let c = noprop::gen_ascii_char(rng);
@@ -131,7 +150,11 @@ fn generated_trace_dedups_same_location_run() {
     // Generate many values at a single call site inside a loop; the
     // trace should keep only the head (8) + elision marker (1) + tail
     // (8) = 17 entries.
-    let result = noprop::Runner { seed: 1, cases: 1 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 1,
+        iterations: 1,
+    }
+    .run(|rng| {
         for _ in 0..100 {
             let _ = noprop::gen_u8(rng);
         }
@@ -163,7 +186,11 @@ fn generated_trace_dedups_same_location_run() {
 fn generated_trace_does_not_dedup_below_head_plus_tail() {
     // With HEAD + TAIL = 16 slots, a run of exactly 16 same-location
     // entries fits without elision.
-    let result = noprop::Runner { seed: 1, cases: 1 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 1,
+        iterations: 1,
+    }
+    .run(|rng| {
         for _ in 0..16 {
             let _ = noprop::gen_u8(rng);
         }
@@ -180,7 +207,11 @@ fn generated_trace_does_not_dedup_below_head_plus_tail() {
 fn generated_trace_treats_different_locations_independently() {
     // Two adjacent same-location runs — a small one, then a large one.
     // Each run is deduped independently.
-    let result = noprop::Runner { seed: 1, cases: 1 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 1,
+        iterations: 1,
+    }
+    .run(|rng| {
         for _ in 0..3 {
             let _ = noprop::gen_u8(rng);
         }
@@ -215,7 +246,11 @@ fn generated_trace_is_isolated_per_case() {
     // Generate one value in case 0, then fail in case 1 after generating
     // a different value. The trace should reflect only case 1's values.
     let mut case = 0;
-    let result = noprop::Runner { seed: 7, cases: 5 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 7,
+        iterations: 5,
+    }
+    .run(|rng| {
         if case == 0 {
             let _ = noprop::gen_u64(rng);
         } else {
@@ -235,7 +270,11 @@ fn generated_trace_is_isolated_per_case() {
 
 #[test]
 fn error_debug_output_includes_generated_values() {
-    let result = noprop::Runner { seed: 42, cases: 1 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 42,
+        iterations: 1,
+    }
+    .run(|rng| {
         let _ = noprop::gen_u32(rng);
         panic!("boom");
     });
@@ -249,7 +288,11 @@ fn error_debug_output_includes_generated_values() {
 
 #[test]
 fn error_display_output_includes_generated_values() {
-    let result = noprop::Runner { seed: 42, cases: 1 }.run(|rng| {
+    let result = noprop::Runner {
+        seed: 42,
+        iterations: 1,
+    }
+    .run(|rng| {
         let _ = noprop::gen_u8(rng);
         panic!("boom");
     });

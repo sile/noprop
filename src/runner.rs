@@ -10,7 +10,7 @@ use crate::{Error, Result, Rng};
 /// with a struct literal and call [`run`](Runner::run):
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, cases: 16 }.run(|rng| {
+/// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, iterations: 16 }.run(|rng| {
 ///     let x = noprop::gen_u32(rng);
 ///     assert_eq!(x, x);
 ///     Ok(())
@@ -18,15 +18,20 @@ use crate::{Error, Result, Rng};
 /// ```
 ///
 /// Named-field construction avoids the two-numeric-args swap risk of a
-/// positional `new(seed, cases)`.
+/// positional `new(seed, iterations)`.
 ///
-/// # Configuring seed and cases
+/// Other PBT libraries call the same count `cases` (proptest),
+/// `examples` (Hypothesis), or `tests` (QuickCheck). noprop uses
+/// `iterations` for a direct match with the Rust `Iterator` /
+/// benchmark vocabulary and to avoid visual confusion with `#[test]`.
 ///
-/// [`Runner`] takes `seed` and `cases` as required fields and does not
-/// prescribe how to obtain them. A common setup reads both from
+/// # Configuring seed and iterations
+///
+/// [`Runner`] takes `seed` and `iterations` as required fields and does
+/// not prescribe how to obtain them. A common setup reads both from
 /// project-specific environment variables so that failures are
-/// reproducible from a failure report (via the seed) and case counts
-/// can differ between local and CI runs:
+/// reproducible from a failure report (via the seed) and the iteration
+/// count can differ between local and CI runs:
 ///
 /// ```
 /// fn seed() -> u64 {
@@ -41,17 +46,18 @@ use crate::{Error, Result, Rng};
 ///         })
 /// }
 ///
-/// fn cases() -> usize {
-///     std::env::var("MYAPP_CASES")
+/// fn iterations() -> usize {
+///     std::env::var("MYAPP_ITERATIONS")
 ///         .ok()
 ///         .and_then(|s| s.parse().ok())
 ///         .unwrap_or(256)
 /// }
 ///
-/// let _: noprop::Result<()> = noprop::Runner { seed: seed(), cases: cases() }.run(|_rng| {
-///     // property
-///     Ok(())
-/// });
+/// let _: noprop::Result<()> = noprop::Runner { seed: seed(), iterations: iterations() }
+///     .run(|_rng| {
+///         // property
+///         Ok(())
+///     });
 /// ```
 ///
 /// The env var names shown above are project-specific placeholders;
@@ -68,7 +74,7 @@ use crate::{Error, Result, Rng};
 /// operator works for any error type that implements [`Error`]:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0, cases: 1 }.run(|_rng| {
+/// let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|_rng| {
 ///     let _n: u32 = "42".parse()?;   // ParseIntError -> Box<dyn Error>
 ///     Ok(())
 /// });
@@ -77,7 +83,7 @@ use crate::{Error, Result, Rng};
 /// Ad-hoc messages work via `Into`:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0, cases: 1 }.run(|_rng| {
+/// let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|_rng| {
 ///     if false { return Err("something bad".into()); }
 ///     Ok(())
 /// });
@@ -88,26 +94,26 @@ pub struct Runner {
     /// The seed used to construct the internal [`Rng`].
     pub seed: u64,
     /// The number of times the closure is invoked in [`run`](Runner::run).
-    pub cases: usize,
+    pub iterations: usize,
 }
 
 impl Runner {
-    /// Run `f` for `cases` iterations against a shared [`Rng`] seeded
-    /// with `seed`.
+    /// Invoke `f(&mut rng)` up to `iterations` times against a shared
+    /// [`Rng`] seeded with `seed`.
     ///
-    /// Each case invokes `f(&mut rng)`. A returned `Ok(())` counts as a
-    /// pass; a returned `Err` or a panic (via `assert!`, `assert_eq!`,
-    /// or explicit `panic!`) counts as a failure. Panics are caught by
-    /// `catch_unwind`. Either failure mode is wrapped in an [`Error`]
-    /// carrying the seed, the failing case index, the failure message,
-    /// and the generated-value trace, and returned as `Err`. Subsequent
-    /// cases past the first failure are skipped.
+    /// Each iteration is one property "case". A returned `Ok(())`
+    /// counts as a pass; a returned `Err` or a panic (via `assert!`,
+    /// `assert_eq!`, or explicit `panic!`) counts as a failure. Panics
+    /// are caught by `catch_unwind`. Either failure mode is wrapped in
+    /// an [`Error`] carrying the seed, the failing case's index, the
+    /// failure message, and the generated-value trace, and returned as
+    /// `Err`. Subsequent iterations past the first failure are skipped.
     pub fn run<F>(self, mut f: F) -> Result<()>
     where
         F: FnMut(&mut Rng) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
         let mut rng = Rng::new(self.seed);
-        for case_index in 0..self.cases {
+        for case_index in 0..self.iterations {
             rng.clear_generated();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
             let message = match outcome {
