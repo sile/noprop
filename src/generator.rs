@@ -357,6 +357,69 @@ pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
     (0x20 + gen_u32(rng) % 95) as u8 as char
 }
 
+// === Floating-point generators ===
+
+/// Uniformly-distributed `f32` in `[min, max)`.
+///
+/// NaN and infinities are excluded from the output range. To include
+/// them (or any specific special value), pick from a fixed set with
+/// [`gen_choice`]:
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let _x = noprop::gen_choice(
+///     &mut rng,
+///     &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0],
+/// );
+/// ```
+///
+/// For an arbitrary `f32` bit pattern (including NaN, infinities, and
+/// subnormals):
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let _x = f32::from_bits(noprop::gen_u32(&mut rng));
+/// ```
+///
+/// # Panics
+///
+/// Panics if `min` or `max` is not finite, or if `min >= max`.
+pub fn gen_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
+    assert!(
+        min.is_finite() && max.is_finite(),
+        "gen_f32: min and max must be finite"
+    );
+    assert!(min < max, "gen_f32: min must be less than max");
+    // Build a 24-bit uniform value in [0, 1): construct a float in
+    // [1, 2) by injecting 23 random bits into the mantissa of a fixed
+    // exponent, then subtract 1. This is bias-free (every representable
+    // value in [0, 1) with 24-bit precision is equally likely).
+    let bits = 0x3F80_0000 | (gen_u32(rng) >> 9);
+    let unit = f32::from_bits(bits) - 1.0;
+    min + (max - min) * unit
+}
+
+/// Uniformly-distributed `f64` in `[min, max)`.
+///
+/// Same conventions as [`gen_f32`]: NaN and infinities are excluded from
+/// the output. Use [`gen_choice`] to include specific special values, or
+/// `f64::from_bits(gen_u64(rng))` for an arbitrary bit pattern.
+///
+/// # Panics
+///
+/// Panics if `min` or `max` is not finite, or if `min >= max`.
+pub fn gen_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
+    assert!(
+        min.is_finite() && max.is_finite(),
+        "gen_f64: min and max must be finite"
+    );
+    assert!(min < max, "gen_f64: min must be less than max");
+    // Same construction as gen_f32 but with 53-bit precision.
+    let bits = 0x3FF0_0000_0000_0000 | (gen_u64(rng) >> 12);
+    let unit = f64::from_bits(bits) - 1.0;
+    min + (max - min) * unit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +604,77 @@ mod tests {
             "gen_char produced too few distinct values: {}",
             seen.len()
         );
+    }
+
+    #[test]
+    fn float_generators_are_deterministic() {
+        let mut a = Rng::new(999);
+        let mut b = Rng::new(999);
+        assert_eq!(gen_f32(&mut a, 0.0, 1.0), gen_f32(&mut b, 0.0, 1.0));
+        assert_eq!(
+            gen_f64(&mut a, -100.0, 100.0),
+            gen_f64(&mut b, -100.0, 100.0)
+        );
+    }
+
+    #[test]
+    fn gen_f32_stays_in_range() {
+        let mut rng = Rng::new(1);
+        for _ in 0..1000 {
+            let v = gen_f32(&mut rng, 10.0, 20.0);
+            assert!((10.0..20.0).contains(&v), "out of range: {v}");
+        }
+    }
+
+    #[test]
+    fn gen_f64_stays_in_range() {
+        let mut rng = Rng::new(1);
+        for _ in 0..1000 {
+            let v = gen_f64(&mut rng, -1.0, 1.0);
+            assert!((-1.0..1.0).contains(&v), "out of range: {v}");
+        }
+    }
+
+    #[test]
+    fn gen_f32_covers_both_halves_of_range() {
+        let mut rng = Rng::new(1);
+        let (mut low, mut high) = (false, false);
+        for _ in 0..64 {
+            let v = gen_f32(&mut rng, 0.0, 1.0);
+            low |= v < 0.5;
+            high |= v >= 0.5;
+            if low && high {
+                return;
+            }
+        }
+        panic!("gen_f32 covered only one half of the range");
+    }
+
+    #[test]
+    #[should_panic(expected = "must be less than")]
+    fn gen_f32_panics_when_min_equals_max() {
+        let mut rng = Rng::new(0);
+        let _ = gen_f32(&mut rng, 5.0, 5.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be finite")]
+    fn gen_f32_panics_on_nan() {
+        let mut rng = Rng::new(0);
+        let _ = gen_f32(&mut rng, f32::NAN, 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be finite")]
+    fn gen_f32_panics_on_infinity() {
+        let mut rng = Rng::new(0);
+        let _ = gen_f32(&mut rng, 0.0, f32::INFINITY);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be finite")]
+    fn gen_f64_panics_on_nan() {
+        let mut rng = Rng::new(0);
+        let _ = gen_f64(&mut rng, 0.0, f64::NAN);
     }
 }
