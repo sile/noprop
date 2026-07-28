@@ -14,5 +14,5 @@ pub use generator::{
     gen_non_zero_u16, gen_non_zero_u32, gen_non_zero_u64, gen_non_zero_u128, gen_non_zero_usize,
     gen_u8, gen_u16, gen_u32, gen_u64, gen_u128, gen_usize,
 };
-pub use rng::Rng;
+pub use rng::{GeneratedValue, Rng};
 pub use runner::Runner;

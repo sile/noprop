@@ -98,3 +98,72 @@ fn subsequent_cases_are_skipped_after_failure() {
     // The failing case counts, but nothing after it runs.
     assert_eq!(count, 3);
 }
+
+#[test]
+fn generated_values_are_recorded_in_error() {
+    let result = noprop::Runner { seed: 42, cases: 1 }.run(|rng| {
+        let x = noprop::gen_u32(rng);
+        let b = noprop::gen_bool(rng);
+        let c = noprop::gen_ascii_char(rng);
+        panic!("forced failure with x={x}, b={b}, c={c:?}");
+    });
+
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 3, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "u32");
+    assert_eq!(generated[1].type_name(), "bool");
+    assert_eq!(generated[2].type_name(), "char");
+    // Value repr matches Debug of the value.
+    assert!(generated[0].value_repr().parse::<u32>().is_ok());
+    // All three calls happen in the same test file.
+    assert!(generated[0].location().file().ends_with("e2e.rs"));
+}
+
+#[test]
+fn generated_trace_is_isolated_per_case() {
+    // Generate one value in case 0, then fail in case 1 after generating
+    // a different value. The trace should reflect only case 1's values.
+    let mut case = 0;
+    let result = noprop::Runner { seed: 7, cases: 5 }.run(|rng| {
+        if case == 0 {
+            let _ = noprop::gen_u64(rng);
+        } else {
+            let _ = noprop::gen_u16(rng);
+            panic!("fail on case {case}");
+        }
+        case += 1;
+    });
+
+    let err = result.expect_err("expected Err");
+    assert_eq!(err.case_index(), 1);
+    let generated = err.generated();
+    assert_eq!(generated.len(), 1, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "u16");
+}
+
+#[test]
+fn error_debug_output_includes_generated_values() {
+    let result = noprop::Runner { seed: 42, cases: 1 }.run(|rng| {
+        let _ = noprop::gen_u32(rng);
+        panic!("boom");
+    });
+    let err = result.expect_err("expected Err");
+    let debug = format!("{err:?}");
+    assert!(debug.contains("generated: ["), "debug: {debug}");
+    assert!(debug.contains("- u32 ="), "debug: {debug}");
+    assert!(debug.contains("(at "), "debug: {debug}");
+    assert!(debug.contains("e2e.rs:"), "debug: {debug}");
+}
+
+#[test]
+fn error_display_output_includes_generated_values() {
+    let result = noprop::Runner { seed: 42, cases: 1 }.run(|rng| {
+        let _ = noprop::gen_u8(rng);
+        panic!("boom");
+    });
+    let err = result.expect_err("expected Err");
+    let display = format!("{err}");
+    assert!(display.contains("Generated values:"), "display: {display}");
+    assert!(display.contains("- u8 ="), "display: {display}");
+}

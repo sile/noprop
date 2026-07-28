@@ -78,10 +78,12 @@ impl Runner {
     {
         let mut rng = Rng::new(self.seed);
         for case_index in 0..self.cases {
+            rng.clear_generated();
             let payload = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
             if let Err(panic) = payload {
                 let message = panic_message(panic);
-                return Err(Error::from_panic(self.seed, case_index, message));
+                let generated = rng.take_generated();
+                return Err(Error::from_panic(self.seed, case_index, message, generated));
             }
         }
         Ok(())

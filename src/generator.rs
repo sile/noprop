@@ -56,8 +56,19 @@
 //! ```
 
 use std::num::NonZero;
+use std::panic::Location;
 
 use crate::Rng;
+
+/// Read `N` bytes from `rng` without recording. Used by every primitive
+/// so that composite generators (non-zero variants, `gen_char`, floats,
+/// `gen_choice`) can consume randomness without producing intermediate
+/// trace entries for the raw byte source.
+fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
+    let mut buf = [0u8; N];
+    rng.fill(&mut buf);
+    buf
+}
 
 // === Selection helper ===
 
@@ -83,20 +94,27 @@ use crate::Rng;
 /// // Non-ASCII via array literal
 /// let _c = noprop::gen_choice(&mut rng, &['α', 'β', 'γ']);
 /// ```
-pub fn gen_choice<T: Clone>(rng: &mut Rng, choices: &[T]) -> T {
+#[track_caller]
+pub fn gen_choice<T: Clone + std::fmt::Debug>(rng: &mut Rng, choices: &[T]) -> T {
     assert!(!choices.is_empty(), "gen_choice: empty slice");
-    choices[gen_usize(rng) % choices.len()].clone()
+    let loc = Location::caller();
+    let idx = usize::from_le_bytes(raw_bytes(rng)) % choices.len();
+    let v = choices[idx].clone();
+    rng.record_generated(&v, loc);
+    v
 }
 
 // === Boolean generator ===
 
 /// Uniformly-distributed `bool`.
+#[track_caller]
 pub fn gen_bool(rng: &mut Rng) -> bool {
+    let loc = Location::caller();
     // Consume one byte so this primitive shares the "read a fixed-size
     // byte slice" shape with the integer generators.
-    let mut buf = [0u8; 1];
-    rng.fill(&mut buf);
-    buf[0] & 1 != 0
+    let v = raw_bytes::<1>(rng)[0] & 1 != 0;
+    rng.record_generated(&v, loc);
+    v
 }
 
 // === Integer generators ===
@@ -108,87 +126,111 @@ pub fn gen_bool(rng: &mut Rng) -> bool {
 // byte reader.
 
 /// Uniformly-distributed `u8`.
+#[track_caller]
 pub fn gen_u8(rng: &mut Rng) -> u8 {
-    let mut buf = [0u8; 1];
-    rng.fill(&mut buf);
-    buf[0]
+    let loc = Location::caller();
+    let v = raw_bytes::<1>(rng)[0];
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `u16`.
+#[track_caller]
 pub fn gen_u16(rng: &mut Rng) -> u16 {
-    let mut buf = [0u8; 2];
-    rng.fill(&mut buf);
-    u16::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = u16::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `u32`.
+#[track_caller]
 pub fn gen_u32(rng: &mut Rng) -> u32 {
-    let mut buf = [0u8; 4];
-    rng.fill(&mut buf);
-    u32::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = u32::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `u64`.
+#[track_caller]
 pub fn gen_u64(rng: &mut Rng) -> u64 {
-    let mut buf = [0u8; 8];
-    rng.fill(&mut buf);
-    u64::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = u64::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `u128`.
+#[track_caller]
 pub fn gen_u128(rng: &mut Rng) -> u128 {
-    let mut buf = [0u8; 16];
-    rng.fill(&mut buf);
-    u128::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = u128::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `usize`.
+#[track_caller]
 pub fn gen_usize(rng: &mut Rng) -> usize {
-    let mut buf = [0u8; size_of::<usize>()];
-    rng.fill(&mut buf);
-    usize::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = usize::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `i8`.
+#[track_caller]
 pub fn gen_i8(rng: &mut Rng) -> i8 {
-    let mut buf = [0u8; 1];
-    rng.fill(&mut buf);
-    buf[0] as i8
+    let loc = Location::caller();
+    let v = raw_bytes::<1>(rng)[0] as i8;
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `i16`.
+#[track_caller]
 pub fn gen_i16(rng: &mut Rng) -> i16 {
-    let mut buf = [0u8; 2];
-    rng.fill(&mut buf);
-    i16::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = i16::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `i32`.
+#[track_caller]
 pub fn gen_i32(rng: &mut Rng) -> i32 {
-    let mut buf = [0u8; 4];
-    rng.fill(&mut buf);
-    i32::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = i32::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `i64`.
+#[track_caller]
 pub fn gen_i64(rng: &mut Rng) -> i64 {
-    let mut buf = [0u8; 8];
-    rng.fill(&mut buf);
-    i64::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = i64::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `i128`.
+#[track_caller]
 pub fn gen_i128(rng: &mut Rng) -> i128 {
-    let mut buf = [0u8; 16];
-    rng.fill(&mut buf);
-    i128::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = i128::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `isize`.
+#[track_caller]
 pub fn gen_isize(rng: &mut Rng) -> isize {
-    let mut buf = [0u8; size_of::<isize>()];
-    rng.fill(&mut buf);
-    isize::from_le_bytes(buf)
+    let loc = Location::caller();
+    let v = isize::from_le_bytes(raw_bytes(rng));
+    rng.record_generated(&v, loc);
+    v
 }
 
 // === Non-zero integer generators ===
@@ -197,12 +239,16 @@ pub fn gen_isize(rng: &mut Rng) -> isize {
 // integer and retry on zero. P(zero) is at most 1/256 per attempt for
 // every type below, so the 64-attempt bound is effectively unreachable
 // (worst-case P(all zero) < (1/256)^64 ~ 10^-154 for u8; even smaller
-// elsewhere).
+// elsewhere). Intermediate rejected attempts are not recorded — only
+// the final NonZero value is.
 
 /// Uniformly-distributed non-zero `u8`.
+#[track_caller]
 pub fn gen_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_u8(rng)) {
+        if let Some(nz) = NonZero::new(raw_bytes::<1>(rng)[0]) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -210,9 +256,12 @@ pub fn gen_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
 }
 
 /// Uniformly-distributed non-zero `u16`.
+#[track_caller]
 pub fn gen_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_u16(rng)) {
+        if let Some(nz) = NonZero::new(u16::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -220,9 +269,12 @@ pub fn gen_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
 }
 
 /// Uniformly-distributed non-zero `u32`.
+#[track_caller]
 pub fn gen_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_u32(rng)) {
+        if let Some(nz) = NonZero::new(u32::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -230,9 +282,12 @@ pub fn gen_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
 }
 
 /// Uniformly-distributed non-zero `u64`.
+#[track_caller]
 pub fn gen_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_u64(rng)) {
+        if let Some(nz) = NonZero::new(u64::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -240,9 +295,12 @@ pub fn gen_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
 }
 
 /// Uniformly-distributed non-zero `u128`.
+#[track_caller]
 pub fn gen_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_u128(rng)) {
+        if let Some(nz) = NonZero::new(u128::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -250,9 +308,12 @@ pub fn gen_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
 }
 
 /// Uniformly-distributed non-zero `usize`.
+#[track_caller]
 pub fn gen_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_usize(rng)) {
+        if let Some(nz) = NonZero::new(usize::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -260,9 +321,12 @@ pub fn gen_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
 }
 
 /// Uniformly-distributed non-zero `i8`.
+#[track_caller]
 pub fn gen_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_i8(rng)) {
+        if let Some(nz) = NonZero::new(raw_bytes::<1>(rng)[0] as i8) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -270,9 +334,12 @@ pub fn gen_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
 }
 
 /// Uniformly-distributed non-zero `i16`.
+#[track_caller]
 pub fn gen_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_i16(rng)) {
+        if let Some(nz) = NonZero::new(i16::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -280,9 +347,12 @@ pub fn gen_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
 }
 
 /// Uniformly-distributed non-zero `i32`.
+#[track_caller]
 pub fn gen_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_i32(rng)) {
+        if let Some(nz) = NonZero::new(i32::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -290,9 +360,12 @@ pub fn gen_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
 }
 
 /// Uniformly-distributed non-zero `i64`.
+#[track_caller]
 pub fn gen_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_i64(rng)) {
+        if let Some(nz) = NonZero::new(i64::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -300,9 +373,12 @@ pub fn gen_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
 }
 
 /// Uniformly-distributed non-zero `i128`.
+#[track_caller]
 pub fn gen_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_i128(rng)) {
+        if let Some(nz) = NonZero::new(i128::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -310,9 +386,12 @@ pub fn gen_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
 }
 
 /// Uniformly-distributed non-zero `isize`.
+#[track_caller]
 pub fn gen_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
+    let loc = Location::caller();
     for _ in 0..64 {
-        if let Some(nz) = NonZero::new(gen_isize(rng)) {
+        if let Some(nz) = NonZero::new(isize::from_le_bytes(raw_bytes(rng))) {
+            rng.record_generated(&nz, loc);
             return nz;
         }
     }
@@ -330,13 +409,16 @@ pub fn gen_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
 
 /// Uniformly-distributed `char` over the valid Unicode scalar values
 /// (`0..=0x10FFFF`, excluding the surrogate range `0xD800..=0xDFFF`).
+#[track_caller]
 pub fn gen_char(rng: &mut Rng) -> char {
+    let loc = Location::caller();
     // Rejection sampling on a 21-bit mask; expected rejection rate is
     // about 47%, so the 64-attempt bound is unreachable in practice
     // (P(all 64 fail) < 10^-20).
     for _ in 0..64 {
-        let n = gen_u32(rng) & 0x1F_FFFF;
+        let n = u32::from_le_bytes(raw_bytes(rng)) & 0x1F_FFFF;
         if let Some(c) = char::from_u32(n) {
+            rng.record_generated(&c, loc);
             return c;
         }
     }
@@ -345,16 +427,24 @@ pub fn gen_char(rng: &mut Rng) -> char {
 
 /// Uniformly-distributed ASCII `char` (`0x00..=0x7F`, including control
 /// characters).
+#[track_caller]
 pub fn gen_ascii_char(rng: &mut Rng) -> char {
-    (gen_u8(rng) & 0x7F) as char
+    let loc = Location::caller();
+    let v = (raw_bytes::<1>(rng)[0] & 0x7F) as char;
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed printable ASCII `char` (`0x20..=0x7E`, space
 /// through `~`, excluding control characters and DEL).
+#[track_caller]
 pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
-    // 95 characters. Use gen_u32 for negligible modulo bias
+    let loc = Location::caller();
+    // 95 characters. Use u32 for negligible modulo bias
     // (2^32 mod 95 = 6, so bias factor is at most 1 + 1/45210182).
-    (0x20 + gen_u32(rng) % 95) as u8 as char
+    let v = (0x20 + u32::from_le_bytes(raw_bytes(rng)) % 95) as u8 as char;
+    rng.record_generated(&v, loc);
+    v
 }
 
 // === Floating-point generators ===
@@ -384,19 +474,23 @@ pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
+#[track_caller]
 pub fn gen_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
     assert!(
         min.is_finite() && max.is_finite(),
         "gen_f32: min and max must be finite"
     );
     assert!(min < max, "gen_f32: min must be less than max");
+    let loc = Location::caller();
     // Build a 24-bit uniform value in [0, 1): construct a float in
     // [1, 2) by injecting 23 random bits into the mantissa of a fixed
     // exponent, then subtract 1. This is bias-free (every representable
     // value in [0, 1) with 24-bit precision is equally likely).
-    let bits = 0x3F80_0000 | (gen_u32(rng) >> 9);
+    let bits = 0x3F80_0000 | (u32::from_le_bytes(raw_bytes(rng)) >> 9);
     let unit = f32::from_bits(bits) - 1.0;
-    min + (max - min) * unit
+    let v = min + (max - min) * unit;
+    rng.record_generated(&v, loc);
+    v
 }
 
 /// Uniformly-distributed `f64` in `[min, max)`.
@@ -408,16 +502,20 @@ pub fn gen_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
+#[track_caller]
 pub fn gen_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
     assert!(
         min.is_finite() && max.is_finite(),
         "gen_f64: min and max must be finite"
     );
     assert!(min < max, "gen_f64: min must be less than max");
+    let loc = Location::caller();
     // Same construction as gen_f32 but with 53-bit precision.
-    let bits = 0x3FF0_0000_0000_0000 | (gen_u64(rng) >> 12);
+    let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(rng)) >> 12);
     let unit = f64::from_bits(bits) - 1.0;
-    min + (max - min) * unit
+    let v = min + (max - min) * unit;
+    rng.record_generated(&v, loc);
+    v
 }
 
 #[cfg(test)]
@@ -552,7 +650,7 @@ mod tests {
 
     #[test]
     fn gen_choice_works_with_clone_only_types() {
-        // Verify T: Clone bound accepts non-Copy types.
+        // Verify T: Clone + Debug bound accepts non-Copy types with Debug.
         let mut rng = Rng::new(1);
         let choices = vec![String::from("a"), String::from("b"), String::from("c")];
         let picked = gen_choice(&mut rng, &choices);

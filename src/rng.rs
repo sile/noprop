@@ -21,6 +21,51 @@
 #[derive(Debug, Clone)]
 pub struct Rng {
     state: [u64; 4],
+    generated: Vec<GeneratedValue>,
+}
+
+/// A single value recorded by a primitive generator during a case.
+///
+/// Collected by [`Rng`] as each primitive generator is called, and
+/// exposed via [`Error::generated`](crate::Error::generated) when a
+/// case fails. Carries the type name, a `Debug`-formatted value string,
+/// and the source location at which the generator was called (relayed
+/// through `#[track_caller]`).
+#[derive(Clone)]
+pub struct GeneratedValue {
+    type_name: &'static str,
+    value_repr: String,
+    location: &'static std::panic::Location<'static>,
+}
+
+impl GeneratedValue {
+    /// The Rust type name of the generated value (e.g. `"u32"`).
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+
+    /// `Debug`-formatted string of the generated value.
+    pub fn value_repr(&self) -> &str {
+        &self.value_repr
+    }
+
+    /// Source location at which the generator was called.
+    pub fn location(&self) -> &'static std::panic::Location<'static> {
+        self.location
+    }
+}
+
+impl std::fmt::Debug for GeneratedValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "- {} = {}  (at {}:{})",
+            self.type_name,
+            self.value_repr,
+            self.location.file(),
+            self.location.line()
+        )
+    }
 }
 
 impl Rng {
@@ -33,6 +78,7 @@ impl Rng {
         let mut sm = SplitMix64 { state: seed };
         Self {
             state: [sm.next(), sm.next(), sm.next(), sm.next()],
+            generated: Vec::new(),
         }
     }
 
@@ -68,6 +114,34 @@ impl Rng {
             let remaining = dst.len() - i;
             dst[i..].copy_from_slice(&bytes[..remaining]);
         }
+    }
+
+    /// Record a generated value in this Rng's buffer. Called from every
+    /// primitive generator right after producing the value.
+    ///
+    /// `location` should be `std::panic::Location::caller()` captured at
+    /// the top of the primitive (which itself carries `#[track_caller]`),
+    /// so that the recorded position points at the call site in the
+    /// user's property closure rather than at the primitive's own body.
+    #[doc(hidden)]
+    pub fn record_generated<T: std::fmt::Debug>(
+        &mut self,
+        value: &T,
+        location: &'static std::panic::Location<'static>,
+    ) {
+        self.generated.push(GeneratedValue {
+            type_name: std::any::type_name::<T>(),
+            value_repr: format!("{value:?}"),
+            location,
+        });
+    }
+
+    pub(crate) fn take_generated(&mut self) -> Vec<GeneratedValue> {
+        std::mem::take(&mut self.generated)
+    }
+
+    pub(crate) fn clear_generated(&mut self) {
+        self.generated.clear();
     }
 }
 
