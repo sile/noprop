@@ -24,7 +24,8 @@
 //! let _v: Vec<u32> = gen_bounded_vec(&mut rng);
 //! ```
 //!
-//! For branching, `match` on a small random value:
+//! For "one-of-N" branching between code paths, `match` on a small
+//! random value:
 //!
 //! ```
 //! let mut rng = noprop::Rng::new(0);
@@ -33,6 +34,14 @@
 //!     1 => noprop::gen_u32(&mut rng),
 //!     _ => u32::MAX,
 //! };
+//! ```
+//!
+//! To pick one value from a fixed list, use [`gen_choice`]:
+//!
+//! ```
+//! let mut rng = noprop::Rng::new(0);
+//! let _n = noprop::gen_choice(&mut rng, &[1, 2, 3, 5, 8]);
+//! let _digit = noprop::gen_choice(&mut rng, b"0123456789") as char;
 //! ```
 //!
 //! For bounded retry (filter-style generation), combine a range iterator
@@ -49,6 +58,35 @@
 use std::num::NonZero;
 
 use crate::Rng;
+
+// === Selection helper ===
+
+/// Pick one element from `choices` uniformly at random.
+///
+/// This is the noprop counterpart to picking from a fixed list. Use it
+/// when the alternatives are *values*; for branching between code paths
+/// (calling different generators, taking different actions), use `match`
+/// on `gen_u8(rng) % N` instead — see the module docstring.
+///
+/// # Panics
+///
+/// Panics if `choices` is empty.
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// // Explicit list of ints
+/// let _n = noprop::gen_choice(&mut rng, &[1, 2, 3, 5, 8]);
+/// // ASCII digit from a byte string literal
+/// let _d = noprop::gen_choice(&mut rng, b"0123456789") as char;
+/// // Non-ASCII via array literal
+/// let _c = noprop::gen_choice(&mut rng, &['α', 'β', 'γ']);
+/// ```
+pub fn gen_choice<T: Clone>(rng: &mut Rng, choices: &[T]) -> T {
+    assert!(!choices.is_empty(), "gen_choice: empty slice");
+    choices[gen_usize(rng) % choices.len()].clone()
+}
 
 // === Boolean generator ===
 
@@ -282,6 +320,45 @@ pub fn gen_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
     panic!("gen_non_zero_isize: rejection sampling exhausted")
 }
 
+// === Character generators ===
+//
+// For character subsets beyond the ones below (alphanumeric, hexdigit,
+// etc.), compose with `gen_choice` over a byte-string literal, for
+// example:
+//
+//     let d = gen_choice(rng, b"0123456789") as char;
+//     let a = gen_choice(rng, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") as char;
+
+/// Uniformly-distributed `char` over the valid Unicode scalar values
+/// (`0..=0x10FFFF`, excluding the surrogate range `0xD800..=0xDFFF`).
+///
+/// Uses rejection sampling on a 21-bit mask; expected rejection rate is
+/// about 47%, so the 64-attempt bound is unreachable in practice
+/// (P(all 64 fail) < 10^-20).
+pub fn gen_char(rng: &mut Rng) -> char {
+    for _ in 0..64 {
+        let n = gen_u32(rng) & 0x1F_FFFF;
+        if let Some(c) = char::from_u32(n) {
+            return c;
+        }
+    }
+    panic!("gen_char: rejection sampling exhausted")
+}
+
+/// Uniformly-distributed ASCII `char` (`0x00..=0x7F`, including control
+/// characters).
+pub fn gen_ascii_char(rng: &mut Rng) -> char {
+    (gen_u8(rng) & 0x7F) as char
+}
+
+/// Uniformly-distributed printable ASCII `char` (`0x20..=0x7E`, space
+/// through `~`, excluding control characters and DEL).
+pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
+    // 95 characters. Use gen_u32 for negligible modulo bias
+    // (2^32 mod 95 = 6, so bias factor is at most 1 + 1/45210182).
+    (0x20 + gen_u32(rng) % 95) as u8 as char
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +454,94 @@ mod tests {
         for _ in 0..1000 {
             let _ = gen_non_zero_u8(&mut rng);
         }
+    }
+
+    #[test]
+    fn gen_choice_returns_only_from_slice() {
+        let mut rng = Rng::new(1);
+        let choices = [10, 20, 30];
+        for _ in 0..256 {
+            assert!(choices.contains(&gen_choice(&mut rng, &choices)));
+        }
+    }
+
+    #[test]
+    fn gen_choice_can_hit_every_element() {
+        let mut rng = Rng::new(1);
+        let choices = [10, 20, 30];
+        let mut seen = [false; 3];
+        for _ in 0..256 {
+            let v = gen_choice(&mut rng, &choices);
+            let idx = choices.iter().position(|&x| x == v).unwrap();
+            seen[idx] = true;
+            if seen.iter().all(|&s| s) {
+                return;
+            }
+        }
+        panic!("gen_choice did not cover all elements");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty slice")]
+    fn gen_choice_panics_on_empty() {
+        let mut rng = Rng::new(0);
+        let empty: [u32; 0] = [];
+        let _ = gen_choice(&mut rng, &empty);
+    }
+
+    #[test]
+    fn gen_choice_works_with_clone_only_types() {
+        // Verify T: Clone bound accepts non-Copy types.
+        let mut rng = Rng::new(1);
+        let choices = vec![String::from("a"), String::from("b"), String::from("c")];
+        let picked = gen_choice(&mut rng, &choices);
+        assert!(choices.contains(&picked));
+    }
+
+    #[test]
+    fn char_generators_are_deterministic() {
+        let mut a = Rng::new(789);
+        let mut b = Rng::new(789);
+        assert_eq!(gen_char(&mut a), gen_char(&mut b));
+        assert_eq!(gen_ascii_char(&mut a), gen_ascii_char(&mut b));
+        assert_eq!(
+            gen_ascii_printable_char(&mut a),
+            gen_ascii_printable_char(&mut b)
+        );
+    }
+
+    #[test]
+    fn gen_ascii_char_always_in_ascii_range() {
+        let mut rng = Rng::new(1);
+        for _ in 0..1000 {
+            let c = gen_ascii_char(&mut rng);
+            assert!(c.is_ascii());
+        }
+    }
+
+    #[test]
+    fn gen_ascii_printable_char_always_in_range() {
+        let mut rng = Rng::new(1);
+        for _ in 0..1000 {
+            let c = gen_ascii_printable_char(&mut rng);
+            let n = c as u32;
+            assert!((0x20..=0x7E).contains(&n));
+        }
+    }
+
+    #[test]
+    fn gen_char_produces_varied_values() {
+        // Valid Unicode scalar space is ~1.1M chars, so 256 samples should
+        // be nearly all distinct (collision probability is negligible).
+        let mut rng = Rng::new(1);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..256 {
+            seen.insert(gen_char(&mut rng));
+        }
+        assert!(
+            seen.len() > 200,
+            "gen_char produced too few distinct values: {}",
+            seen.len()
+        );
     }
 }
