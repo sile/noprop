@@ -2,5 +2,12 @@
 name = "noprop"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Imperative property-based testing library with no dependencies, no macros, and no unsafe"
+homepage = "https://github.com/sile/noprop"
+repository = "https://github.com/sile/noprop"
+readme = "README.md"
+categories = ["development-tools::testing"]
 
 [dependencies]
