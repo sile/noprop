@@ -804,6 +804,18 @@ pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// Assert that `rng` and `fresh` (built from the same seed) still
+    /// produce identical output — used by the "consumes no RNG state"
+    /// tests. Compares `fill` outputs rather than the removed
+    /// `Rng::next_u64`.
+    fn assert_state_unadvanced(rng: &mut Rng, fresh: &mut Rng) {
+        let mut a = [0u8; 8];
+        let mut b = [0u8; 8];
+        rng.fill(&mut a);
+        fresh.fill(&mut b);
+        assert_eq!(a, b, "rng advanced when it should not have");
+    }
+
     #[test]
     fn primitives_are_deterministic() {
         let mut a = Rng::new(123);
@@ -1066,7 +1078,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let mut fresh = Rng::new(1);
         assert_eq!(sample_below(&mut rng, 1), 0);
-        assert_eq!(rng.next_u64(), fresh.next_u64());
+        assert_state_unadvanced(&mut rng, &mut fresh);
     }
 
     #[test]
@@ -1147,7 +1159,7 @@ mod tests {
         // consuming any RNG.
         let mut fresh = Rng::new(1);
         assert_eq!(sample_usize_in(&mut rng, 5..=5), 5);
-        assert_eq!(rng.next_u64(), fresh.next_u64());
+        assert_state_unadvanced(&mut rng, &mut fresh);
     }
 
     #[test]
@@ -1253,7 +1265,7 @@ mod tests {
             assert!(!sample_ratio(&mut rng, 0, 10));
         }
         // No RNG bytes consumed.
-        assert_eq!(rng.next_u64(), fresh.next_u64());
+        assert_state_unadvanced(&mut rng, &mut fresh);
     }
 
     #[test]
@@ -1263,7 +1275,7 @@ mod tests {
         for _ in 0..64 {
             assert!(sample_ratio(&mut rng, 7, 7));
         }
-        assert_eq!(rng.next_u64(), fresh.next_u64());
+        assert_state_unadvanced(&mut rng, &mut fresh);
     }
 
     #[test]
@@ -1410,5 +1422,111 @@ mod tests {
     fn sample_weighted_index_panics_when_all_weights_zero() {
         let mut rng = Rng::new(0);
         let _ = sample_weighted_index(&mut rng, &[0, 0, 0]);
+    }
+
+    // === choice sequence record / replay through the sampling primitives ===
+    //
+    // These tests exercise if / match / loop control flow combined with
+    // sample_below, sample_char, sample_non_zero_*, and sample_bytes_vec
+    // inside a single recorded case that must replay bit-exactly.
+
+    use crate::rng::{ChoiceSequence, RecordingSession, ReplayError, ReplaySession};
+
+    /// Composite generator that mixes every rejection-loop and variable-length
+    /// path: `sample_below` (via `sample_usize_in`), `sample_char`,
+    /// `sample_non_zero_u8`, `sample_bytes_vec`, plus `if` / `match` / loop
+    /// control flow. Returns a shape summary that a strict replay must
+    /// reproduce bit-exactly.
+    fn composite_case(rng: &mut Rng) -> (Vec<char>, Vec<NonZero<u8>>, Vec<u8>, u32) {
+        let branch = sample_usize_in(rng, 0..3);
+        let chars = if branch == 0 {
+            Vec::new()
+        } else {
+            (0..branch).map(|_| sample_char(rng)).collect()
+        };
+        let nz_count = sample_usize_in(rng, 1..=4);
+        let mut nzs = Vec::with_capacity(nz_count);
+        for _ in 0..nz_count {
+            nzs.push(sample_non_zero_u8(rng));
+        }
+        let buf_len = sample_usize_in(rng, 0..=16);
+        let bytes = sample_bytes_vec(rng, buf_len);
+        let tail = match sample_usize_in(rng, 0..3) {
+            0 => sample_u32(rng),
+            1 => sample_u32(rng).wrapping_add(1),
+            _ => 0,
+        };
+        (chars, nzs, bytes, tail)
+    }
+
+    #[test]
+    fn replay_reproduces_composite_generator_bit_exact() {
+        for seed in [1u64, 42, 0xDEAD_BEEF, 0xFEED_FACE] {
+            let (expected, seq) = RecordingSession::new(seed).run(composite_case);
+            let replayed = ReplaySession::new(seq)
+                .run(composite_case)
+                .expect("replay of same generator must succeed");
+            assert_eq!(replayed, expected, "seed {seed:#x}");
+        }
+    }
+
+    #[test]
+    fn replay_stops_generator_on_first_structural_mismatch() {
+        // Record two 1-byte draws, then replay a generator that first
+        // consumes one then asks for a 4-byte draw against the second
+        // recorded 1-byte draw. `DrawLengthMismatch` must fire AND the
+        // "unreachable" flag must stay false, proving the generator
+        // body did not continue past the mismatch.
+        let (_, seq) = RecordingSession::new(1).run(|rng| {
+            let _ = sample_u8(rng);
+            let _ = sample_u8(rng);
+        });
+        let flag = std::cell::Cell::new(false);
+        let result = ReplaySession::new(seq).run(|rng| {
+            let _ = sample_u8(rng); // matches first recorded draw
+            let _ = sample_u32(rng); // 4 bytes vs recorded 1 → mismatch
+            flag.set(true); // must not run
+        });
+        assert!(
+            matches!(
+                result,
+                Err(ReplayError::DrawLengthMismatch {
+                    expected: 1,
+                    actual: 4,
+                })
+            ),
+            "unexpected replay result: {result:?}"
+        );
+        assert!(!flag.get(), "generator continued past replay mismatch");
+    }
+
+    #[test]
+    fn replay_after_sample_bytes_vec_matches_bytes() {
+        // sample_bytes_vec issues a single Rng::fill of arbitrary length —
+        // the recorded draw's length must match at replay time.
+        let (recorded, seq) = RecordingSession::new(7).run(|rng| sample_bytes_vec(rng, 100));
+        let replayed = ReplaySession::new(seq)
+            .run(|rng| sample_bytes_vec(rng, 100))
+            .expect("same-length replay must succeed");
+        assert_eq!(replayed, recorded);
+    }
+
+    #[test]
+    fn recorded_composite_case_matches_plain_prng() {
+        // Recording must not shift the byte stream: the composite case
+        // recorded from a given seed must equal the same closure run
+        // against a plain Rng::new(seed).
+        let seed = 0xABCD_1234u64;
+        let (recorded_value, _seq) = RecordingSession::new(seed).run(composite_case);
+        let mut prng = Rng::new(seed);
+        let plain_value = composite_case(&mut prng);
+        assert_eq!(recorded_value, plain_value);
+    }
+
+    #[test]
+    fn empty_sequence_replay_succeeds_when_generator_draws_nothing() {
+        let seq = ChoiceSequence::default();
+        let result = ReplaySession::new(seq).run(|_rng| 7u32);
+        assert_eq!(result, Ok(7));
     }
 }
