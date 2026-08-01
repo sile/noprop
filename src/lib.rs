@@ -12,7 +12,8 @@ pub use generator::{
     gen_choice, gen_f32, gen_f64, gen_i8, gen_i16, gen_i32, gen_i64, gen_i128, gen_isize,
     gen_non_zero_i8, gen_non_zero_i16, gen_non_zero_i32, gen_non_zero_i64, gen_non_zero_i128,
     gen_non_zero_isize, gen_non_zero_u8, gen_non_zero_u16, gen_non_zero_u32, gen_non_zero_u64,
-    gen_non_zero_u128, gen_non_zero_usize, gen_u8, gen_u16, gen_u32, gen_u64, gen_u128, gen_usize,
+    gen_non_zero_u128, gen_non_zero_usize, gen_ratio, gen_u8, gen_u16, gen_u32, gen_u64, gen_u128,
+    gen_usize, gen_usize_in, gen_weighted_index,
 };
 pub use rng::{GeneratedValue, Rng};
 pub use runner::Runner;
