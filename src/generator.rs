@@ -96,8 +96,68 @@
 //! the call panics with a Runner-only message. This is a semantic
 //! change from the previous unbounded loop, kept explicit here rather
 //! than repeated in every affected function's rustdoc.
+//!
+//! # Sampling non-zero integers
+//!
+//! noprop deliberately does not ship dedicated `sample_non_zero_*`
+//! primitives. The `NonZero<_>` domain is not one shape — callers make
+//! a real trade-off between distribution uniformity and unconditional
+//! termination — so `NonZero` is left as a two-line recipe over the
+//! plain integer sampler. Pick one of the two:
+//!
+//! **Uniform, may reject the iteration.** Use
+//! [`sample_with_rejection`](crate::sample_with_rejection) to redraw
+//! until the sampled integer is non-zero. `P(zero)` is at most `1/256`
+//! per attempt (worst case, `u8`), so the shared 64-attempt bound is
+//! effectively unreachable — but on exhaustion the iteration is
+//! rejected, so this recipe requires a [`Runner`](crate::Runner) around
+//! it.
+//!
+//! ```
+//! # let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|rng| {
+//! use std::num::NonZeroU32;
+//! let n = noprop::sample_with_rejection(rng, 64, |rng| {
+//!     NonZeroU32::new(noprop::sample_u32(rng))
+//! });
+//! assert!(n.get() != 0);
+//! # Ok(())
+//! # });
+//! ```
+//!
+//! **Biased, always terminates in one draw.** Map the underlying
+//! integer's zero value onto `1` explicitly. This shifts a small
+//! amount of probability mass onto `1` (worst case `+1/256` for `u8`)
+//! but avoids any retry loop and works outside a `Runner`.
+//!
+//! ```
+//! use std::num::NonZeroU32;
+//! let mut rng = noprop::Rng::new(0);
+//! let v = noprop::sample_u32(&mut rng);
+//! let n = NonZeroU32::new(if v == 0 { 1 } else { v })
+//!     .expect("v was remapped away from zero");
+//! assert!(n.get() != 0);
+//! ```
+//!
+//! `wrapping_add(1)` is *not* a correct substitute — it wraps
+//! `u_::MAX` back to `0`, reintroducing the very case the mapping is
+//! meant to eliminate. `saturating_add(1)` avoids `0` on unsigned
+//! types but overweights the maximum, and does not work on signed
+//! types at all. The explicit `if v == 0 { 1 } else { v }` shows the
+//! chosen remapping target in the code.
+//!
+//! For signed types, note that the full `NonZero<i_>` domain is
+//! `MIN..=-1` ∪ `1..=MAX`. A single `1..=MAX` range would silently
+//! drop the negative half, so the uniform recipe (rejection sampling
+//! over `sample_i32`, etc.) is the only way to cover both signs
+//! uniformly.
+//!
+//! Note that neither recipe records the resulting `NonZero<_>` as its
+//! own trace entry — the underlying integer sample is what appears in
+//! the failure trace. Wrap the value manually with
+//! [`sample_choice`](crate::sample_choice) or a custom
+//! `#[track_caller]` helper if you want a `NonZero`-typed trace entry
+//! at the call site.
 
-use std::num::NonZero;
 use std::ops::{Bound, RangeBounds};
 use std::panic::Location;
 
@@ -644,149 +704,6 @@ pub fn sample_isize(rng: &mut Rng) -> isize {
     v
 }
 
-// === Non-zero integer generators ===
-//
-// Each `sample_non_zero_*` uses `sample_with_rejection` with
-// `DEFAULT_MAX_ATTEMPTS`: read the underlying integer and treat 0 as
-// rejected. P(zero) is at most 1/256 per attempt for every type below,
-// so exhausting 64 attempts is effectively unreachable (worst-case
-// P(all zero) < (1/256)^64 ~ 10^-154 for u8; even smaller elsewhere).
-// Intermediate rejected attempts are not recorded in the value trace —
-// only the final NonZero value is; rejection span metadata is recorded
-// in Recording mode via `sample_with_rejection`'s attempt boundaries.
-
-/// Uniformly-distributed non-zero `u8`.
-#[track_caller]
-pub fn sample_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(raw_bytes::<1>(rng)[0])
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `u16`.
-#[track_caller]
-pub fn sample_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(u16::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `u32`.
-#[track_caller]
-pub fn sample_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(u32::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `u64`.
-#[track_caller]
-pub fn sample_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(u64::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `u128`.
-#[track_caller]
-pub fn sample_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(u128::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `usize`.
-#[track_caller]
-pub fn sample_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(usize::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `i8`.
-#[track_caller]
-pub fn sample_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(raw_bytes::<1>(rng)[0] as i8)
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `i16`.
-#[track_caller]
-pub fn sample_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(i16::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `i32`.
-#[track_caller]
-pub fn sample_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(i32::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `i64`.
-#[track_caller]
-pub fn sample_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(i64::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `i128`.
-#[track_caller]
-pub fn sample_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(i128::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
-/// Uniformly-distributed non-zero `isize`.
-#[track_caller]
-pub fn sample_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
-    let loc = Location::caller();
-    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        NonZero::new(isize::from_le_bytes(raw_bytes(rng)))
-    });
-    rng.record_generated(&nz, loc);
-    nz
-}
-
 // === Character generators ===
 //
 // For character subsets beyond the ones below (alphanumeric, hexdigit,
@@ -985,34 +902,6 @@ mod tests {
             }
         }
         panic!("i8 samples covered only one sign");
-    }
-
-    #[test]
-    fn non_zero_primitives_are_deterministic() {
-        let mut a = Rng::new(456);
-        let mut b = Rng::new(456);
-        assert_eq!(sample_non_zero_u8(&mut a), sample_non_zero_u8(&mut b));
-        assert_eq!(sample_non_zero_u16(&mut a), sample_non_zero_u16(&mut b));
-        assert_eq!(sample_non_zero_u32(&mut a), sample_non_zero_u32(&mut b));
-        assert_eq!(sample_non_zero_u64(&mut a), sample_non_zero_u64(&mut b));
-        assert_eq!(sample_non_zero_u128(&mut a), sample_non_zero_u128(&mut b));
-        assert_eq!(sample_non_zero_usize(&mut a), sample_non_zero_usize(&mut b));
-        assert_eq!(sample_non_zero_i8(&mut a), sample_non_zero_i8(&mut b));
-        assert_eq!(sample_non_zero_i16(&mut a), sample_non_zero_i16(&mut b));
-        assert_eq!(sample_non_zero_i32(&mut a), sample_non_zero_i32(&mut b));
-        assert_eq!(sample_non_zero_i64(&mut a), sample_non_zero_i64(&mut b));
-        assert_eq!(sample_non_zero_i128(&mut a), sample_non_zero_i128(&mut b));
-        assert_eq!(sample_non_zero_isize(&mut a), sample_non_zero_isize(&mut b));
-    }
-
-    #[test]
-    fn non_zero_u8_exercises_rejection_loop() {
-        // Type invariant already guarantees non-zero; this just exercises
-        // the rejection loop over many samples without panicking.
-        let mut rng = Rng::new(1);
-        for _ in 0..1000 {
-            let _ = sample_non_zero_u8(&mut rng);
-        }
     }
 
     #[test]
@@ -1533,17 +1422,19 @@ mod tests {
     // === choice sequence record / replay through the sampling primitives ===
     //
     // These tests exercise if / match / loop control flow combined with
-    // sample_below, sample_char, sample_non_zero_*, and sample_bytes_vec
-    // inside a single recorded case that must replay bit-exactly.
+    // sample_below, sample_char, sample_with_rejection (as the uniform
+    // NonZero recipe), and sample_bytes_vec inside a single recorded
+    // case that must replay bit-exactly.
 
     use crate::rng::{ChoiceSequence, RecordingSession, ReplayError, ReplaySession};
 
     /// Composite generator that mixes every rejection-loop and variable-length
     /// path: `sample_below` (via `sample_usize_in`), `sample_char`,
-    /// `sample_non_zero_u8`, `sample_bytes_vec`, plus `if` / `match` / loop
-    /// control flow. Returns a shape summary that a strict replay must
-    /// reproduce bit-exactly.
-    fn composite_case(rng: &mut Rng) -> (Vec<char>, Vec<NonZero<u8>>, Vec<u8>, u32) {
+    /// an inline uniform-NonZero recipe via `sample_with_rejection`,
+    /// `sample_bytes_vec`, plus `if` / `match` / loop control flow.
+    /// Returns a shape summary that a strict replay must reproduce
+    /// bit-exactly.
+    fn composite_case(rng: &mut Rng) -> (Vec<char>, Vec<std::num::NonZero<u8>>, Vec<u8>, u32) {
         let branch = sample_usize_in(rng, 0..3);
         let chars = if branch == 0 {
             Vec::new()
@@ -1553,7 +1444,10 @@ mod tests {
         let nz_count = sample_usize_in(rng, 1..=4);
         let mut nzs = Vec::with_capacity(nz_count);
         for _ in 0..nz_count {
-            nzs.push(sample_non_zero_u8(rng));
+            let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+                std::num::NonZero::new(sample_u8(rng))
+            });
+            nzs.push(nz);
         }
         let buf_len = sample_usize_in(rng, 0..=16);
         let bytes = sample_bytes_vec(rng, buf_len);

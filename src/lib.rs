@@ -10,10 +10,7 @@ pub use error::{Error, Result};
 pub use generator::{
     sample_ascii_char, sample_ascii_printable_char, sample_bool, sample_bytes, sample_bytes_vec,
     sample_char, sample_choice, sample_f32, sample_f64, sample_i8, sample_i16, sample_i32,
-    sample_i64, sample_i128, sample_isize, sample_non_zero_i8, sample_non_zero_i16,
-    sample_non_zero_i32, sample_non_zero_i64, sample_non_zero_i128, sample_non_zero_isize,
-    sample_non_zero_u8, sample_non_zero_u16, sample_non_zero_u32, sample_non_zero_u64,
-    sample_non_zero_u128, sample_non_zero_usize, sample_ratio, sample_u8, sample_u16, sample_u32,
+    sample_i64, sample_i128, sample_isize, sample_ratio, sample_u8, sample_u16, sample_u32,
     sample_u64, sample_u128, sample_usize, sample_usize_in, sample_weighted_index,
     sample_with_rejection,
 };
