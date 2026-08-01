@@ -32,37 +32,29 @@ use crate::{Error, Result, Rng};
 /// not prescribe how to obtain them. A common setup reads both from
 /// project-specific environment variables so that failures are
 /// reproducible from a failure report (via the seed) and the iteration
-/// count can differ between local and CI runs:
+/// count can differ between local and CI runs. Use
+/// [`seed_from_env_or_time`](crate::seed_from_env_or_time) and
+/// [`iterations_from_env`](crate::iterations_from_env) for the two
+/// standard lookups:
 ///
 /// ```
-/// fn seed() -> u64 {
-///     std::env::var("MYAPP_SEED")
-///         .ok()
-///         .and_then(|s| s.parse().ok())
-///         .unwrap_or_else(|| {
-///             std::time::SystemTime::now()
-///                 .duration_since(std::time::UNIX_EPOCH)
-///                 .map(|d| d.as_nanos() as u64)
-///                 .unwrap_or(0)
-///         })
-/// }
-///
-/// fn iterations() -> usize {
-///     std::env::var("MYAPP_ITERATIONS")
-///         .ok()
-///         .and_then(|s| s.parse().ok())
-///         .unwrap_or(256)
-/// }
-///
-/// let _: noprop::Result<()> = noprop::Runner { seed: seed(), iterations: iterations() }
-///     .run(|_rng| {
-///         // property
-///         Ok(())
-///     });
+/// # fn body() -> Result<(), Box<dyn std::error::Error>> {
+/// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
+/// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)?;
+/// let _: noprop::Result<()> = noprop::Runner { seed, iterations }.run(|_rng| {
+///     // property
+///     Ok(())
+/// });
+/// # Ok(()) }
+/// # body().unwrap();
 /// ```
 ///
 /// The env var names shown above are project-specific placeholders;
-/// pick names that fit the calling project.
+/// pick names that fit the calling project. Both helpers surface a
+/// [`ConfigError`](crate::ConfigError) — via `?` — when the variable
+/// is set to something that cannot be parsed, so a mistyped
+/// `MYAPP_SEED=hello` fails loudly instead of silently reverting to the
+/// clock-derived fallback.
 ///
 /// # Failing a case via `Err` or panic
 ///

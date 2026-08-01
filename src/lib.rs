@@ -1,11 +1,13 @@
 //! Imperative property-based testing library with no dependencies, no macros, no unsafe, and no implicit I/O.
 #![forbid(unsafe_code)]
 
+mod config;
 mod error;
 mod generator;
 mod rng;
 mod runner;
 
+pub use config::{ConfigError, iterations_from_env, seed_from_env_or_time};
 pub use error::{Error, Result};
 pub use generator::{
     sample_ascii_char, sample_ascii_printable_char, sample_bool, sample_bytes, sample_bytes_vec,
