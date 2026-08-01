@@ -422,3 +422,173 @@ fn selection_primitives_are_reproducible_across_runs() {
     let b = run().expect_err("expected Err");
     assert_eq!(a.case_index(), b.case_index());
 }
+
+// === bounded rejection sampling + iteration rejection ===
+
+#[test]
+fn sample_with_rejection_returns_first_accepted_value() -> noprop::Result<()> {
+    noprop::Runner {
+        seed: 1,
+        iterations: 8,
+    }
+    .run(|rng| {
+        let v = noprop::sample_with_rejection(rng, 4, |rng| {
+            let x = noprop::sample_u32(rng);
+            x.is_multiple_of(2).then_some(x)
+        });
+        assert!(v.is_multiple_of(2));
+        Ok(())
+    })
+}
+
+#[test]
+fn reject_case_retries_iteration_without_counting_it() -> noprop::Result<()> {
+    // Reject on the first N iterations then succeed forever. All N
+    // rejections must not consume the iterations budget.
+    let attempts = std::cell::Cell::new(0usize);
+    let accepted = std::cell::Cell::new(0usize);
+    let target_accepts = 4;
+    noprop::Runner {
+        seed: 42,
+        iterations: target_accepts,
+    }
+    .run(|rng| {
+        let n = attempts.get();
+        attempts.set(n + 1);
+        if n < 3 {
+            rng.reject_case();
+        }
+        accepted.set(accepted.get() + 1);
+        Ok(())
+    })?;
+    assert_eq!(accepted.get(), target_accepts);
+    // 3 rejections + 4 acceptances = 7 total invocations.
+    assert_eq!(attempts.get(), 3 + target_accepts);
+    Ok(())
+}
+
+#[test]
+fn always_reject_hits_too_many_rejections_and_reports_case_index_zero() {
+    // Runner cannot accept any iteration; TooManyRejections should
+    // fire and report case_index = 0 (no accepted iteration).
+    let result = noprop::Runner {
+        seed: 7,
+        iterations: 8,
+    }
+    .run(|rng| {
+        rng.reject_case();
+    });
+    let err = result.expect_err("expected TooManyRejections");
+    assert_eq!(err.seed(), 7);
+    assert_eq!(err.case_index(), 0);
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("too_many_rejections"),
+        "debug output should mention too_many_rejections: {debug}"
+    );
+    let display = format!("{err}");
+    assert!(
+        display.contains("too many rejections"),
+        "display output should mention too many rejections: {display}"
+    );
+}
+
+#[test]
+fn always_reject_is_reproducible_from_seed() {
+    let seed = 0xBEEF_1234u64;
+    let run = || {
+        noprop::Runner {
+            seed,
+            iterations: 4,
+        }
+        .run(|rng| {
+            rng.reject_case();
+        })
+    };
+    let a = run().expect_err("expected Err");
+    let b = run().expect_err("expected Err");
+    assert_eq!(a.seed(), b.seed());
+    assert_eq!(a.case_index(), b.case_index());
+}
+
+#[test]
+fn rejection_state_overrides_user_catch_returning_ok() -> noprop::Result<()> {
+    // User code catches the private marker and returns Ok(()) — the
+    // runner must still treat the iteration as rejected.
+    let attempts = std::cell::Cell::new(0usize);
+    noprop::Runner {
+        seed: 1,
+        iterations: 2,
+    }
+    .run(|rng| {
+        let n = attempts.get();
+        attempts.set(n + 1);
+        if n == 0 {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rng.reject_case();
+            }));
+            // If rejection state didn't override, this Ok would count.
+        }
+        Ok(())
+    })?;
+    // First call: caught marker, but runner still rejected the iteration.
+    // Second call: normal Ok — counts as the first accepted iteration.
+    // Third call: normal Ok — counts as the second accepted iteration.
+    assert_eq!(attempts.get(), 3);
+    Ok(())
+}
+
+#[test]
+fn rejection_state_overrides_user_catch_and_reraise() -> noprop::Result<()> {
+    // User catches the marker then panics with a different payload —
+    // the runner must still treat it as rejection, not property failure.
+    let attempts = std::cell::Cell::new(0usize);
+    noprop::Runner {
+        seed: 1,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let n = attempts.get();
+        attempts.set(n + 1);
+        if n == 0 {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rng.reject_case();
+            }));
+            std::panic::panic_any("re-raised, should be dropped");
+        }
+        Ok(())
+    })?;
+    assert_eq!(attempts.get(), 2);
+    Ok(())
+}
+
+#[test]
+fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::Result<()> {
+    // A closure that always returns None inside sample_with_rejection
+    // exhausts and calls reject_case; the runner retries.
+    let outer_attempts = std::cell::Cell::new(0usize);
+    noprop::Runner {
+        seed: 1,
+        iterations: 2,
+    }
+    .run(|rng| {
+        let n = outer_attempts.get();
+        outer_attempts.set(n + 1);
+        if n < 2 {
+            // First two invocations reject via sample_with_rejection exhaustion.
+            let _: u32 = noprop::sample_with_rejection(rng, 4, |_rng| None);
+            unreachable!("sample_with_rejection exhaustion should unwind");
+        }
+        Ok(())
+    })?;
+    // Two iterations rejected + two accepted = 4 outer invocations.
+    assert_eq!(outer_attempts.get(), 4);
+    Ok(())
+}
+
+#[test]
+#[should_panic(expected = "Runner::run")]
+fn reject_case_outside_runner_panics() {
+    let mut rng = noprop::Rng::new(0);
+    rng.reject_case();
+}

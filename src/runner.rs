@@ -2,6 +2,7 @@
 
 use std::panic::AssertUnwindSafe;
 
+use crate::rng::is_iteration_rejected;
 use crate::{Error, Result, Rng};
 
 /// A property-based test runner.
@@ -93,21 +94,65 @@ use crate::{Error, Result, Rng};
 pub struct Runner {
     /// The seed used to construct the internal [`Rng`].
     pub seed: u64,
-    /// The number of times the closure is invoked in [`run`](Runner::run).
+    /// The number of *accepted* iterations to invoke the closure for.
+    ///
+    /// An iteration is "accepted" when the closure reaches a verdict
+    /// (`Ok(())` / `Err` / panic) without calling
+    /// [`Rng::reject_case`](crate::Rng::reject_case) (directly or via
+    /// [`sample_with_rejection`](crate::sample_with_rejection)).
+    /// Rejected iterations are retried and are *not* counted toward
+    /// this budget.
+    ///
+    /// Rejected iterations are still bounded — the runner enforces an
+    /// internal global limit on the total number of rejections it will
+    /// tolerate across the whole [`run`](Runner::run) invocation, so a
+    /// generator that always rejects still terminates with a
+    /// `TooManyRejections` failure instead of looping forever. The
+    /// initial limit is a crate-private constant that scales with
+    /// `iterations`; there is no public knob for it yet.
     pub iterations: usize,
+}
+
+/// Global rejection limit for a single [`Runner::run`] invocation.
+///
+/// Total rejected iterations (across all iteration indices) are capped
+/// so that a generator which always calls
+/// [`Rng::reject_case`](crate::Rng::reject_case) still terminates in
+/// finite time with a `TooManyRejections` failure.
+///
+/// Scaled with `iterations` so that a generous iteration budget also
+/// gets a generous rejection budget, with a floor for very small
+/// `iterations` (including `0`). The concrete formula and floor are
+/// deliberately kept crate-private; both are subject to change once
+/// real-world usage produces measurement data.
+fn rejection_limit(iterations: usize) -> usize {
+    const FLOOR: usize = 1024;
+    FLOOR.max(iterations.saturating_mul(10))
 }
 
 impl Runner {
     /// Invoke `f(&mut rng)` up to `iterations` times against a shared
     /// [`Rng`] seeded with `seed`.
     ///
-    /// Each iteration is one property "case". A returned `Ok(())`
+    /// Each invocation is one property "iteration". A returned `Ok(())`
     /// counts as a pass; a returned `Err` or a panic (via `assert!`,
     /// `assert_eq!`, or explicit `panic!`) counts as a failure. Panics
     /// are caught by `catch_unwind`. Either failure mode is wrapped in
-    /// an [`Error`] carrying the seed, the failing case's index, the
-    /// failure message, and the generated-value trace, and returned as
-    /// `Err`. Subsequent iterations past the first failure are skipped.
+    /// an [`Error`] carrying the seed, the failing iteration's index,
+    /// the failure message, and the generated-value trace, and returned
+    /// as `Err`. Subsequent iterations past the first failure are
+    /// skipped.
+    ///
+    /// A call to [`Rng::reject_case`](crate::Rng::reject_case) (either
+    /// directly or via
+    /// [`sample_with_rejection`](crate::sample_with_rejection)
+    /// exhaustion) discards the current iteration, does not count it
+    /// toward `iterations`, and retries. A stored rejection state
+    /// wins over the closure's own `Ok` / `Err` / non-marker panic
+    /// outcome, so user code cannot swallow rejection by catching the
+    /// private control-flow marker and returning normally. Total
+    /// rejections are bounded — see
+    /// [`Runner::iterations`](Runner::iterations).
     ///
     /// # Property purity
     ///
@@ -127,16 +172,70 @@ impl Runner {
         F: Fn(&mut Rng) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
         let mut rng = Rng::new(self.seed);
-        for case_index in 0..self.iterations {
+        rng.set_inside_runner();
+        let rejection_cap = rejection_limit(self.iterations);
+        let mut accepted: usize = 0;
+        let mut rejected: usize = 0;
+
+        while accepted < self.iterations {
             rng.clear_generated();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
+            let rejection = rng.take_rejection();
+
+            if let Some(state) = rejection {
+                // Rejection wins over any closure outcome. If the
+                // outcome is a non-marker user panic, drop it silently
+                // — the "user cannot swallow rejection" guarantee is
+                // symmetric: user cannot escalate rejection into a
+                // property failure either.
+                let _ = outcome;
+                rejected += 1;
+                if rejected > rejection_cap {
+                    let generated = rng.take_generated();
+                    return Err(Error::from_too_many_rejections(
+                        self.seed,
+                        accepted,
+                        rejected,
+                        state.location,
+                        generated,
+                    ));
+                }
+                continue;
+            }
+
             let message = match outcome {
-                Ok(Ok(())) => continue,
+                Ok(Ok(())) => {
+                    accepted += 1;
+                    continue;
+                }
                 Ok(Err(err)) => format!("{err}"),
-                Err(panic) => panic_message(panic),
+                Err(panic) => {
+                    // Defensive: an IterationRejected marker without a
+                    // stored rejection state shouldn't happen because
+                    // `reject_case` always sets the state before
+                    // resuming unwind. If it somehow does, treat it as
+                    // rejection rather than as a property failure with
+                    // an opaque payload.
+                    if is_iteration_rejected(&*panic) {
+                        rejected += 1;
+                        if rejected > rejection_cap {
+                            let generated = rng.take_generated();
+                            let unknown_location = std::panic::Location::caller();
+                            return Err(Error::from_too_many_rejections(
+                                self.seed,
+                                accepted,
+                                rejected,
+                                unknown_location,
+                                generated,
+                            ));
+                        }
+                        continue;
+                    }
+                    panic_message(panic)
+                }
             };
             let generated = rng.take_generated();
-            return Err(Error::from_panic(self.seed, case_index, message, generated));
+            return Err(Error::from_panic(self.seed, accepted, message, generated));
         }
         Ok(())
     }

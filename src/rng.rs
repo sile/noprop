@@ -1,6 +1,5 @@
 //! Non-cryptographic seedable PRNG (xoshiro256** with SplitMix64 seed expansion).
 
-#[cfg(test)]
 use std::any::Any;
 use std::collections::VecDeque;
 #[cfg(test)]
@@ -25,11 +24,11 @@ const DEDUP_TAIL: usize = 8;
 /// must always be provided by the caller. This makes every property test
 /// exactly reproducible from its seed.
 ///
-/// The only public method is [`Rng::new`]; all byte/word production
-/// happens through the `noprop::sample_*` free functions, which record
-/// the generated values into an internal trace surfaced on failure.
-/// Raw PRNG state access is deliberately hidden so users cannot
-/// accidentally bypass that trace.
+/// The only public methods are [`Rng::new`] and [`Rng::reject_case`];
+/// all byte/word production happens through the `noprop::sample_*` free
+/// functions, which record the generated values into an internal trace
+/// surfaced on failure. Raw PRNG state access is deliberately hidden so
+/// users cannot accidentally bypass that trace.
 ///
 /// # Examples
 ///
@@ -43,13 +42,24 @@ pub struct Rng {
     source: RngSource,
     generated: Vec<GeneratedValue>,
     dedup: DedupState,
+    /// Set by [`Rng::reject_case`]. [`Runner::run`](crate::Runner::run)
+    /// consults this after every case boundary and, if set, treats the
+    /// iteration as rejected regardless of the closure's outcome.
+    rejection: Option<RejectionState>,
+    /// `true` when this `Rng` was constructed inside a
+    /// [`Runner::run`](crate::Runner::run) invocation. `Rng::reject_case`
+    /// checks this and panics with a Runner-only message when it is
+    /// `false`, so the private control-flow marker is never sent from a
+    /// context that cannot catch it.
+    inside_runner: bool,
 }
 
 /// Private entropy source variant carried by every [`Rng`].
 ///
 /// - `Prng` is the normal path — no per-draw allocation.
 /// - `Recording` still drives the PRNG but also copies every non-empty
-///   `fill` output into a [`ChoiceSequence`].
+///   `fill` output into a [`ChoiceSequence`], and records nested attempt
+///   spans opened by `sample_with_rejection`.
 /// - `Replay` reads bytes only from a recorded sequence and reports a
 ///   [`ReplayError`] on structural mismatch, using a private
 ///   control-flow marker to abort the generator immediately.
@@ -59,11 +69,18 @@ enum RngSource {
     Recording {
         state: XoshiroState,
         sequence: ChoiceSequence,
+        /// Index into `sequence.spans` of the currently in-flight
+        /// attempt, or `None` when no attempt is open (top level).
+        current_parent: Option<usize>,
     },
     #[cfg(test)]
     Replay {
         sequence: ChoiceSequence,
         next_draw: usize,
+        next_span: usize,
+        /// Index into `sequence.spans` of the currently in-flight
+        /// attempt, or `None` when no attempt is open.
+        current_parent: Option<usize>,
         error: Option<ReplayError>,
     },
 }
@@ -118,17 +135,19 @@ impl XoshiroState {
     }
 }
 
-/// Bytes consumed by a single case, one entry per non-empty
-/// [`Rng::fill`] call in order.
+/// Bytes and attempt spans consumed by a single case, in call order.
 ///
-/// The `Vec` element boundary IS the draw boundary — no offsets, kinds,
-/// or per-primitive annotations. Empty `fill` calls neither consume PRNG
-/// state nor produce an entry, matching the existing `Rng::fill(&mut [])`
-/// contract.
+/// - Each non-empty [`Rng::fill`] call is one entry in `draws`.
+/// - Each `sample_with_rejection` attempt (including nested ones) is
+///   one entry in `spans`.
+///
+/// Empty `fill` calls neither consume PRNG state nor produce a draw
+/// entry, matching the existing `Rng::fill(&mut [])` contract.
 #[cfg(test)]
 #[derive(Default, Clone)]
 pub(crate) struct ChoiceSequence {
     draws: Vec<Vec<u8>>,
+    spans: Vec<AttemptSpan>,
 }
 
 #[cfg(test)]
@@ -136,6 +155,39 @@ impl ChoiceSequence {
     pub(crate) fn draws(&self) -> &[Vec<u8>] {
         &self.draws
     }
+
+    pub(crate) fn spans(&self) -> &[AttemptSpan] {
+        &self.spans
+    }
+}
+
+/// One `sample_with_rejection` attempt, recorded in the order the
+/// enclosing case opened it. Nested attempts point back to their parent
+/// via `parent`; top-level attempts carry `parent = None`.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttemptSpan {
+    pub parent: Option<usize>,
+    pub start_draw: usize,
+    pub end_draw: usize,
+    pub verdict: AttemptVerdict,
+}
+
+/// Outcome the `sample_with_rejection` attempt returned. `Pending` is
+/// only observable during recording while the closure is still running;
+/// it is replaced by `Accepted` / `Rejected` before the span is
+/// finalized, so it never appears in a released `ChoiceSequence`.
+///
+/// Kept out of `#[cfg(test)]` because `sample_with_rejection` (a
+/// public production function) needs to pass this to
+/// `Rng::end_attempt`; the Prng branch discards it, so it costs
+/// nothing at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttemptVerdict {
+    #[cfg_attr(not(test), expect(dead_code))]
+    Pending,
+    Accepted,
+    Rejected,
 }
 
 /// Reason a strict replay could not reproduce the recorded case.
@@ -148,6 +200,35 @@ pub(crate) enum ReplayError {
     DrawLengthMismatch { expected: usize, actual: usize },
     /// The generator returned but recorded draws remain unread.
     LeftoverDraws { unused: usize },
+    /// The attempt span structure (parent nesting, draw range, or
+    /// verdict) diverged from the recorded sequence — distinct from
+    /// byte-level mismatches so tests can pattern-match on the kind of
+    /// divergence.
+    SpanMismatch {
+        at_span: usize,
+        reason: SpanMismatchReason,
+    },
+    /// The generator returned but recorded spans remain unread.
+    LeftoverSpans { unused: usize },
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SpanMismatchReason {
+    /// The generator opened or closed a span but the recorded sequence
+    /// had no matching span at this position.
+    SequenceExhausted,
+    /// Nesting differed (unexpected parent for this span).
+    ParentMismatch,
+    /// Draw offset at attempt start differed from the recording.
+    StartDrawMismatch { expected: usize, actual: usize },
+    /// Draw offset at attempt end differed from the recording.
+    EndDrawMismatch { expected: usize, actual: usize },
+    /// Accepted vs Rejected verdict differed from the recording.
+    VerdictMismatch {
+        expected: AttemptVerdict,
+        actual: AttemptVerdict,
+    },
 }
 
 /// Private control-flow marker used to abort a generator on the first
@@ -156,6 +237,22 @@ pub(crate) enum ReplayError {
 /// via `Any::is::<ReplayAbort>()`.
 #[cfg(test)]
 struct ReplayAbort;
+
+/// Private control-flow marker used by [`Rng::reject_case`] to unwind
+/// out of the property closure. [`Runner::run`](crate::Runner::run)
+/// catches it and, in combination with the `rejection` state saved on
+/// the [`Rng`], treats the iteration as rejected. Never sent from a
+/// context that lacks the catching boundary — `reject_case` checks
+/// `Rng::inside_runner` first.
+pub(crate) struct IterationRejected;
+
+/// Diagnostic state saved by [`Rng::reject_case`] before it unwinds.
+/// Runner reads this after `catch_unwind` and reports it on
+/// [`TooManyRejections`](crate::Error) failures.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RejectionState {
+    pub location: &'static Location<'static>,
+}
 
 /// A single entry in the generated-value trace collected during a case.
 ///
@@ -262,7 +359,41 @@ impl Rng {
             source: RngSource::Prng(XoshiroState::from_seed(seed)),
             generated: Vec::new(),
             dedup: DedupState::default(),
+            rejection: None,
+            inside_runner: false,
         }
+    }
+
+    /// Reject the current iteration and unwind out of the property
+    /// closure. Only valid inside [`Runner::run`](crate::Runner::run);
+    /// calling this from a `Rng` constructed outside a runner panics
+    /// with a Runner-only message.
+    ///
+    /// Prefer
+    /// [`sample_with_rejection`](crate::sample_with_rejection) as the
+    /// high-level bounded-retry helper. Reach for `reject_case`
+    /// directly only when the whole iteration turns out to be an
+    /// unsuitable candidate *after* sampling has finished and the
+    /// helper cannot express the exit.
+    ///
+    /// The runner discards the current iteration's generated-value
+    /// trace and tries the next iteration. Rejected iterations are not
+    /// counted toward
+    /// [`Runner::iterations`](crate::Runner::iterations); rejected +
+    /// accepted attempts together are bounded by an internal global
+    /// limit so a generator that always rejects still terminates.
+    #[track_caller]
+    pub fn reject_case(&mut self) -> ! {
+        if !self.inside_runner {
+            panic!(
+                "noprop::Rng::reject_case can only be called from inside a Runner::run \
+                 property closure. Constructing an Rng directly via Rng::new does not \
+                 create a Runner boundary."
+            );
+        }
+        let location = Location::caller();
+        self.rejection = Some(RejectionState { location });
+        std::panic::resume_unwind(Box::new(IterationRejected));
     }
 
     /// Fill `dst` with random bytes. An empty slice consumes no RNG
@@ -282,7 +413,9 @@ impl Rng {
         match &mut self.source {
             RngSource::Prng(state) => state.fill(dst),
             #[cfg(test)]
-            RngSource::Recording { state, sequence } => {
+            RngSource::Recording {
+                state, sequence, ..
+            } => {
                 state.fill(dst);
                 sequence.draws.push(dst.to_vec());
             }
@@ -291,6 +424,7 @@ impl Rng {
                 sequence,
                 next_draw,
                 error,
+                ..
             } => {
                 if error.is_none() {
                     if *next_draw >= sequence.draws.len() {
@@ -314,6 +448,145 @@ impl Rng {
                 std::panic::resume_unwind(Box::new(ReplayAbort));
             }
         }
+    }
+
+    /// Open a new attempt span. In `Prng` mode this is a no-op returning
+    /// `None`; in `Recording` mode it records a placeholder span linked
+    /// to the current parent; in `Replay` mode it validates the span
+    /// against the recording. The returned index (in Recording) is fed
+    /// back to `end_attempt`.
+    pub(crate) fn begin_attempt(&mut self) -> Option<usize> {
+        match &mut self.source {
+            RngSource::Prng(_) => None,
+            #[cfg(test)]
+            RngSource::Recording {
+                sequence,
+                current_parent,
+                ..
+            } => {
+                let idx = sequence.spans.len();
+                let start_draw = sequence.draws.len();
+                sequence.spans.push(AttemptSpan {
+                    parent: *current_parent,
+                    start_draw,
+                    end_draw: start_draw,
+                    verdict: AttemptVerdict::Pending,
+                });
+                *current_parent = Some(idx);
+                Some(idx)
+            }
+            #[cfg(test)]
+            RngSource::Replay {
+                sequence,
+                next_draw,
+                next_span,
+                current_parent,
+                error,
+            } => {
+                if error.is_some() {
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                let idx = *next_span;
+                if idx >= sequence.spans.len() {
+                    *error = Some(ReplayError::SpanMismatch {
+                        at_span: idx,
+                        reason: SpanMismatchReason::SequenceExhausted,
+                    });
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                let recorded = &sequence.spans[idx];
+                if recorded.parent != *current_parent {
+                    *error = Some(ReplayError::SpanMismatch {
+                        at_span: idx,
+                        reason: SpanMismatchReason::ParentMismatch,
+                    });
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                if recorded.start_draw != *next_draw {
+                    *error = Some(ReplayError::SpanMismatch {
+                        at_span: idx,
+                        reason: SpanMismatchReason::StartDrawMismatch {
+                            expected: recorded.start_draw,
+                            actual: *next_draw,
+                        },
+                    });
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                *next_span += 1;
+                *current_parent = Some(idx);
+                Some(idx)
+            }
+        }
+    }
+
+    /// Close the attempt opened by `begin_attempt`. `id` is what
+    /// `begin_attempt` returned; `verdict` is `Accepted` or `Rejected`.
+    /// In `Prng` mode this is a no-op (`id` is always `None`).
+    pub(crate) fn end_attempt(&mut self, id: Option<usize>, verdict: AttemptVerdict) {
+        debug_assert!(!matches!(verdict, AttemptVerdict::Pending));
+        match &mut self.source {
+            RngSource::Prng(_) => {
+                let _ = id;
+                let _ = verdict;
+            }
+            #[cfg(test)]
+            RngSource::Recording {
+                sequence,
+                current_parent,
+                ..
+            } => {
+                let idx = id.expect("Recording mode always yields an attempt id");
+                let end_draw = sequence.draws.len();
+                let span = &mut sequence.spans[idx];
+                span.end_draw = end_draw;
+                span.verdict = verdict;
+                *current_parent = span.parent;
+            }
+            #[cfg(test)]
+            RngSource::Replay {
+                sequence,
+                next_draw,
+                current_parent,
+                error,
+                ..
+            } => {
+                if error.is_some() {
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                let idx = id.expect("Replay mode always yields an attempt id");
+                let recorded = &sequence.spans[idx];
+                if recorded.end_draw != *next_draw {
+                    *error = Some(ReplayError::SpanMismatch {
+                        at_span: idx,
+                        reason: SpanMismatchReason::EndDrawMismatch {
+                            expected: recorded.end_draw,
+                            actual: *next_draw,
+                        },
+                    });
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                if recorded.verdict != verdict {
+                    *error = Some(ReplayError::SpanMismatch {
+                        at_span: idx,
+                        reason: SpanMismatchReason::VerdictMismatch {
+                            expected: recorded.verdict,
+                            actual: verdict,
+                        },
+                    });
+                    std::panic::resume_unwind(Box::new(ReplayAbort));
+                }
+                *current_parent = recorded.parent;
+            }
+        }
+    }
+
+    /// Consume and return any pending rejection state saved by
+    /// [`Rng::reject_case`]. Called by
+    /// [`Runner::run`](crate::Runner::run) after each case boundary so
+    /// a set state wins over the closure's own `Ok` / `Err` / non-marker
+    /// panic outcome.
+    pub(crate) fn take_rejection(&mut self) -> Option<RejectionState> {
+        self.rejection.take()
     }
 
     /// Record a generated value in this Rng's buffer. Called from every
@@ -402,15 +675,23 @@ impl Rng {
         self.generated.clear();
         self.dedup = DedupState::default();
     }
+
+    /// Enable the Runner-only guard on
+    /// [`Rng::reject_case`]. Called by
+    /// [`Runner::run`](crate::Runner::run) immediately after
+    /// constructing its `Rng`.
+    pub(crate) fn set_inside_runner(&mut self) {
+        self.inside_runner = true;
+    }
 }
 
 /// Session that records a case's [`ChoiceSequence`] from a seed.
 ///
 /// The session owns the `Rng` handed to the closure and returns it
 /// alongside the closure's own return value. Recording is not woven
-/// into `Rng::new` or `Runner::run` because this issue has no consumer
-/// for the sequence yet — [`RecordingSession`] is the only entry point
-/// that allocates one.
+/// into `Rng::new` or `Runner::run` because those production paths
+/// have no consumer for the sequence — [`RecordingSession`] is the
+/// only entry point that allocates one.
 #[cfg(test)]
 pub(crate) struct RecordingSession {
     seed: u64,
@@ -430,9 +711,12 @@ impl RecordingSession {
             source: RngSource::Recording {
                 state: XoshiroState::from_seed(self.seed),
                 sequence: ChoiceSequence::default(),
+                current_parent: None,
             },
             generated: Vec::new(),
             dedup: DedupState::default(),
+            rejection: None,
+            inside_runner: false,
         };
         let value = f(&mut rng);
         let sequence = match rng.source {
@@ -470,22 +754,29 @@ impl ReplaySession {
     where
         F: FnOnce(&mut Rng) -> T,
     {
+        let total_spans = self.sequence.spans.len();
         let mut rng = Rng {
             source: RngSource::Replay {
                 sequence: self.sequence,
                 next_draw: 0,
+                next_span: 0,
+                current_parent: None,
                 error: None,
             },
             generated: Vec::new(),
             dedup: DedupState::default(),
+            rejection: None,
+            inside_runner: false,
         };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
-        let (sequence, next_draw, error) = match rng.source {
+        let (sequence, next_draw, next_span, error) = match rng.source {
             RngSource::Replay {
                 sequence,
                 next_draw,
+                next_span,
                 error,
-            } => (sequence, next_draw, error),
+                ..
+            } => (sequence, next_draw, next_span, error),
             _ => unreachable!("ReplaySession constructs Replay variant"),
         };
 
@@ -507,6 +798,10 @@ impl ReplaySession {
                     Err(ReplayError::LeftoverDraws {
                         unused: sequence.draws.len() - next_draw,
                     })
+                } else if next_span < total_spans {
+                    Err(ReplayError::LeftoverSpans {
+                        unused: total_spans - next_span,
+                    })
                 } else {
                     Ok(value)
                 }
@@ -523,6 +818,14 @@ impl ReplaySession {
             }
         }
     }
+}
+
+/// Returns whether an unwind payload is the private
+/// [`IterationRejected`] marker sent by [`Rng::reject_case`]. Used by
+/// [`Runner::run`](crate::Runner::run) to distinguish rejection from
+/// user panics.
+pub(crate) fn is_iteration_rejected(payload: &(dyn Any + Send)) -> bool {
+    payload.is::<IterationRejected>()
 }
 
 #[cfg(test)]
@@ -637,10 +940,6 @@ mod tests {
     }
 
     // === Bit-exact fill regression (byte-stream lock) ===
-    //
-    // Guards the concrete xoshiro256** + SplitMix64 output. Any
-    // change to seed expansion, step function, or fill layout would
-    // shift these bytes.
 
     #[test]
     fn fill_bit_exact_multiple_of_eight() {
@@ -651,13 +950,7 @@ mod tests {
         let mut expected = [0u8; 16];
         fresh.fill(&mut expected);
         assert_eq!(buf, expected);
-        // Also lock the concrete bytes so an accidental algorithm
-        // change fails loudly.
-        assert_eq!(
-            buf,
-            expected_bytes(0xDEAD_BEEF, 16).as_slice(),
-            "fill output differs from XoshiroState direct output"
-        );
+        assert_eq!(buf, expected_bytes(0xDEAD_BEEF, 16).as_slice(),);
     }
 
     #[test]
@@ -678,8 +971,6 @@ mod tests {
         assert_eq!(buf, expected_bytes(0xDEAD_BEEF, 8).as_slice());
     }
 
-    /// Compute the first `n` bytes a fresh XoshiroState with `seed` produces
-    /// through its own `fill`. Used as the golden value for regression tests.
     fn expected_bytes(seed: u64, n: usize) -> Vec<u8> {
         let mut xs = XoshiroState::from_seed(seed);
         let mut out = vec![0u8; n];
@@ -764,7 +1055,7 @@ mod tests {
             let mut a = [0u8; 4];
             rng.fill(&mut a);
             let mut b = [0u8; 4];
-            rng.fill(&mut b); // no second draw was recorded
+            rng.fill(&mut b);
         });
         assert!(matches!(
             result,
@@ -779,7 +1070,7 @@ mod tests {
             rng.fill(&mut a);
         });
         let result = ReplaySession::new(seq).run(|rng| {
-            let mut a = [0u8; 8]; // recorded was 4
+            let mut a = [0u8; 8];
             rng.fill(&mut a);
         });
         assert!(matches!(
@@ -820,10 +1111,8 @@ mod tests {
                 let mut a = [0u8; 4];
                 rng.fill(&mut a);
                 let mut b = [0u8; 4];
-                rng.fill(&mut b); // triggers marker
+                rng.fill(&mut b);
             }));
-            // Even though the user swallowed the marker, the replay
-            // session must still return the stored error.
             42u32
         });
         assert!(matches!(
@@ -852,17 +1141,12 @@ mod tests {
 
     #[test]
     fn prng_source_allocates_no_choice_sequence() {
-        // A plain `Rng::new(_)` must not carry a `ChoiceSequence`. This
-        // guards the "Prng path is zero-allocation vs recorded path"
-        // contract at the type level.
         let rng = Rng::new(1);
         assert!(matches!(rng.source, RngSource::Prng(_)));
     }
 
     #[test]
     fn recording_and_prng_produce_same_bytes_for_same_seed() {
-        // Recording only observes fill outputs; it must not shift the
-        // byte stream vs the plain Prng source.
         let mut prng = Rng::new(0x00C0_FFEE);
         let mut expected = [0u8; 32];
         prng.fill(&mut expected);
@@ -873,5 +1157,180 @@ mod tests {
         });
         assert_eq!(seq.draws().len(), 1);
         assert_eq!(seq.draws()[0], expected);
+    }
+
+    // === reject_case Runner-only guard ===
+
+    #[test]
+    #[should_panic(expected = "Runner::run")]
+    fn reject_case_outside_runner_panics_with_helpful_message() {
+        let mut rng = Rng::new(1);
+        rng.reject_case();
+    }
+
+    // === Attempt span recording + replay ===
+
+    #[test]
+    fn recording_captures_flat_attempt_spans() {
+        let ((), seq) = RecordingSession::new(1).run(|rng| {
+            // Two top-level attempts, each of which does one 4-byte fill.
+            let id = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            rng.end_attempt(id, AttemptVerdict::Rejected);
+
+            let id = rng.begin_attempt();
+            let mut b = [0u8; 4];
+            rng.fill(&mut b);
+            rng.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        assert_eq!(seq.spans().len(), 2);
+        assert_eq!(seq.spans()[0].parent, None);
+        assert_eq!(seq.spans()[0].start_draw, 0);
+        assert_eq!(seq.spans()[0].end_draw, 1);
+        assert_eq!(seq.spans()[0].verdict, AttemptVerdict::Rejected);
+        assert_eq!(seq.spans()[1].parent, None);
+        assert_eq!(seq.spans()[1].start_draw, 1);
+        assert_eq!(seq.spans()[1].end_draw, 2);
+        assert_eq!(seq.spans()[1].verdict, AttemptVerdict::Accepted);
+    }
+
+    #[test]
+    fn recording_captures_nested_attempt_spans() {
+        let ((), seq) = RecordingSession::new(1).run(|rng| {
+            let outer = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            let inner = rng.begin_attempt();
+            let mut b = [0u8; 4];
+            rng.fill(&mut b);
+            rng.end_attempt(inner, AttemptVerdict::Rejected);
+            let inner2 = rng.begin_attempt();
+            let mut c = [0u8; 4];
+            rng.fill(&mut c);
+            rng.end_attempt(inner2, AttemptVerdict::Accepted);
+            rng.end_attempt(outer, AttemptVerdict::Accepted);
+        });
+        assert_eq!(seq.spans().len(), 3);
+        assert_eq!(seq.spans()[0].parent, None);
+        assert_eq!(seq.spans()[1].parent, Some(0));
+        assert_eq!(seq.spans()[2].parent, Some(0));
+        assert_eq!(seq.spans()[0].start_draw, 0);
+        assert_eq!(seq.spans()[0].end_draw, 3);
+        assert_eq!(seq.spans()[1].start_draw, 1);
+        assert_eq!(seq.spans()[1].end_draw, 2);
+        assert_eq!(seq.spans()[2].start_draw, 2);
+        assert_eq!(seq.spans()[2].end_draw, 3);
+    }
+
+    #[test]
+    fn replay_reproduces_nested_attempt_spans() {
+        let ((), seq) = RecordingSession::new(9).run(|rng| {
+            let outer = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            let inner = rng.begin_attempt();
+            let mut b = [0u8; 4];
+            rng.fill(&mut b);
+            rng.end_attempt(inner, AttemptVerdict::Rejected);
+            rng.end_attempt(outer, AttemptVerdict::Accepted);
+        });
+        let result = ReplaySession::new(seq).run(|rng| {
+            let outer = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            let inner = rng.begin_attempt();
+            let mut b = [0u8; 4];
+            rng.fill(&mut b);
+            rng.end_attempt(inner, AttemptVerdict::Rejected);
+            rng.end_attempt(outer, AttemptVerdict::Accepted);
+        });
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn replay_flags_verdict_mismatch() {
+        let ((), seq) = RecordingSession::new(1).run(|rng| {
+            let id = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            rng.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        let result = ReplaySession::new(seq).run(|rng| {
+            let id = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            rng.end_attempt(id, AttemptVerdict::Rejected);
+        });
+        assert!(matches!(
+            result,
+            Err(ReplayError::SpanMismatch {
+                at_span: 0,
+                reason: SpanMismatchReason::VerdictMismatch {
+                    expected: AttemptVerdict::Accepted,
+                    actual: AttemptVerdict::Rejected,
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn replay_flags_span_sequence_exhausted() {
+        let ((), seq) = RecordingSession::new(1).run(|rng| {
+            let id = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            rng.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        let result = ReplaySession::new(seq).run(|rng| {
+            let id = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            rng.end_attempt(id, AttemptVerdict::Accepted);
+            let extra = rng.begin_attempt();
+            rng.end_attempt(extra, AttemptVerdict::Accepted);
+        });
+        assert!(matches!(
+            result,
+            Err(ReplayError::SpanMismatch {
+                at_span: 1,
+                reason: SpanMismatchReason::SequenceExhausted,
+            })
+        ));
+    }
+
+    #[test]
+    fn replay_flags_leftover_spans() {
+        // Recording had a span wrapping one draw; replay consumed the
+        // draw directly without a matching begin/end, so all draws are
+        // used but one span is unread.
+        let ((), seq) = RecordingSession::new(1).run(|rng| {
+            let id = rng.begin_attempt();
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+            rng.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        let result = ReplaySession::new(seq).run(|rng| {
+            let mut a = [0u8; 4];
+            rng.fill(&mut a);
+        });
+        assert!(matches!(
+            result,
+            Err(ReplayError::LeftoverSpans { unused: 1 })
+        ));
+    }
+
+    #[test]
+    fn zero_draw_attempts_are_recorded_as_empty_range() {
+        let ((), seq) = RecordingSession::new(1).run(|rng| {
+            let id = rng.begin_attempt();
+            rng.end_attempt(id, AttemptVerdict::Rejected);
+            let id = rng.begin_attempt();
+            rng.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        assert_eq!(seq.spans().len(), 2);
+        assert_eq!(seq.spans()[0].start_draw, seq.spans()[0].end_draw);
+        assert_eq!(seq.spans()[1].start_draw, seq.spans()[1].end_draw);
+        assert_eq!(seq.draws().len(), 0);
     }
 }

@@ -67,12 +67,42 @@
 //!     .find(|x| x % 2 == 0);
 //! # assert!(even.is_some());
 //! ```
+//!
+//! # Bounded rejection sampling
+//!
+//! When a generator has to keep drawing until it hits a value that
+//! satisfies some predicate, use
+//! [`sample_with_rejection`](crate::sample_with_rejection) rather than
+//! a hand-written `loop { … }`. Unbounded manual retries can wedge on
+//! specific choice sequences; the helper enforces a `max_attempts`
+//! bound and, on exhaustion, calls
+//! [`Rng::reject_case`](crate::Rng::reject_case) so the enclosing
+//! [`Runner::run`](crate::Runner::run) discards the iteration and
+//! moves on. Prefer valid-by-construction generators when the accepted
+//! rate is very low.
+//!
+//! # Note on `sample_below` migration
+//!
+//! [`sample_usize_in`], [`sample_ratio`], [`sample_weighted_index`],
+//! and [`sample_choice`] all share an internal rejection sampler that
+//! is bounded at 64 attempts per call. The rejection rate is at worst
+//! ~50% (only when the requested domain is barely under a power of
+//! two), so the probability of exhausting all 64 attempts is `< 2⁻⁶⁴`
+//! — astronomically unreachable in practice. If it does trigger, the
+//! outcome depends on where the call sits: inside a
+//! [`Runner::run`](crate::Runner::run) the four APIs above indirectly
+//! reject the iteration (via
+//! [`Rng::reject_case`](crate::Rng::reject_case)); outside a runner
+//! the call panics with a Runner-only message. This is a semantic
+//! change from the previous unbounded loop, kept explicit here rather
+//! than repeated in every affected function's rustdoc.
 
 use std::num::NonZero;
 use std::ops::{Bound, RangeBounds};
 use std::panic::Location;
 
 use crate::Rng;
+use crate::rng::AttemptVerdict;
 
 /// Read `N` bytes from `rng` without recording. Used by every primitive
 /// so that composite generators (non-zero variants, `sample_char`,
@@ -84,6 +114,99 @@ fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
     buf
 }
 
+// === Bounded rejection sampling ===
+
+/// Shared attempt limit for every internal bounded rejection loop in
+/// this module. Chosen so that a per-attempt rejection rate up to 50%
+/// (the worst case for [`sample_below`]) still exhausts with
+/// probability `< 2⁻⁶⁴`.
+pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
+
+/// Repeatedly invoke `attempt` up to `max_attempts` times until it
+/// returns `Some`, then return that value. On exhaustion (all attempts
+/// returned `None`) this calls
+/// [`Rng::reject_case`](crate::Rng::reject_case), which unwinds out to
+/// the enclosing [`Runner::run`](crate::Runner::run) and marks the
+/// current iteration as rejected — so this function's return type is
+/// `T`, not `Option<T>`.
+///
+/// The helper is the noprop-endorsed way to write bounded rejection
+/// sampling. Prefer it over hand-written `loop { … }` retries: those
+/// can spin forever on choice sequences where every draw fails the
+/// predicate, and cannot signal iteration-level rejection to the
+/// runner. Use `reject_case` directly only when the whole iteration is
+/// unsuitable after sampling has already finished.
+///
+/// # Behavior
+///
+/// - The first `Some(value)` returned by `attempt` is passed through
+///   unchanged; subsequent attempts are not tried.
+/// - `None` is treated as a rejected attempt and the next attempt is
+///   tried.
+/// - `max_attempts` counts the total attempts including the first, so
+///   `max_attempts == 1` gives one shot; `max_attempts == 0` is a
+///   programmer error and panics.
+/// - An attempt that consumes zero draws (a drawless filter, e.g. a
+///   pure predicate over external state) is allowed. In recording
+///   mode its span is stored with `start_draw == end_draw`.
+/// - The closure may itself call `sample_with_rejection` — nested
+///   attempts are supported and recorded with parent/child linkage in
+///   recording mode.
+/// - A user panic inside the closure (other than the private
+///   iteration-rejection marker sent by `reject_case`) propagates
+///   verbatim; the runner's own `catch_unwind` handles it as a
+///   property failure.
+///
+/// # Determinism note
+///
+/// This is a control-flow boundary, not a value primitive. The
+/// accepted `T` is not recorded as a new `GeneratedValue` entry — the
+/// primitives called inside `attempt` are still recorded normally, so
+/// the trace shows the actual draws rather than a redundant wrapper.
+///
+/// # Panics
+///
+/// Panics if `max_attempts == 0`.
+///
+/// # Examples
+///
+/// ```
+/// # let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|rng| {
+/// // Sample an even u32 in at most 8 attempts. If all 8 attempts are
+/// // odd (probability 1/256), the iteration is rejected and Runner
+/// // tries the next one.
+/// let even = noprop::sample_with_rejection(rng, 8, |rng| {
+///     let x = noprop::sample_u32(rng);
+///     if x % 2 == 0 { Some(x) } else { None }
+/// });
+/// assert_eq!(even % 2, 0);
+/// # Ok(())
+/// # });
+/// ```
+#[track_caller]
+pub fn sample_with_rejection<T, F>(rng: &mut Rng, max_attempts: usize, mut attempt: F) -> T
+where
+    F: FnMut(&mut Rng) -> Option<T>,
+{
+    assert!(
+        max_attempts > 0,
+        "sample_with_rejection: max_attempts must be > 0"
+    );
+    for _ in 0..max_attempts {
+        let id = rng.begin_attempt();
+        match attempt(rng) {
+            Some(value) => {
+                rng.end_attempt(id, AttemptVerdict::Accepted);
+                return value;
+            }
+            None => {
+                rng.end_attempt(id, AttemptVerdict::Rejected);
+            }
+        }
+    }
+    rng.reject_case()
+}
+
 // === Bounded-domain sampler ===
 
 /// Sample a uniform `u64` in `[0, n)` using rejection sampling.
@@ -93,9 +216,17 @@ fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
 /// (`sample_usize_in`, `sample_ratio`, `sample_weighted_index`,
 /// `sample_choice`).
 /// Draws are consumed from the RNG only via [`raw_bytes`], so rejected
-/// attempts do not appear in the trace.
+/// attempts do not appear in the value trace (rejection span metadata
+/// is still recorded in Recording mode).
 ///
 /// Panics in debug builds if `n == 0`. Callers must guarantee `n > 0`.
+///
+/// The internal rejection loop is bounded at `DEFAULT_MAX_ATTEMPTS`
+/// via [`sample_with_rejection`]. Per-attempt rejection rate is at
+/// most `(u64::MAX % n + 1) / 2⁶⁴`, which peaks near 50% when `n` is
+/// just above a power of two; the probability of exhausting 64
+/// attempts is therefore `< 2⁻⁶⁴`.
+#[track_caller]
 fn sample_below(rng: &mut Rng, n: u64) -> u64 {
     debug_assert!(n > 0, "sample_below: n must be non-zero");
     if n == 1 {
@@ -114,12 +245,10 @@ fn sample_below(rng: &mut Rng, n: u64) -> u64 {
         return u64::from_le_bytes(raw_bytes(rng)) % n;
     }
     let bound = u64::MAX - r;
-    loop {
+    sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
         let x = u64::from_le_bytes(raw_bytes(rng));
-        if x < bound {
-            return x % n;
-        }
-    }
+        (x < bound).then_some(x % n)
+    })
 }
 
 // === Selection helpers ===
@@ -517,167 +646,145 @@ pub fn sample_isize(rng: &mut Rng) -> isize {
 
 // === Non-zero integer generators ===
 //
-// Each `sample_non_zero_*` uses rejection sampling: read the underlying
-// integer and retry on zero. P(zero) is at most 1/256 per attempt for
-// every type below, so the 64-attempt bound is effectively unreachable
-// (worst-case P(all zero) < (1/256)^64 ~ 10^-154 for u8; even smaller
-// elsewhere). Intermediate rejected attempts are not recorded — only
-// the final NonZero value is.
+// Each `sample_non_zero_*` uses `sample_with_rejection` with
+// `DEFAULT_MAX_ATTEMPTS`: read the underlying integer and treat 0 as
+// rejected. P(zero) is at most 1/256 per attempt for every type below,
+// so exhausting 64 attempts is effectively unreachable (worst-case
+// P(all zero) < (1/256)^64 ~ 10^-154 for u8; even smaller elsewhere).
+// Intermediate rejected attempts are not recorded in the value trace —
+// only the final NonZero value is; rejection span metadata is recorded
+// in Recording mode via `sample_with_rejection`'s attempt boundaries.
 
 /// Uniformly-distributed non-zero `u8`.
 #[track_caller]
 pub fn sample_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(raw_bytes::<1>(rng)[0]) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_u8: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(raw_bytes::<1>(rng)[0])
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `u16`.
 #[track_caller]
 pub fn sample_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(u16::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_u16: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(u16::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `u32`.
 #[track_caller]
 pub fn sample_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(u32::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_u32: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(u32::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `u64`.
 #[track_caller]
 pub fn sample_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(u64::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_u64: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(u64::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `u128`.
 #[track_caller]
 pub fn sample_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(u128::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_u128: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(u128::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `usize`.
 #[track_caller]
 pub fn sample_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(usize::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_usize: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(usize::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `i8`.
 #[track_caller]
 pub fn sample_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(raw_bytes::<1>(rng)[0] as i8) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_i8: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(raw_bytes::<1>(rng)[0] as i8)
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `i16`.
 #[track_caller]
 pub fn sample_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(i16::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_i16: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(i16::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `i32`.
 #[track_caller]
 pub fn sample_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(i32::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_i32: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(i32::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `i64`.
 #[track_caller]
 pub fn sample_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(i64::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_i64: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(i64::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `i128`.
 #[track_caller]
 pub fn sample_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(i128::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_i128: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(i128::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 /// Uniformly-distributed non-zero `isize`.
 #[track_caller]
 pub fn sample_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
     let loc = Location::caller();
-    for _ in 0..64 {
-        if let Some(nz) = NonZero::new(isize::from_le_bytes(raw_bytes(rng))) {
-            rng.record_generated(&nz, loc);
-            return nz;
-        }
-    }
-    panic!("sample_non_zero_isize: rejection sampling exhausted")
+    let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        NonZero::new(isize::from_le_bytes(raw_bytes(rng)))
+    });
+    rng.record_generated(&nz, loc);
+    nz
 }
 
 // === Character generators ===
@@ -691,20 +798,19 @@ pub fn sample_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
 
 /// Uniformly-distributed `char` over the valid Unicode scalar values
 /// (`0..=0x10FFFF`, excluding the surrogate range `0xD800..=0xDFFF`).
+///
+/// Uses [`sample_with_rejection`] with the shared internal 64-attempt
+/// bound: rejection sampling on a 21-bit mask, ~47% per-attempt
+/// rejection rate, so `P(all 64 fail) < 10⁻²⁰`.
 #[track_caller]
 pub fn sample_char(rng: &mut Rng) -> char {
     let loc = Location::caller();
-    // Rejection sampling on a 21-bit mask; expected rejection rate is
-    // about 47%, so the 64-attempt bound is unreachable in practice
-    // (P(all 64 fail) < 10^-20).
-    for _ in 0..64 {
+    let c = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
         let n = u32::from_le_bytes(raw_bytes(rng)) & 0x1F_FFFF;
-        if let Some(c) = char::from_u32(n) {
-            rng.record_generated(&c, loc);
-            return c;
-        }
-    }
-    panic!("sample_char: rejection sampling exhausted")
+        char::from_u32(n)
+    });
+    rng.record_generated(&c, loc);
+    c
 }
 
 /// Uniformly-distributed ASCII `char` (`0x00..=0x7F`, including control
@@ -1229,7 +1335,7 @@ mod tests {
     #[should_panic(expected = "empty range")]
     fn sample_usize_in_panics_on_reversed_inclusive() {
         let mut rng = Rng::new(0);
-        #[allow(clippy::reversed_empty_ranges)]
+        #[expect(clippy::reversed_empty_ranges)]
         let _ = sample_usize_in(&mut rng, 5..=4);
     }
 
@@ -1528,5 +1634,92 @@ mod tests {
         let seq = ChoiceSequence::default();
         let result = ReplaySession::new(seq).run(|_rng| 7u32);
         assert_eq!(result, Ok(7));
+    }
+
+    // === sample_with_rejection basic behavior ===
+
+    #[test]
+    #[should_panic(expected = "max_attempts must be > 0")]
+    fn sample_with_rejection_panics_on_zero_max_attempts() {
+        let mut rng = Rng::new(0);
+        let _: u32 = sample_with_rejection(&mut rng, 0, |_| Some(1));
+    }
+
+    #[test]
+    fn sample_with_rejection_returns_first_accepted_value() {
+        let mut rng = Rng::new(0);
+        let v = sample_with_rejection(&mut rng, 8, |_rng| Some(42u32));
+        assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn sample_with_rejection_skips_rejected_attempts_and_returns_accepted() {
+        let mut rng = Rng::new(0);
+        let counter = std::cell::Cell::new(0usize);
+        let v = sample_with_rejection(&mut rng, 8, |_rng| {
+            let n = counter.get();
+            counter.set(n + 1);
+            // Accept on the 4th attempt (0-indexed: 3rd retry).
+            if n == 3 { Some(n as u32) } else { None }
+        });
+        assert_eq!(v, 3);
+        assert_eq!(counter.get(), 4);
+    }
+
+    #[test]
+    fn sample_with_rejection_records_nested_spans_in_recording_mode() {
+        let (v, seq): ((u8, u8), _) = RecordingSession::new(1).run(|rng| {
+            sample_with_rejection(rng, 8, |rng| {
+                let x = sample_u8(rng);
+                let y = sample_with_rejection(rng, 8, |rng| Some(sample_u8(rng)));
+                Some((x, y))
+            })
+        });
+        assert_eq!(v.0, seq.draws()[0][0]);
+        assert_eq!(v.1, seq.draws()[1][0]);
+        // Two spans total: outer accepted, inner accepted; inner's parent is outer.
+        assert_eq!(seq.spans().len(), 2);
+        assert_eq!(seq.spans()[0].parent, None);
+        assert_eq!(seq.spans()[0].verdict, AttemptVerdict::Accepted);
+        assert_eq!(seq.spans()[1].parent, Some(0));
+        assert_eq!(seq.spans()[1].verdict, AttemptVerdict::Accepted);
+    }
+
+    #[test]
+    fn sample_with_rejection_records_rejected_spans_in_recording_mode() {
+        let (v, seq) = RecordingSession::new(2).run(|rng| {
+            let counter = std::cell::Cell::new(0);
+            sample_with_rejection(rng, 8, |_rng| {
+                let n = counter.get();
+                counter.set(n + 1);
+                if n < 2 { None } else { Some(n as u32) }
+            })
+        });
+        assert_eq!(v, 2);
+        // 3 spans: reject, reject, accept.
+        assert_eq!(seq.spans().len(), 3);
+        assert_eq!(seq.spans()[0].verdict, AttemptVerdict::Rejected);
+        assert_eq!(seq.spans()[1].verdict, AttemptVerdict::Rejected);
+        assert_eq!(seq.spans()[2].verdict, AttemptVerdict::Accepted);
+        assert!(seq.spans().iter().all(|s| s.parent.is_none()));
+    }
+
+    #[test]
+    fn sample_with_rejection_allows_drawless_rejected_attempts() {
+        // A pure predicate over external state — no draws.
+        let (v, seq) = RecordingSession::new(1).run(|rng| {
+            let counter = std::cell::Cell::new(0);
+            sample_with_rejection(rng, 4, |_rng| {
+                let n = counter.get();
+                counter.set(n + 1);
+                if n < 2 { None } else { Some(n as u32) }
+            })
+        });
+        assert_eq!(v, 2);
+        assert_eq!(seq.spans().len(), 3);
+        for span in seq.spans() {
+            assert_eq!(span.start_draw, span.end_draw); // no draws consumed
+        }
+        assert!(seq.draws().is_empty());
     }
 }
