@@ -1,10 +1,10 @@
 //! Value generators.
 //!
-//! Every generator has the shape `fn gen_X(rng: &mut Rng) -> X`. User
+//! Every generator has the shape `fn sample_X(rng: &mut Rng) -> X`. User
 //! code composes generators with plain Rust — closures, `match`, `for`,
 //! iterators — so property tests read like ordinary Rust code, and user
-//! generators (`fn gen_person(rng: &mut Rng) -> Person`) have the same
-//! shape as the built-in ones.
+//! generators (`fn sample_person(rng: &mut Rng) -> Person`) have the
+//! same shape as the built-in ones.
 //!
 //! # Composing generators
 //!
@@ -14,47 +14,47 @@
 //! ```
 //! use noprop::Rng;
 //!
-//! fn gen_bounded_vec(rng: &mut Rng) -> Vec<u32> {
+//! fn sample_bounded_vec(rng: &mut Rng) -> Vec<u32> {
 //!     // Pick a length first, then a Vec of that length.
-//!     let len = noprop::gen_usize_in(rng, 0..10);
-//!     (0..len).map(|_| noprop::gen_u32(rng)).collect()
+//!     let len = noprop::sample_usize_in(rng, 0..10);
+//!     (0..len).map(|_| noprop::sample_u32(rng)).collect()
 //! }
 //!
 //! let mut rng = Rng::new(0);
-//! let _v: Vec<u32> = gen_bounded_vec(&mut rng);
+//! let _v: Vec<u32> = sample_bounded_vec(&mut rng);
 //! ```
 //!
 //! For "one-of-N" branching between code paths, `match` on a small
-//! random value produced by [`gen_usize_in`]:
+//! random value produced by [`sample_usize_in`]:
 //!
 //! ```
 //! let mut rng = noprop::Rng::new(0);
-//! let _x: u32 = match noprop::gen_usize_in(&mut rng, 0..3) {
+//! let _x: u32 = match noprop::sample_usize_in(&mut rng, 0..3) {
 //!     0 => 0,
-//!     1 => noprop::gen_u32(&mut rng),
+//!     1 => noprop::sample_u32(&mut rng),
 //!     _ => u32::MAX,
 //! };
 //! ```
 //!
-//! To weight the branches unevenly, use [`gen_weighted_index`] (or
-//! [`gen_ratio`] for a two-way split):
+//! To weight the branches unevenly, use [`sample_weighted_index`] (or
+//! [`sample_ratio`] for a two-way split):
 //!
 //! ```
 //! let mut rng = noprop::Rng::new(0);
 //! // Pick branch 0 with weight 5, branch 1 with weight 3, branch 2 with weight 2.
-//! let _x: u32 = match noprop::gen_weighted_index(&mut rng, &[5, 3, 2]) {
+//! let _x: u32 = match noprop::sample_weighted_index(&mut rng, &[5, 3, 2]) {
 //!     0 => 0,
-//!     1 => noprop::gen_u32(&mut rng),
+//!     1 => noprop::sample_u32(&mut rng),
 //!     _ => u32::MAX,
 //! };
 //! ```
 //!
-//! To pick one value from a fixed list, use [`gen_choice`]:
+//! To pick one value from a fixed list, use [`sample_choice`]:
 //!
 //! ```
 //! let mut rng = noprop::Rng::new(0);
-//! let _n = noprop::gen_choice(&mut rng, &[1, 2, 3, 5, 8]);
-//! let _digit = noprop::gen_choice(&mut rng, b"0123456789") as char;
+//! let _n = noprop::sample_choice(&mut rng, &[1, 2, 3, 5, 8]);
+//! let _digit = noprop::sample_choice(&mut rng, b"0123456789") as char;
 //! ```
 //!
 //! For bounded retry (filter-style generation), combine a range iterator
@@ -63,7 +63,7 @@
 //! ```
 //! let mut rng = noprop::Rng::new(0);
 //! let even: Option<u32> = (0..100)
-//!     .map(|_| noprop::gen_u32(&mut rng))
+//!     .map(|_| noprop::sample_u32(&mut rng))
 //!     .find(|x| x % 2 == 0);
 //! # assert!(even.is_some());
 //! ```
@@ -75,9 +75,9 @@ use std::panic::Location;
 use crate::Rng;
 
 /// Read `N` bytes from `rng` without recording. Used by every primitive
-/// so that composite generators (non-zero variants, `gen_char`, floats,
-/// `gen_choice`) can consume randomness without producing intermediate
-/// trace entries for the raw byte source.
+/// so that composite generators (non-zero variants, `sample_char`,
+/// floats, `sample_choice`) can consume randomness without producing
+/// intermediate trace entries for the raw byte source.
 fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
     let mut buf = [0u8; N];
     rng.fill(&mut buf);
@@ -90,7 +90,8 @@ fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
 ///
 /// Uses `u64` as a pointer-width-independent working domain so the same
 /// draw pattern applies to every finite-domain selection primitive
-/// (`gen_usize_in`, `gen_ratio`, `gen_weighted_index`, `gen_choice`).
+/// (`sample_usize_in`, `sample_ratio`, `sample_weighted_index`,
+/// `sample_choice`).
 /// Draws are consumed from the RNG only via [`raw_bytes`], so rejected
 /// attempts do not appear in the trace.
 ///
@@ -128,7 +129,7 @@ fn sample_below(rng: &mut Rng, n: u64) -> u64 {
 /// This is the noprop counterpart to picking from a fixed list. Use it
 /// when the alternatives are *values*; for branching between code paths
 /// (calling different generators, taking different actions), use `match`
-/// on [`gen_usize_in`] or [`gen_weighted_index`] instead — see the
+/// on [`sample_usize_in`] or [`sample_weighted_index`] instead — see the
 /// module docstring.
 ///
 /// # Panics
@@ -137,9 +138,9 @@ fn sample_below(rng: &mut Rng, n: u64) -> u64 {
 ///
 /// # Determinism note
 ///
-/// Uses the same rejection-sampling core as [`gen_usize_in`]. For most
-/// slice lengths the rejection rate is negligible, but the number of
-/// RNG bytes consumed by a call is not fixed, so the exact output
+/// Uses the same rejection-sampling core as [`sample_usize_in`]. For
+/// most slice lengths the rejection rate is negligible, but the number
+/// of RNG bytes consumed by a call is not fixed, so the exact output
 /// stream for a given seed depends on the slice length.
 ///
 /// # Examples
@@ -147,15 +148,15 @@ fn sample_below(rng: &mut Rng, n: u64) -> u64 {
 /// ```
 /// let mut rng = noprop::Rng::new(0);
 /// // Explicit list of ints
-/// let _n = noprop::gen_choice(&mut rng, &[1, 2, 3, 5, 8]);
+/// let _n = noprop::sample_choice(&mut rng, &[1, 2, 3, 5, 8]);
 /// // ASCII digit from a byte string literal
-/// let _d = noprop::gen_choice(&mut rng, b"0123456789") as char;
+/// let _d = noprop::sample_choice(&mut rng, b"0123456789") as char;
 /// // Non-ASCII via array literal
-/// let _c = noprop::gen_choice(&mut rng, &['α', 'β', 'γ']);
+/// let _c = noprop::sample_choice(&mut rng, &['α', 'β', 'γ']);
 /// ```
 #[track_caller]
-pub fn gen_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choices: &[T]) -> T {
-    assert!(!choices.is_empty(), "gen_choice: empty slice");
+pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choices: &[T]) -> T {
+    assert!(!choices.is_empty(), "sample_choice: empty slice");
     let loc = Location::caller();
     let idx = sample_below(rng, choices.len() as u64) as usize;
     let v = choices[idx].clone();
@@ -182,34 +183,34 @@ pub fn gen_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choices: 
 /// Uses rejection sampling internally. Most calls accept the first
 /// draw, but the exact byte count consumed depends on the range width,
 /// so changing the range can shift subsequent RNG output for the same
-/// seed. This is a deliberate correction over the earlier `gen_usize %
-/// (max + 1)` recipe, which was both bias-prone and overflow-prone.
+/// seed. This is a deliberate correction over the earlier `sample_usize
+/// % (max + 1)` recipe, which was both bias-prone and overflow-prone.
 ///
 /// # Examples
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0);
 ///
-/// let idx = noprop::gen_usize_in(&mut rng, 0..10);
+/// let idx = noprop::sample_usize_in(&mut rng, 0..10);
 /// assert!(idx < 10);
 ///
-/// let day = noprop::gen_usize_in(&mut rng, 1..=31);
+/// let day = noprop::sample_usize_in(&mut rng, 1..=31);
 /// assert!((1..=31).contains(&day));
 /// ```
 #[track_caller]
-pub fn gen_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize {
+pub fn sample_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize {
     let loc = Location::caller();
     let lo = match range.start_bound() {
         Bound::Included(&s) => s,
-        Bound::Excluded(&s) => s.checked_add(1).expect("gen_usize_in: empty range"),
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_usize_in: empty range"),
         Bound::Unbounded => 0,
     };
     let hi = match range.end_bound() {
         Bound::Included(&e) => e,
-        Bound::Excluded(&e) => e.checked_sub(1).expect("gen_usize_in: empty range"),
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_usize_in: empty range"),
         Bound::Unbounded => usize::MAX,
     };
-    assert!(lo <= hi, "gen_usize_in: empty range");
+    assert!(lo <= hi, "sample_usize_in: empty range");
     let v = if lo == 0 && hi == usize::MAX {
         // Full pointer-width range: a raw byte draw is already unbiased,
         // and hi - lo + 1 would wrap.
@@ -230,7 +231,7 @@ pub fn gen_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize {
 ///
 /// The typical use is weighting a two-way branch by an exact rational
 /// probability instead of a floating-point one, so that
-/// e.g. `gen_ratio(rng, 1, 3)` is exactly one-in-three, not
+/// e.g. `sample_ratio(rng, 1, 3)` is exactly one-in-three, not
 /// `0.333…`-close.
 ///
 /// # Panics
@@ -252,19 +253,22 @@ pub fn gen_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize {
 /// ```
 /// let mut rng = noprop::Rng::new(0);
 /// // 1 in 3 chance of true.
-/// let _b = noprop::gen_ratio(&mut rng, 1, 3);
+/// let _b = noprop::sample_ratio(&mut rng, 1, 3);
 /// // Always false; consumes no RNG.
-/// assert!(!noprop::gen_ratio(&mut rng, 0, 5));
+/// assert!(!noprop::sample_ratio(&mut rng, 0, 5));
 /// // Always true; consumes no RNG.
-/// assert!(noprop::gen_ratio(&mut rng, 5, 5));
+/// assert!(noprop::sample_ratio(&mut rng, 5, 5));
 /// ```
 #[track_caller]
-pub fn gen_ratio(rng: &mut Rng, numerator: u32, denominator: u32) -> bool {
+pub fn sample_ratio(rng: &mut Rng, numerator: u32, denominator: u32) -> bool {
     let loc = Location::caller();
-    assert!(denominator != 0, "gen_ratio: denominator must be non-zero");
+    assert!(
+        denominator != 0,
+        "sample_ratio: denominator must be non-zero"
+    );
     assert!(
         numerator <= denominator,
-        "gen_ratio: numerator ({numerator}) must be <= denominator ({denominator})"
+        "sample_ratio: numerator ({numerator}) must be <= denominator ({denominator})"
     );
     let v = if numerator == 0 {
         false
@@ -306,20 +310,20 @@ pub fn gen_ratio(rng: &mut Rng, numerator: u32, denominator: u32) -> bool {
 /// ```
 /// let mut rng = noprop::Rng::new(0);
 /// // Roughly 50% branch 0, 30% branch 1, 20% branch 2.
-/// let idx = noprop::gen_weighted_index(&mut rng, &[5, 3, 2]);
+/// let idx = noprop::sample_weighted_index(&mut rng, &[5, 3, 2]);
 /// assert!(idx < 3);
 /// ```
 #[track_caller]
-pub fn gen_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
+pub fn sample_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
     let loc = Location::caller();
-    assert!(!weights.is_empty(), "gen_weighted_index: empty weights");
+    assert!(!weights.is_empty(), "sample_weighted_index: empty weights");
     let mut total: u64 = 0;
     for &w in weights {
         total = total
             .checked_add(w as u64)
-            .expect("gen_weighted_index: weight sum overflows u64");
+            .expect("sample_weighted_index: weight sum overflows u64");
     }
-    assert!(total > 0, "gen_weighted_index: all weights are zero");
+    assert!(total > 0, "sample_weighted_index: all weights are zero");
     let mut pick = sample_below(rng, total);
     let mut chosen = weights.len(); // sentinel; overwritten below
     for (i, &w) in weights.iter().enumerate() {
@@ -349,11 +353,11 @@ pub fn gen_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0);
-/// let key: [u8; 32] = noprop::gen_bytes(&mut rng);
+/// let key: [u8; 32] = noprop::sample_bytes(&mut rng);
 /// assert_eq!(key.len(), 32);
 /// ```
 #[track_caller]
-pub fn gen_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
+pub fn sample_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
     let loc = Location::caller();
     let bytes = raw_bytes::<N>(rng);
     rng.record_generated(&bytes, loc);
@@ -363,18 +367,18 @@ pub fn gen_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
 /// Uniformly-distributed `Vec<u8>` of length `len`.
 ///
 /// Use this when the byte-buffer length is known only at runtime
-/// (`gen_bytes_vec(rng, gen_usize_in(rng, 0..1024))`). The whole
+/// (`sample_bytes_vec(rng, sample_usize_in(rng, 0..1024))`). The whole
 /// buffer is recorded as a single trace entry.
 ///
 /// # Examples
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0);
-/// let bytes = noprop::gen_bytes_vec(&mut rng, 100);
+/// let bytes = noprop::sample_bytes_vec(&mut rng, 100);
 /// assert_eq!(bytes.len(), 100);
 /// ```
 #[track_caller]
-pub fn gen_bytes_vec(rng: &mut Rng, len: usize) -> Vec<u8> {
+pub fn sample_bytes_vec(rng: &mut Rng, len: usize) -> Vec<u8> {
     let loc = Location::caller();
     let mut bytes = vec![0u8; len];
     rng.fill(&mut bytes);
@@ -386,7 +390,7 @@ pub fn gen_bytes_vec(rng: &mut Rng, len: usize) -> Vec<u8> {
 
 /// Uniformly-distributed `bool`.
 #[track_caller]
-pub fn gen_bool(rng: &mut Rng) -> bool {
+pub fn sample_bool(rng: &mut Rng) -> bool {
     let loc = Location::caller();
     // Consume one byte so this primitive shares the "read a fixed-size
     // byte slice" shape with the integer generators.
@@ -405,7 +409,7 @@ pub fn gen_bool(rng: &mut Rng) -> bool {
 
 /// Uniformly-distributed `u8`.
 #[track_caller]
-pub fn gen_u8(rng: &mut Rng) -> u8 {
+pub fn sample_u8(rng: &mut Rng) -> u8 {
     let loc = Location::caller();
     let v = raw_bytes::<1>(rng)[0];
     rng.record_generated(&v, loc);
@@ -414,7 +418,7 @@ pub fn gen_u8(rng: &mut Rng) -> u8 {
 
 /// Uniformly-distributed `u16`.
 #[track_caller]
-pub fn gen_u16(rng: &mut Rng) -> u16 {
+pub fn sample_u16(rng: &mut Rng) -> u16 {
     let loc = Location::caller();
     let v = u16::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -423,7 +427,7 @@ pub fn gen_u16(rng: &mut Rng) -> u16 {
 
 /// Uniformly-distributed `u32`.
 #[track_caller]
-pub fn gen_u32(rng: &mut Rng) -> u32 {
+pub fn sample_u32(rng: &mut Rng) -> u32 {
     let loc = Location::caller();
     let v = u32::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -432,7 +436,7 @@ pub fn gen_u32(rng: &mut Rng) -> u32 {
 
 /// Uniformly-distributed `u64`.
 #[track_caller]
-pub fn gen_u64(rng: &mut Rng) -> u64 {
+pub fn sample_u64(rng: &mut Rng) -> u64 {
     let loc = Location::caller();
     let v = u64::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -441,7 +445,7 @@ pub fn gen_u64(rng: &mut Rng) -> u64 {
 
 /// Uniformly-distributed `u128`.
 #[track_caller]
-pub fn gen_u128(rng: &mut Rng) -> u128 {
+pub fn sample_u128(rng: &mut Rng) -> u128 {
     let loc = Location::caller();
     let v = u128::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -450,7 +454,7 @@ pub fn gen_u128(rng: &mut Rng) -> u128 {
 
 /// Uniformly-distributed `usize`.
 #[track_caller]
-pub fn gen_usize(rng: &mut Rng) -> usize {
+pub fn sample_usize(rng: &mut Rng) -> usize {
     let loc = Location::caller();
     let v = usize::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -459,7 +463,7 @@ pub fn gen_usize(rng: &mut Rng) -> usize {
 
 /// Uniformly-distributed `i8`.
 #[track_caller]
-pub fn gen_i8(rng: &mut Rng) -> i8 {
+pub fn sample_i8(rng: &mut Rng) -> i8 {
     let loc = Location::caller();
     let v = raw_bytes::<1>(rng)[0] as i8;
     rng.record_generated(&v, loc);
@@ -468,7 +472,7 @@ pub fn gen_i8(rng: &mut Rng) -> i8 {
 
 /// Uniformly-distributed `i16`.
 #[track_caller]
-pub fn gen_i16(rng: &mut Rng) -> i16 {
+pub fn sample_i16(rng: &mut Rng) -> i16 {
     let loc = Location::caller();
     let v = i16::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -477,7 +481,7 @@ pub fn gen_i16(rng: &mut Rng) -> i16 {
 
 /// Uniformly-distributed `i32`.
 #[track_caller]
-pub fn gen_i32(rng: &mut Rng) -> i32 {
+pub fn sample_i32(rng: &mut Rng) -> i32 {
     let loc = Location::caller();
     let v = i32::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -486,7 +490,7 @@ pub fn gen_i32(rng: &mut Rng) -> i32 {
 
 /// Uniformly-distributed `i64`.
 #[track_caller]
-pub fn gen_i64(rng: &mut Rng) -> i64 {
+pub fn sample_i64(rng: &mut Rng) -> i64 {
     let loc = Location::caller();
     let v = i64::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -495,7 +499,7 @@ pub fn gen_i64(rng: &mut Rng) -> i64 {
 
 /// Uniformly-distributed `i128`.
 #[track_caller]
-pub fn gen_i128(rng: &mut Rng) -> i128 {
+pub fn sample_i128(rng: &mut Rng) -> i128 {
     let loc = Location::caller();
     let v = i128::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -504,7 +508,7 @@ pub fn gen_i128(rng: &mut Rng) -> i128 {
 
 /// Uniformly-distributed `isize`.
 #[track_caller]
-pub fn gen_isize(rng: &mut Rng) -> isize {
+pub fn sample_isize(rng: &mut Rng) -> isize {
     let loc = Location::caller();
     let v = isize::from_le_bytes(raw_bytes(rng));
     rng.record_generated(&v, loc);
@@ -513,7 +517,7 @@ pub fn gen_isize(rng: &mut Rng) -> isize {
 
 // === Non-zero integer generators ===
 //
-// Each `gen_non_zero_*` uses rejection sampling: read the underlying
+// Each `sample_non_zero_*` uses rejection sampling: read the underlying
 // integer and retry on zero. P(zero) is at most 1/256 per attempt for
 // every type below, so the 64-attempt bound is effectively unreachable
 // (worst-case P(all zero) < (1/256)^64 ~ 10^-154 for u8; even smaller
@@ -522,7 +526,7 @@ pub fn gen_isize(rng: &mut Rng) -> isize {
 
 /// Uniformly-distributed non-zero `u8`.
 #[track_caller]
-pub fn gen_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
+pub fn sample_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(raw_bytes::<1>(rng)[0]) {
@@ -530,12 +534,12 @@ pub fn gen_non_zero_u8(rng: &mut Rng) -> NonZero<u8> {
             return nz;
         }
     }
-    panic!("gen_non_zero_u8: rejection sampling exhausted")
+    panic!("sample_non_zero_u8: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `u16`.
 #[track_caller]
-pub fn gen_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
+pub fn sample_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(u16::from_le_bytes(raw_bytes(rng))) {
@@ -543,12 +547,12 @@ pub fn gen_non_zero_u16(rng: &mut Rng) -> NonZero<u16> {
             return nz;
         }
     }
-    panic!("gen_non_zero_u16: rejection sampling exhausted")
+    panic!("sample_non_zero_u16: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `u32`.
 #[track_caller]
-pub fn gen_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
+pub fn sample_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(u32::from_le_bytes(raw_bytes(rng))) {
@@ -556,12 +560,12 @@ pub fn gen_non_zero_u32(rng: &mut Rng) -> NonZero<u32> {
             return nz;
         }
     }
-    panic!("gen_non_zero_u32: rejection sampling exhausted")
+    panic!("sample_non_zero_u32: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `u64`.
 #[track_caller]
-pub fn gen_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
+pub fn sample_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(u64::from_le_bytes(raw_bytes(rng))) {
@@ -569,12 +573,12 @@ pub fn gen_non_zero_u64(rng: &mut Rng) -> NonZero<u64> {
             return nz;
         }
     }
-    panic!("gen_non_zero_u64: rejection sampling exhausted")
+    panic!("sample_non_zero_u64: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `u128`.
 #[track_caller]
-pub fn gen_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
+pub fn sample_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(u128::from_le_bytes(raw_bytes(rng))) {
@@ -582,12 +586,12 @@ pub fn gen_non_zero_u128(rng: &mut Rng) -> NonZero<u128> {
             return nz;
         }
     }
-    panic!("gen_non_zero_u128: rejection sampling exhausted")
+    panic!("sample_non_zero_u128: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `usize`.
 #[track_caller]
-pub fn gen_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
+pub fn sample_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(usize::from_le_bytes(raw_bytes(rng))) {
@@ -595,12 +599,12 @@ pub fn gen_non_zero_usize(rng: &mut Rng) -> NonZero<usize> {
             return nz;
         }
     }
-    panic!("gen_non_zero_usize: rejection sampling exhausted")
+    panic!("sample_non_zero_usize: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `i8`.
 #[track_caller]
-pub fn gen_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
+pub fn sample_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(raw_bytes::<1>(rng)[0] as i8) {
@@ -608,12 +612,12 @@ pub fn gen_non_zero_i8(rng: &mut Rng) -> NonZero<i8> {
             return nz;
         }
     }
-    panic!("gen_non_zero_i8: rejection sampling exhausted")
+    panic!("sample_non_zero_i8: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `i16`.
 #[track_caller]
-pub fn gen_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
+pub fn sample_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(i16::from_le_bytes(raw_bytes(rng))) {
@@ -621,12 +625,12 @@ pub fn gen_non_zero_i16(rng: &mut Rng) -> NonZero<i16> {
             return nz;
         }
     }
-    panic!("gen_non_zero_i16: rejection sampling exhausted")
+    panic!("sample_non_zero_i16: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `i32`.
 #[track_caller]
-pub fn gen_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
+pub fn sample_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(i32::from_le_bytes(raw_bytes(rng))) {
@@ -634,12 +638,12 @@ pub fn gen_non_zero_i32(rng: &mut Rng) -> NonZero<i32> {
             return nz;
         }
     }
-    panic!("gen_non_zero_i32: rejection sampling exhausted")
+    panic!("sample_non_zero_i32: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `i64`.
 #[track_caller]
-pub fn gen_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
+pub fn sample_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(i64::from_le_bytes(raw_bytes(rng))) {
@@ -647,12 +651,12 @@ pub fn gen_non_zero_i64(rng: &mut Rng) -> NonZero<i64> {
             return nz;
         }
     }
-    panic!("gen_non_zero_i64: rejection sampling exhausted")
+    panic!("sample_non_zero_i64: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `i128`.
 #[track_caller]
-pub fn gen_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
+pub fn sample_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(i128::from_le_bytes(raw_bytes(rng))) {
@@ -660,12 +664,12 @@ pub fn gen_non_zero_i128(rng: &mut Rng) -> NonZero<i128> {
             return nz;
         }
     }
-    panic!("gen_non_zero_i128: rejection sampling exhausted")
+    panic!("sample_non_zero_i128: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed non-zero `isize`.
 #[track_caller]
-pub fn gen_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
+pub fn sample_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
     let loc = Location::caller();
     for _ in 0..64 {
         if let Some(nz) = NonZero::new(isize::from_le_bytes(raw_bytes(rng))) {
@@ -673,22 +677,22 @@ pub fn gen_non_zero_isize(rng: &mut Rng) -> NonZero<isize> {
             return nz;
         }
     }
-    panic!("gen_non_zero_isize: rejection sampling exhausted")
+    panic!("sample_non_zero_isize: rejection sampling exhausted")
 }
 
 // === Character generators ===
 //
 // For character subsets beyond the ones below (alphanumeric, hexdigit,
-// etc.), compose with `gen_choice` over a byte-string literal, for
+// etc.), compose with `sample_choice` over a byte-string literal, for
 // example:
 //
-//     let d = gen_choice(rng, b"0123456789") as char;
-//     let a = gen_choice(rng, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") as char;
+//     let d = sample_choice(rng, b"0123456789") as char;
+//     let a = sample_choice(rng, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") as char;
 
 /// Uniformly-distributed `char` over the valid Unicode scalar values
 /// (`0..=0x10FFFF`, excluding the surrogate range `0xD800..=0xDFFF`).
 #[track_caller]
-pub fn gen_char(rng: &mut Rng) -> char {
+pub fn sample_char(rng: &mut Rng) -> char {
     let loc = Location::caller();
     // Rejection sampling on a 21-bit mask; expected rejection rate is
     // about 47%, so the 64-attempt bound is unreachable in practice
@@ -700,13 +704,13 @@ pub fn gen_char(rng: &mut Rng) -> char {
             return c;
         }
     }
-    panic!("gen_char: rejection sampling exhausted")
+    panic!("sample_char: rejection sampling exhausted")
 }
 
 /// Uniformly-distributed ASCII `char` (`0x00..=0x7F`, including control
 /// characters).
 #[track_caller]
-pub fn gen_ascii_char(rng: &mut Rng) -> char {
+pub fn sample_ascii_char(rng: &mut Rng) -> char {
     let loc = Location::caller();
     let v = (raw_bytes::<1>(rng)[0] & 0x7F) as char;
     rng.record_generated(&v, loc);
@@ -716,7 +720,7 @@ pub fn gen_ascii_char(rng: &mut Rng) -> char {
 /// Uniformly-distributed printable ASCII `char` (`0x20..=0x7E`, space
 /// through `~`, excluding control characters and DEL).
 #[track_caller]
-pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
+pub fn sample_ascii_printable_char(rng: &mut Rng) -> char {
     let loc = Location::caller();
     // 95 characters. Use u32 for negligible modulo bias
     // (2^32 mod 95 = 6, so bias factor is at most 1 + 1/45210182).
@@ -731,11 +735,11 @@ pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
 ///
 /// NaN and infinities are excluded from the output range. To include
 /// them (or any specific special value), pick from a fixed set with
-/// [`gen_choice`]:
+/// [`sample_choice`]:
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0);
-/// let _x = noprop::gen_choice(
+/// let _x = noprop::sample_choice(
 ///     &mut rng,
 ///     &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0],
 /// );
@@ -746,19 +750,19 @@ pub fn gen_ascii_printable_char(rng: &mut Rng) -> char {
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0);
-/// let _x = f32::from_bits(noprop::gen_u32(&mut rng));
+/// let _x = f32::from_bits(noprop::sample_u32(&mut rng));
 /// ```
 ///
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
 #[track_caller]
-pub fn gen_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
+pub fn sample_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
     assert!(
         min.is_finite() && max.is_finite(),
-        "gen_f32: min and max must be finite"
+        "sample_f32: min and max must be finite"
     );
-    assert!(min < max, "gen_f32: min must be less than max");
+    assert!(min < max, "sample_f32: min must be less than max");
     let loc = Location::caller();
     // Build a 24-bit uniform value in [0, 1): construct a float in
     // [1, 2) by injecting 23 random bits into the mantissa of a fixed
@@ -773,22 +777,22 @@ pub fn gen_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
 
 /// Uniformly-distributed `f64` in `[min, max)`.
 ///
-/// Same conventions as [`gen_f32`]: NaN and infinities are excluded from
-/// the output. Use [`gen_choice`] to include specific special values, or
-/// `f64::from_bits(gen_u64(rng))` for an arbitrary bit pattern.
+/// Same conventions as [`sample_f32`]: NaN and infinities are excluded from
+/// the output. Use [`sample_choice`] to include specific special values, or
+/// `f64::from_bits(sample_u64(rng))` for an arbitrary bit pattern.
 ///
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
 #[track_caller]
-pub fn gen_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
+pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
     assert!(
         min.is_finite() && max.is_finite(),
-        "gen_f64: min and max must be finite"
+        "sample_f64: min and max must be finite"
     );
-    assert!(min < max, "gen_f64: min must be less than max");
+    assert!(min < max, "sample_f64: min must be less than max");
     let loc = Location::caller();
-    // Same construction as gen_f32 but with 53-bit precision.
+    // Same construction as sample_f32 but with 53-bit precision.
     let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(rng)) >> 12);
     let unit = f64::from_bits(bits) - 1.0;
     let v = min + (max - min) * unit;
@@ -804,19 +808,19 @@ mod tests {
     fn primitives_are_deterministic() {
         let mut a = Rng::new(123);
         let mut b = Rng::new(123);
-        assert_eq!(gen_bool(&mut a), gen_bool(&mut b));
-        assert_eq!(gen_u8(&mut a), gen_u8(&mut b));
-        assert_eq!(gen_u16(&mut a), gen_u16(&mut b));
-        assert_eq!(gen_u32(&mut a), gen_u32(&mut b));
-        assert_eq!(gen_u64(&mut a), gen_u64(&mut b));
-        assert_eq!(gen_u128(&mut a), gen_u128(&mut b));
-        assert_eq!(gen_usize(&mut a), gen_usize(&mut b));
-        assert_eq!(gen_i8(&mut a), gen_i8(&mut b));
-        assert_eq!(gen_i16(&mut a), gen_i16(&mut b));
-        assert_eq!(gen_i32(&mut a), gen_i32(&mut b));
-        assert_eq!(gen_i64(&mut a), gen_i64(&mut b));
-        assert_eq!(gen_i128(&mut a), gen_i128(&mut b));
-        assert_eq!(gen_isize(&mut a), gen_isize(&mut b));
+        assert_eq!(sample_bool(&mut a), sample_bool(&mut b));
+        assert_eq!(sample_u8(&mut a), sample_u8(&mut b));
+        assert_eq!(sample_u16(&mut a), sample_u16(&mut b));
+        assert_eq!(sample_u32(&mut a), sample_u32(&mut b));
+        assert_eq!(sample_u64(&mut a), sample_u64(&mut b));
+        assert_eq!(sample_u128(&mut a), sample_u128(&mut b));
+        assert_eq!(sample_usize(&mut a), sample_usize(&mut b));
+        assert_eq!(sample_i8(&mut a), sample_i8(&mut b));
+        assert_eq!(sample_i16(&mut a), sample_i16(&mut b));
+        assert_eq!(sample_i32(&mut a), sample_i32(&mut b));
+        assert_eq!(sample_i64(&mut a), sample_i64(&mut b));
+        assert_eq!(sample_i128(&mut a), sample_i128(&mut b));
+        assert_eq!(sample_isize(&mut a), sample_isize(&mut b));
     }
 
     #[test]
@@ -824,7 +828,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let (mut t, mut f) = (false, false);
         for _ in 0..64 {
-            match gen_bool(&mut rng) {
+            match sample_bool(&mut rng) {
                 true => t = true,
                 false => f = true,
             }
@@ -840,7 +844,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let (mut low, mut high) = (false, false);
         for _ in 0..64 {
-            let v = gen_u8(&mut rng);
+            let v = sample_u8(&mut rng);
             low |= v < 128;
             high |= v >= 128;
             if low && high {
@@ -855,7 +859,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let (mut neg, mut nonneg) = (false, false);
         for _ in 0..64 {
-            let v = gen_i8(&mut rng);
+            let v = sample_i8(&mut rng);
             neg |= v < 0;
             nonneg |= v >= 0;
             if neg && nonneg {
@@ -869,18 +873,18 @@ mod tests {
     fn non_zero_primitives_are_deterministic() {
         let mut a = Rng::new(456);
         let mut b = Rng::new(456);
-        assert_eq!(gen_non_zero_u8(&mut a), gen_non_zero_u8(&mut b));
-        assert_eq!(gen_non_zero_u16(&mut a), gen_non_zero_u16(&mut b));
-        assert_eq!(gen_non_zero_u32(&mut a), gen_non_zero_u32(&mut b));
-        assert_eq!(gen_non_zero_u64(&mut a), gen_non_zero_u64(&mut b));
-        assert_eq!(gen_non_zero_u128(&mut a), gen_non_zero_u128(&mut b));
-        assert_eq!(gen_non_zero_usize(&mut a), gen_non_zero_usize(&mut b));
-        assert_eq!(gen_non_zero_i8(&mut a), gen_non_zero_i8(&mut b));
-        assert_eq!(gen_non_zero_i16(&mut a), gen_non_zero_i16(&mut b));
-        assert_eq!(gen_non_zero_i32(&mut a), gen_non_zero_i32(&mut b));
-        assert_eq!(gen_non_zero_i64(&mut a), gen_non_zero_i64(&mut b));
-        assert_eq!(gen_non_zero_i128(&mut a), gen_non_zero_i128(&mut b));
-        assert_eq!(gen_non_zero_isize(&mut a), gen_non_zero_isize(&mut b));
+        assert_eq!(sample_non_zero_u8(&mut a), sample_non_zero_u8(&mut b));
+        assert_eq!(sample_non_zero_u16(&mut a), sample_non_zero_u16(&mut b));
+        assert_eq!(sample_non_zero_u32(&mut a), sample_non_zero_u32(&mut b));
+        assert_eq!(sample_non_zero_u64(&mut a), sample_non_zero_u64(&mut b));
+        assert_eq!(sample_non_zero_u128(&mut a), sample_non_zero_u128(&mut b));
+        assert_eq!(sample_non_zero_usize(&mut a), sample_non_zero_usize(&mut b));
+        assert_eq!(sample_non_zero_i8(&mut a), sample_non_zero_i8(&mut b));
+        assert_eq!(sample_non_zero_i16(&mut a), sample_non_zero_i16(&mut b));
+        assert_eq!(sample_non_zero_i32(&mut a), sample_non_zero_i32(&mut b));
+        assert_eq!(sample_non_zero_i64(&mut a), sample_non_zero_i64(&mut b));
+        assert_eq!(sample_non_zero_i128(&mut a), sample_non_zero_i128(&mut b));
+        assert_eq!(sample_non_zero_isize(&mut a), sample_non_zero_isize(&mut b));
     }
 
     #[test]
@@ -889,49 +893,49 @@ mod tests {
         // the rejection loop over many samples without panicking.
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let _ = gen_non_zero_u8(&mut rng);
+            let _ = sample_non_zero_u8(&mut rng);
         }
     }
 
     #[test]
-    fn gen_choice_returns_only_from_slice() {
+    fn sample_choice_returns_only_from_slice() {
         let mut rng = Rng::new(1);
         let choices = [10, 20, 30];
         for _ in 0..256 {
-            assert!(choices.contains(&gen_choice(&mut rng, &choices)));
+            assert!(choices.contains(&sample_choice(&mut rng, &choices)));
         }
     }
 
     #[test]
-    fn gen_choice_can_hit_every_element() {
+    fn sample_choice_can_hit_every_element() {
         let mut rng = Rng::new(1);
         let choices = [10, 20, 30];
         let mut seen = [false; 3];
         for _ in 0..256 {
-            let v = gen_choice(&mut rng, &choices);
+            let v = sample_choice(&mut rng, &choices);
             let idx = choices.iter().position(|&x| x == v).unwrap();
             seen[idx] = true;
             if seen.iter().all(|&s| s) {
                 return;
             }
         }
-        panic!("gen_choice did not cover all elements");
+        panic!("sample_choice did not cover all elements");
     }
 
     #[test]
     #[should_panic(expected = "empty slice")]
-    fn gen_choice_panics_on_empty() {
+    fn sample_choice_panics_on_empty() {
         let mut rng = Rng::new(0);
         let empty: [u32; 0] = [];
-        let _ = gen_choice(&mut rng, &empty);
+        let _ = sample_choice(&mut rng, &empty);
     }
 
     #[test]
-    fn gen_choice_works_with_clone_only_types() {
+    fn sample_choice_works_with_clone_only_types() {
         // Verify T: Clone + Debug bound accepts non-Copy types with Debug.
         let mut rng = Rng::new(1);
         let choices = vec![String::from("a"), String::from("b"), String::from("c")];
-        let picked = gen_choice(&mut rng, &choices);
+        let picked = sample_choice(&mut rng, &choices);
         assert!(choices.contains(&picked));
     }
 
@@ -939,45 +943,45 @@ mod tests {
     fn char_generators_are_deterministic() {
         let mut a = Rng::new(789);
         let mut b = Rng::new(789);
-        assert_eq!(gen_char(&mut a), gen_char(&mut b));
-        assert_eq!(gen_ascii_char(&mut a), gen_ascii_char(&mut b));
+        assert_eq!(sample_char(&mut a), sample_char(&mut b));
+        assert_eq!(sample_ascii_char(&mut a), sample_ascii_char(&mut b));
         assert_eq!(
-            gen_ascii_printable_char(&mut a),
-            gen_ascii_printable_char(&mut b)
+            sample_ascii_printable_char(&mut a),
+            sample_ascii_printable_char(&mut b)
         );
     }
 
     #[test]
-    fn gen_ascii_char_always_in_ascii_range() {
+    fn sample_ascii_char_always_in_ascii_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let c = gen_ascii_char(&mut rng);
+            let c = sample_ascii_char(&mut rng);
             assert!(c.is_ascii());
         }
     }
 
     #[test]
-    fn gen_ascii_printable_char_always_in_range() {
+    fn sample_ascii_printable_char_always_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let c = gen_ascii_printable_char(&mut rng);
+            let c = sample_ascii_printable_char(&mut rng);
             let n = c as u32;
             assert!((0x20..=0x7E).contains(&n));
         }
     }
 
     #[test]
-    fn gen_char_produces_varied_values() {
+    fn sample_char_produces_varied_values() {
         // Valid Unicode scalar space is ~1.1M chars, so 256 samples should
         // be nearly all distinct (collision probability is negligible).
         let mut rng = Rng::new(1);
         let mut seen = std::collections::HashSet::new();
         for _ in 0..256 {
-            seen.insert(gen_char(&mut rng));
+            seen.insert(sample_char(&mut rng));
         }
         assert!(
             seen.len() > 200,
-            "gen_char produced too few distinct values: {}",
+            "sample_char produced too few distinct values: {}",
             seen.len()
         );
     }
@@ -986,72 +990,72 @@ mod tests {
     fn float_generators_are_deterministic() {
         let mut a = Rng::new(999);
         let mut b = Rng::new(999);
-        assert_eq!(gen_f32(&mut a, 0.0, 1.0), gen_f32(&mut b, 0.0, 1.0));
+        assert_eq!(sample_f32(&mut a, 0.0, 1.0), sample_f32(&mut b, 0.0, 1.0));
         assert_eq!(
-            gen_f64(&mut a, -100.0, 100.0),
-            gen_f64(&mut b, -100.0, 100.0)
+            sample_f64(&mut a, -100.0, 100.0),
+            sample_f64(&mut b, -100.0, 100.0)
         );
     }
 
     #[test]
-    fn gen_f32_stays_in_range() {
+    fn sample_f32_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let v = gen_f32(&mut rng, 10.0, 20.0);
+            let v = sample_f32(&mut rng, 10.0, 20.0);
             assert!((10.0..20.0).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
-    fn gen_f64_stays_in_range() {
+    fn sample_f64_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let v = gen_f64(&mut rng, -1.0, 1.0);
+            let v = sample_f64(&mut rng, -1.0, 1.0);
             assert!((-1.0..1.0).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
-    fn gen_f32_covers_both_halves_of_range() {
+    fn sample_f32_covers_both_halves_of_range() {
         let mut rng = Rng::new(1);
         let (mut low, mut high) = (false, false);
         for _ in 0..64 {
-            let v = gen_f32(&mut rng, 0.0, 1.0);
+            let v = sample_f32(&mut rng, 0.0, 1.0);
             low |= v < 0.5;
             high |= v >= 0.5;
             if low && high {
                 return;
             }
         }
-        panic!("gen_f32 covered only one half of the range");
+        panic!("sample_f32 covered only one half of the range");
     }
 
     #[test]
     #[should_panic(expected = "must be less than")]
-    fn gen_f32_panics_when_min_equals_max() {
+    fn sample_f32_panics_when_min_equals_max() {
         let mut rng = Rng::new(0);
-        let _ = gen_f32(&mut rng, 5.0, 5.0);
+        let _ = sample_f32(&mut rng, 5.0, 5.0);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
-    fn gen_f32_panics_on_nan() {
+    fn sample_f32_panics_on_nan() {
         let mut rng = Rng::new(0);
-        let _ = gen_f32(&mut rng, f32::NAN, 1.0);
+        let _ = sample_f32(&mut rng, f32::NAN, 1.0);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
-    fn gen_f32_panics_on_infinity() {
+    fn sample_f32_panics_on_infinity() {
         let mut rng = Rng::new(0);
-        let _ = gen_f32(&mut rng, 0.0, f32::INFINITY);
+        let _ = sample_f32(&mut rng, 0.0, f32::INFINITY);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
-    fn gen_f64_panics_on_nan() {
+    fn sample_f64_panics_on_nan() {
         let mut rng = Rng::new(0);
-        let _ = gen_f64(&mut rng, 0.0, f64::NAN);
+        let _ = sample_f64(&mut rng, 0.0, f64::NAN);
     }
 
     // === sample_below ===
@@ -1116,118 +1120,121 @@ mod tests {
         let _v = sample_below(&mut rng, u64::MAX);
     }
 
-    // === gen_usize_in ===
+    // === sample_usize_in ===
 
     #[test]
-    fn gen_usize_in_exclusive_stays_in_range() {
+    fn sample_usize_in_exclusive_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let v = gen_usize_in(&mut rng, 10..20);
+            let v = sample_usize_in(&mut rng, 10..20);
             assert!((10..20).contains(&v));
         }
     }
 
     #[test]
-    fn gen_usize_in_inclusive_stays_in_range() {
+    fn sample_usize_in_inclusive_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let v = gen_usize_in(&mut rng, 10..=20);
+            let v = sample_usize_in(&mut rng, 10..=20);
             assert!((10..=20).contains(&v));
         }
     }
 
     #[test]
-    fn gen_usize_in_single_element_returns_that_element() {
+    fn sample_usize_in_single_element_returns_that_element() {
         let mut rng = Rng::new(1);
         // 5..=5 is one element; the runner should return it without
         // consuming any RNG.
         let mut fresh = Rng::new(1);
-        assert_eq!(gen_usize_in(&mut rng, 5..=5), 5);
+        assert_eq!(sample_usize_in(&mut rng, 5..=5), 5);
         assert_eq!(rng.next_u64(), fresh.next_u64());
     }
 
     #[test]
-    fn gen_usize_in_hits_both_endpoints() {
+    fn sample_usize_in_hits_both_endpoints() {
         let mut rng = Rng::new(1);
         let (mut lo, mut hi) = (false, false);
         for _ in 0..1024 {
-            let v = gen_usize_in(&mut rng, 0..=3);
+            let v = sample_usize_in(&mut rng, 0..=3);
             lo |= v == 0;
             hi |= v == 3;
             if lo && hi {
                 return;
             }
         }
-        panic!("gen_usize_in did not cover both endpoints");
+        panic!("sample_usize_in did not cover both endpoints");
     }
 
     #[test]
-    fn gen_usize_in_full_range_stays_in_range() {
+    fn sample_usize_in_full_range_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..100 {
-            let _v = gen_usize_in(&mut rng, ..);
+            let _v = sample_usize_in(&mut rng, ..);
             // Any usize is in range; just verify no panic.
         }
     }
 
     #[test]
-    fn gen_usize_in_inclusive_up_to_max_stays_in_range() {
+    fn sample_usize_in_inclusive_up_to_max_stays_in_range() {
         // Exercises the max - lo + 1 arithmetic on the widest non-full
         // range so it must not overflow.
         let mut rng = Rng::new(1);
         for _ in 0..100 {
-            let v = gen_usize_in(&mut rng, 1..=usize::MAX);
+            let v = sample_usize_in(&mut rng, 1..=usize::MAX);
             assert!(v >= 1);
         }
     }
 
     #[test]
-    fn gen_usize_in_unbounded_end_stays_in_range() {
+    fn sample_usize_in_unbounded_end_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..100 {
-            let v = gen_usize_in(&mut rng, 100..);
+            let v = sample_usize_in(&mut rng, 100..);
             assert!(v >= 100);
         }
     }
 
     #[test]
-    fn gen_usize_in_is_deterministic() {
+    fn sample_usize_in_is_deterministic() {
         let mut a = Rng::new(999);
         let mut b = Rng::new(999);
         for _ in 0..64 {
-            assert_eq!(gen_usize_in(&mut a, 0..137), gen_usize_in(&mut b, 0..137));
+            assert_eq!(
+                sample_usize_in(&mut a, 0..137),
+                sample_usize_in(&mut b, 0..137)
+            );
         }
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
-    fn gen_usize_in_panics_on_empty_exclusive() {
+    fn sample_usize_in_panics_on_empty_exclusive() {
         let mut rng = Rng::new(0);
-        let _ = gen_usize_in(&mut rng, 5..5);
+        let _ = sample_usize_in(&mut rng, 5..5);
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
-    fn gen_usize_in_panics_on_reversed_inclusive() {
+    fn sample_usize_in_panics_on_reversed_inclusive() {
         let mut rng = Rng::new(0);
         #[allow(clippy::reversed_empty_ranges)]
-        let _ = gen_usize_in(&mut rng, 5..=4);
+        let _ = sample_usize_in(&mut rng, 5..=4);
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
-    fn gen_usize_in_panics_on_zero_exclusive_end() {
+    fn sample_usize_in_panics_on_zero_exclusive_end() {
         let mut rng = Rng::new(0);
-        let _ = gen_usize_in(&mut rng, ..0);
+        let _ = sample_usize_in(&mut rng, ..0);
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
-    fn gen_usize_in_panics_on_excluded_max_start() {
+    fn sample_usize_in_panics_on_excluded_max_start() {
         let mut rng = Rng::new(0);
         // An excluded start of usize::MAX would need start + 1, which
         // overflows — semantically the range is empty.
-        let _ = gen_usize_in(
+        let _ = sample_usize_in(
             &mut rng,
             (
                 std::ops::Bound::Excluded(usize::MAX),
@@ -1236,35 +1243,35 @@ mod tests {
         );
     }
 
-    // === gen_ratio ===
+    // === sample_ratio ===
 
     #[test]
-    fn gen_ratio_zero_numerator_always_false_and_draws_nothing() {
+    fn sample_ratio_zero_numerator_always_false_and_draws_nothing() {
         let mut rng = Rng::new(1);
         let mut fresh = Rng::new(1);
         for _ in 0..64 {
-            assert!(!gen_ratio(&mut rng, 0, 10));
+            assert!(!sample_ratio(&mut rng, 0, 10));
         }
         // No RNG bytes consumed.
         assert_eq!(rng.next_u64(), fresh.next_u64());
     }
 
     #[test]
-    fn gen_ratio_full_numerator_always_true_and_draws_nothing() {
+    fn sample_ratio_full_numerator_always_true_and_draws_nothing() {
         let mut rng = Rng::new(1);
         let mut fresh = Rng::new(1);
         for _ in 0..64 {
-            assert!(gen_ratio(&mut rng, 7, 7));
+            assert!(sample_ratio(&mut rng, 7, 7));
         }
         assert_eq!(rng.next_u64(), fresh.next_u64());
     }
 
     #[test]
-    fn gen_ratio_produces_both_outcomes() {
+    fn sample_ratio_produces_both_outcomes() {
         let mut rng = Rng::new(1);
         let (mut t, mut f) = (false, false);
         for _ in 0..256 {
-            match gen_ratio(&mut rng, 1, 2) {
+            match sample_ratio(&mut rng, 1, 2) {
                 true => t = true,
                 false => f = true,
             }
@@ -1272,114 +1279,114 @@ mod tests {
                 return;
             }
         }
-        panic!("gen_ratio did not produce both outcomes");
+        panic!("sample_ratio did not produce both outcomes");
     }
 
     #[test]
-    fn gen_ratio_is_deterministic() {
+    fn sample_ratio_is_deterministic() {
         let mut a = Rng::new(999);
         let mut b = Rng::new(999);
         for _ in 0..64 {
-            assert_eq!(gen_ratio(&mut a, 3, 7), gen_ratio(&mut b, 3, 7));
+            assert_eq!(sample_ratio(&mut a, 3, 7), sample_ratio(&mut b, 3, 7));
         }
     }
 
     #[test]
-    fn gen_ratio_biased_matches_expected_frequency() {
+    fn sample_ratio_biased_matches_expected_frequency() {
         // 1-in-10 draws should sit near 10% out of 10_000 samples.
         let mut rng = Rng::new(1);
         let mut trues: usize = 0;
         let total: usize = 10_000;
         for _ in 0..total {
-            if gen_ratio(&mut rng, 1, 10) {
+            if sample_ratio(&mut rng, 1, 10) {
                 trues += 1;
             }
         }
         let expected = total / 10;
         assert!(
             trues.abs_diff(expected) < expected / 2,
-            "gen_ratio(1, 10) frequency off: {trues}/{total}"
+            "sample_ratio(1, 10) frequency off: {trues}/{total}"
         );
     }
 
     #[test]
     #[should_panic(expected = "denominator must be non-zero")]
-    fn gen_ratio_panics_on_zero_denominator() {
+    fn sample_ratio_panics_on_zero_denominator() {
         let mut rng = Rng::new(0);
-        let _ = gen_ratio(&mut rng, 0, 0);
+        let _ = sample_ratio(&mut rng, 0, 0);
     }
 
     #[test]
     #[should_panic(expected = "must be <= denominator")]
-    fn gen_ratio_panics_when_numerator_exceeds_denominator() {
+    fn sample_ratio_panics_when_numerator_exceeds_denominator() {
         let mut rng = Rng::new(0);
-        let _ = gen_ratio(&mut rng, 11, 10);
+        let _ = sample_ratio(&mut rng, 11, 10);
     }
 
-    // === gen_weighted_index ===
+    // === sample_weighted_index ===
 
     #[test]
-    fn gen_weighted_index_stays_in_range() {
+    fn sample_weighted_index_stays_in_range() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let idx = gen_weighted_index(&mut rng, &[1, 2, 3, 4]);
+            let idx = sample_weighted_index(&mut rng, &[1, 2, 3, 4]);
             assert!(idx < 4);
         }
     }
 
     #[test]
-    fn gen_weighted_index_hits_every_nonzero_index() {
+    fn sample_weighted_index_hits_every_nonzero_index() {
         let mut rng = Rng::new(1);
         let weights = [1, 1, 1];
         let mut seen = [false; 3];
         for _ in 0..1024 {
-            seen[gen_weighted_index(&mut rng, &weights)] = true;
+            seen[sample_weighted_index(&mut rng, &weights)] = true;
             if seen.iter().all(|&s| s) {
                 return;
             }
         }
-        panic!("gen_weighted_index did not cover all non-zero indices");
+        panic!("sample_weighted_index did not cover all non-zero indices");
     }
 
     #[test]
-    fn gen_weighted_index_skips_zero_weight_slot() {
+    fn sample_weighted_index_skips_zero_weight_slot() {
         let mut rng = Rng::new(1);
         for _ in 0..1000 {
-            let idx = gen_weighted_index(&mut rng, &[3, 0, 5]);
+            let idx = sample_weighted_index(&mut rng, &[3, 0, 5]);
             assert_ne!(idx, 1, "index 1 has weight 0 and must never be picked");
         }
     }
 
     #[test]
-    fn gen_weighted_index_single_nonzero_always_returns_it() {
+    fn sample_weighted_index_single_nonzero_always_returns_it() {
         let mut rng = Rng::new(1);
         for _ in 0..100 {
-            assert_eq!(gen_weighted_index(&mut rng, &[0, 0, 42, 0]), 2);
+            assert_eq!(sample_weighted_index(&mut rng, &[0, 0, 42, 0]), 2);
         }
     }
 
     #[test]
-    fn gen_weighted_index_is_deterministic() {
+    fn sample_weighted_index_is_deterministic() {
         let mut a = Rng::new(123);
         let mut b = Rng::new(123);
         let weights = [4, 1, 2, 3];
         for _ in 0..64 {
             assert_eq!(
-                gen_weighted_index(&mut a, &weights),
-                gen_weighted_index(&mut b, &weights)
+                sample_weighted_index(&mut a, &weights),
+                sample_weighted_index(&mut b, &weights)
             );
         }
     }
 
     #[test]
-    fn gen_weighted_index_frequencies_approximate_weights() {
+    fn sample_weighted_index_frequencies_approximate_weights() {
         // Weights 1:2:3 → ~1/6, 2/6, 3/6 of samples.
         let mut rng = Rng::new(1);
         let weights = [1, 2, 3];
         let mut counts = [0usize; 3];
         let total = 12_000;
         for _ in 0..total {
-            counts[gen_weighted_index(&mut rng, &weights)] += 1;
+            counts[sample_weighted_index(&mut rng, &weights)] += 1;
         }
         // Expected 2000 / 4000 / 6000. Allow ±30% slack.
         for (i, (&c, &w)) in counts.iter().zip(weights.iter()).enumerate() {
@@ -1393,15 +1400,15 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "empty weights")]
-    fn gen_weighted_index_panics_on_empty() {
+    fn sample_weighted_index_panics_on_empty() {
         let mut rng = Rng::new(0);
-        let _ = gen_weighted_index(&mut rng, &[]);
+        let _ = sample_weighted_index(&mut rng, &[]);
     }
 
     #[test]
     #[should_panic(expected = "all weights are zero")]
-    fn gen_weighted_index_panics_when_all_weights_zero() {
+    fn sample_weighted_index_panics_when_all_weights_zero() {
         let mut rng = Rng::new(0);
-        let _ = gen_weighted_index(&mut rng, &[0, 0, 0]);
+        let _ = sample_weighted_index(&mut rng, &[0, 0, 0]);
     }
 }

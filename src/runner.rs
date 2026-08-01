@@ -11,7 +11,7 @@ use crate::{Error, Result, Rng};
 ///
 /// ```
 /// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, iterations: 16 }.run(|rng| {
-///     let x = noprop::gen_u32(rng);
+///     let x = noprop::sample_u32(rng);
 ///     assert_eq!(x, x);
 ///     Ok(())
 /// });

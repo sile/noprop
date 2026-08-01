@@ -12,7 +12,7 @@ fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
         iterations: 16,
     }
     .run(|rng| {
-        let x = noprop::gen_u32(rng);
+        let x = noprop::sample_u32(rng);
         assert_eq!(x, x);
         Ok(())
     })
@@ -26,7 +26,7 @@ fn run_returns_err_on_failed_assertion() {
         iterations: 64,
     }
     .run(|rng| {
-        let x = noprop::gen_u32(rng);
+        let x = noprop::sample_u32(rng);
         assert_eq!(x, 0, "expected zero, got {x}");
         Ok(())
     });
@@ -46,7 +46,7 @@ fn same_seed_reproduces_same_failure() {
             iterations: 32,
         }
         .run(|rng| {
-            let x = noprop::gen_u32(rng);
+            let x = noprop::sample_u32(rng);
             // Roughly half of iterations fail — enough to guarantee an
             // Err within 32 iterations with vanishing probability of Ok.
             assert!(x < 0x8000_0000, "high bit set: {x:#010x}");
@@ -129,9 +129,9 @@ fn generated_values_are_recorded_in_error() {
         iterations: 1,
     }
     .run(|rng| {
-        let x = noprop::gen_u32(rng);
-        let b = noprop::gen_bool(rng);
-        let c = noprop::gen_ascii_char(rng);
+        let x = noprop::sample_u32(rng);
+        let b = noprop::sample_bool(rng);
+        let c = noprop::sample_ascii_char(rng);
         panic!("forced failure with x={x}, b={b}, c={c:?}");
     });
 
@@ -159,7 +159,7 @@ fn generated_trace_dedups_same_location_run() {
     }
     .run(|rng| {
         for _ in 0..100 {
-            let _ = noprop::gen_u8(rng);
+            let _ = noprop::sample_u8(rng);
         }
         panic!("fail after loop");
     });
@@ -195,7 +195,7 @@ fn generated_trace_does_not_dedup_below_head_plus_tail() {
     }
     .run(|rng| {
         for _ in 0..16 {
-            let _ = noprop::gen_u8(rng);
+            let _ = noprop::sample_u8(rng);
         }
         panic!("fail after loop");
     });
@@ -216,10 +216,10 @@ fn generated_trace_treats_different_locations_independently() {
     }
     .run(|rng| {
         for _ in 0..3 {
-            let _ = noprop::gen_u8(rng);
+            let _ = noprop::sample_u8(rng);
         }
         for _ in 0..100 {
-            let _ = noprop::gen_u16(rng);
+            let _ = noprop::sample_u16(rng);
         }
         panic!("fail after loops");
     });
@@ -258,9 +258,9 @@ fn generated_trace_is_isolated_per_case() {
     .run(|rng| {
         let c = case.get();
         if c == 0 {
-            let _ = noprop::gen_u64(rng);
+            let _ = noprop::sample_u64(rng);
         } else {
-            let _ = noprop::gen_u16(rng);
+            let _ = noprop::sample_u16(rng);
             panic!("fail on case {c}");
         }
         case.set(c + 1);
@@ -281,7 +281,7 @@ fn error_debug_output_includes_generated_values() {
         iterations: 1,
     }
     .run(|rng| {
-        let _ = noprop::gen_u32(rng);
+        let _ = noprop::sample_u32(rng);
         panic!("boom");
     });
     let err = result.expect_err("expected Err");
@@ -293,13 +293,13 @@ fn error_debug_output_includes_generated_values() {
 }
 
 #[test]
-fn gen_bytes_records_the_array_as_one_trace_entry() {
+fn sample_bytes_records_the_array_as_one_trace_entry() {
     let result = noprop::Runner {
         seed: 5,
         iterations: 1,
     }
     .run(|rng| {
-        let _key: [u8; 16] = noprop::gen_bytes(rng);
+        let _key: [u8; 16] = noprop::sample_bytes(rng);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -309,13 +309,13 @@ fn gen_bytes_records_the_array_as_one_trace_entry() {
 }
 
 #[test]
-fn gen_bytes_vec_records_the_vec_as_one_trace_entry() {
+fn sample_bytes_vec_records_the_vec_as_one_trace_entry() {
     let result = noprop::Runner {
         seed: 5,
         iterations: 1,
     }
     .run(|rng| {
-        let _buf = noprop::gen_bytes_vec(rng, 42);
+        let _buf = noprop::sample_bytes_vec(rng, 42);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -331,7 +331,7 @@ fn error_display_output_includes_generated_values() {
         iterations: 1,
     }
     .run(|rng| {
-        let _ = noprop::gen_u8(rng);
+        let _ = noprop::sample_u8(rng);
         panic!("boom");
     });
     let err = result.expect_err("expected Err");
@@ -341,7 +341,7 @@ fn error_display_output_includes_generated_values() {
 }
 
 #[test]
-fn gen_usize_in_records_only_the_chosen_value() {
+fn sample_usize_in_records_only_the_chosen_value() {
     // Rejection sampling can consume several u64 draws internally, but
     // only the final chosen value must appear in the trace.
     let result = noprop::Runner {
@@ -349,7 +349,7 @@ fn gen_usize_in_records_only_the_chosen_value() {
         iterations: 1,
     }
     .run(|rng| {
-        let _v = noprop::gen_usize_in(rng, 0..7);
+        let _v = noprop::sample_usize_in(rng, 0..7);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -362,13 +362,13 @@ fn gen_usize_in_records_only_the_chosen_value() {
 }
 
 #[test]
-fn gen_ratio_records_only_the_chosen_bool() {
+fn sample_ratio_records_only_the_chosen_bool() {
     let result = noprop::Runner {
         seed: 5,
         iterations: 1,
     }
     .run(|rng| {
-        let _b = noprop::gen_ratio(rng, 1, 3);
+        let _b = noprop::sample_ratio(rng, 1, 3);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -378,13 +378,13 @@ fn gen_ratio_records_only_the_chosen_bool() {
 }
 
 #[test]
-fn gen_weighted_index_records_only_the_chosen_index() {
+fn sample_weighted_index_records_only_the_chosen_index() {
     let result = noprop::Runner {
         seed: 5,
         iterations: 1,
     }
     .run(|rng| {
-        let _idx = noprop::gen_weighted_index(rng, &[1, 2, 3, 4]);
+        let _idx = noprop::sample_weighted_index(rng, &[1, 2, 3, 4]);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -408,9 +408,9 @@ fn selection_primitives_are_reproducible_across_runs() {
             iterations: 64,
         }
         .run(|rng| {
-            let idx = noprop::gen_weighted_index(rng, &[1, 1, 1, 1]);
-            let n = noprop::gen_usize_in(rng, 0..=100);
-            let flip = noprop::gen_ratio(rng, 1, 4);
+            let idx = noprop::sample_weighted_index(rng, &[1, 1, 1, 1]);
+            let n = noprop::sample_usize_in(rng, 0..=100);
+            let flip = noprop::sample_ratio(rng, 1, 4);
             // Fail on a pattern that is common enough to hit within 64
             // iterations but does not always fire, so the case index
             // matters.

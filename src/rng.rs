@@ -22,17 +22,17 @@ const DEDUP_TAIL: usize = 8;
 /// exactly reproducible from its seed.
 ///
 /// The only public method is [`Rng::new`]; all byte/word production
-/// happens through the `noprop::gen_*` free functions, which record the
-/// generated values into an internal trace surfaced on failure. Raw
-/// PRNG state access is deliberately hidden so users cannot accidentally
-/// bypass that trace.
+/// happens through the `noprop::sample_*` free functions, which record
+/// the generated values into an internal trace surfaced on failure.
+/// Raw PRNG state access is deliberately hidden so users cannot
+/// accidentally bypass that trace.
 ///
 /// # Examples
 ///
 /// ```
 /// let mut rng = noprop::Rng::new(0xDEAD_BEEF);
-/// let a = noprop::gen_u32(&mut rng);
-/// let b = noprop::gen_u32(&mut rng);
+/// let a = noprop::sample_u32(&mut rng);
+/// let b = noprop::sample_u32(&mut rng);
 /// assert_ne!(a, b);
 /// ```
 pub struct Rng {
@@ -204,7 +204,7 @@ impl Rng {
     /// 8 and last 8 are kept verbatim; the middle is replaced with a
     /// single elision-marker entry that carries the skipped count.
     /// Comparison is by location only, so a `#[track_caller]`-propagated
-    /// composite generator (e.g. a user-defined `gen_person` called
+    /// composite generator (e.g. a user-defined `sample_person` called
     /// inside a loop) also folds correctly.
     #[track_caller]
     pub(crate) fn record_generated<T: std::fmt::Debug + Clone + 'static>(

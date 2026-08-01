@@ -8,12 +8,13 @@ mod runner;
 
 pub use error::{Error, Result};
 pub use generator::{
-    gen_ascii_char, gen_ascii_printable_char, gen_bool, gen_bytes, gen_bytes_vec, gen_char,
-    gen_choice, gen_f32, gen_f64, gen_i8, gen_i16, gen_i32, gen_i64, gen_i128, gen_isize,
-    gen_non_zero_i8, gen_non_zero_i16, gen_non_zero_i32, gen_non_zero_i64, gen_non_zero_i128,
-    gen_non_zero_isize, gen_non_zero_u8, gen_non_zero_u16, gen_non_zero_u32, gen_non_zero_u64,
-    gen_non_zero_u128, gen_non_zero_usize, gen_ratio, gen_u8, gen_u16, gen_u32, gen_u64, gen_u128,
-    gen_usize, gen_usize_in, gen_weighted_index,
+    sample_ascii_char, sample_ascii_printable_char, sample_bool, sample_bytes, sample_bytes_vec,
+    sample_char, sample_choice, sample_f32, sample_f64, sample_i8, sample_i16, sample_i32,
+    sample_i64, sample_i128, sample_isize, sample_non_zero_i8, sample_non_zero_i16,
+    sample_non_zero_i32, sample_non_zero_i64, sample_non_zero_i128, sample_non_zero_isize,
+    sample_non_zero_u8, sample_non_zero_u16, sample_non_zero_u32, sample_non_zero_u64,
+    sample_non_zero_u128, sample_non_zero_usize, sample_ratio, sample_u8, sample_u16, sample_u32,
+    sample_u64, sample_u128, sample_usize, sample_usize_in, sample_weighted_index,
 };
 pub use rng::{GeneratedValue, Rng};
 pub use runner::Runner;
