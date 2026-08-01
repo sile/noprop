@@ -776,6 +776,9 @@ pub fn sample_ascii_printable_char(rng: &mut Rng) -> char {
 /// let _x = f32::from_bits(noprop::sample_u32(&mut rng));
 /// ```
 ///
+/// For the full finite domain without a specific range, use
+/// [`sample_f32_finite`].
+///
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
@@ -802,7 +805,8 @@ pub fn sample_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
 ///
 /// Same conventions as [`sample_f32`]: NaN and infinities are excluded from
 /// the output. Use [`sample_choice`] to include specific special values, or
-/// `f64::from_bits(sample_u64(rng))` for an arbitrary bit pattern.
+/// `f64::from_bits(sample_u64(rng))` for an arbitrary bit pattern. For the
+/// full finite domain without a specific range, use [`sample_f64_finite`].
 ///
 /// # Panics
 ///
@@ -819,6 +823,68 @@ pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
     let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(rng)) >> 12);
     let unit = f64::from_bits(bits) - 1.0;
     let v = min + (max - min) * unit;
+    rng.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed finite `f32` over the full finite domain
+/// (excludes `NaN` and `±∞`; includes normals, subnormals, and both
+/// signed zeros).
+///
+/// This is the common shape for roundtrip / serialization property
+/// tests, where NaN and infinity are typically outside the format's
+/// support. For an arbitrary bit pattern (including NaN / ±∞), use
+/// `f32::from_bits(noprop::sample_u32(rng))` instead. For a specific
+/// finite subrange, use [`sample_f32`].
+///
+/// # Implementation
+///
+/// Rejection sampling over 32-bit patterns via
+/// [`sample_with_rejection`]. Only ~0.4 % of `u32` bit patterns decode
+/// to non-finite `f32` (all `NaN`s plus `±∞`), so the shared 64-attempt
+/// bound is effectively unreachable (`P(all 64 fail) < 10⁻¹⁵²`).
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let x = noprop::sample_f32_finite(&mut rng);
+/// assert!(x.is_finite());
+/// ```
+#[track_caller]
+pub fn sample_f32_finite(rng: &mut Rng) -> f32 {
+    let loc = Location::caller();
+    let v = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        let candidate = f32::from_bits(u32::from_le_bytes(raw_bytes(rng)));
+        candidate.is_finite().then_some(candidate)
+    });
+    rng.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed finite `f64` over the full finite domain.
+/// Same conventions and rationale as [`sample_f32_finite`]; the
+/// rejection rate over `u64` bit patterns is even lower (~2⁻¹¹ of
+/// patterns are non-finite).
+///
+/// For an arbitrary bit pattern, use
+/// `f64::from_bits(noprop::sample_u64(rng))`. For a specific finite
+/// subrange, use [`sample_f64`].
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let x = noprop::sample_f64_finite(&mut rng);
+/// assert!(x.is_finite());
+/// ```
+#[track_caller]
+pub fn sample_f64_finite(rng: &mut Rng) -> f64 {
+    let loc = Location::caller();
+    let v = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        let candidate = f64::from_bits(u64::from_le_bytes(raw_bytes(rng)));
+        candidate.is_finite().then_some(candidate)
+    });
     rng.record_generated(&v, loc);
     v
 }
@@ -1063,6 +1129,58 @@ mod tests {
     fn sample_f64_panics_on_nan() {
         let mut rng = Rng::new(0);
         let _ = sample_f64(&mut rng, 0.0, f64::NAN);
+    }
+
+    // === sample_f32_finite / sample_f64_finite ===
+
+    #[test]
+    fn sample_f32_finite_always_returns_finite() {
+        let mut rng = Rng::new(1);
+        for _ in 0..10_000 {
+            let v = sample_f32_finite(&mut rng);
+            assert!(v.is_finite(), "expected finite, got {v:?}");
+            assert!(!v.is_nan(), "expected non-NaN, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn sample_f64_finite_always_returns_finite() {
+        let mut rng = Rng::new(1);
+        for _ in 0..10_000 {
+            let v = sample_f64_finite(&mut rng);
+            assert!(v.is_finite(), "expected finite, got {v:?}");
+            assert!(!v.is_nan(), "expected non-NaN, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn finite_float_generators_are_deterministic() {
+        let mut a = Rng::new(0xF10A_7000);
+        let mut b = Rng::new(0xF10A_7000);
+        for _ in 0..64 {
+            assert_eq!(sample_f32_finite(&mut a), sample_f32_finite(&mut b));
+            assert_eq!(sample_f64_finite(&mut a), sample_f64_finite(&mut b));
+        }
+    }
+
+    #[test]
+    fn sample_f32_finite_covers_both_signs() {
+        // ~half of finite f32 patterns are negative (the sign bit is
+        // uniform over accepted candidates).
+        let mut rng = Rng::new(2);
+        let (mut pos, mut neg) = (false, false);
+        for _ in 0..256 {
+            let v = sample_f32_finite(&mut rng);
+            if v > 0.0 {
+                pos = true;
+            } else if v < 0.0 {
+                neg = true;
+            }
+            if pos && neg {
+                return;
+            }
+        }
+        panic!("sample_f32_finite did not cover both signs");
     }
 
     // === sample_below ===

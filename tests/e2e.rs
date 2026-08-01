@@ -593,6 +593,31 @@ fn reject_case_outside_runner_panics() {
     rng.reject_case();
 }
 
+// === sample_f32_finite / sample_f64_finite trace format ===
+
+#[test]
+fn sample_finite_floats_record_type_and_value() {
+    let result = noprop::Runner {
+        seed: 5,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let a = noprop::sample_f32_finite(rng);
+        let b = noprop::sample_f64_finite(rng);
+        panic!("stop with a={a} b={b}");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 2, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "f32");
+    assert_eq!(generated[1].type_name(), "f64");
+    let a_repr: f32 = generated[0].value_repr().unwrap().parse().unwrap();
+    let b_repr: f64 = generated[1].value_repr().unwrap().parse().unwrap();
+    assert!(a_repr.is_finite());
+    assert!(b_repr.is_finite());
+    assert!(generated[0].location().file().ends_with("e2e.rs"));
+}
+
 // === reproduce-hint line in failure Display / Debug ===
 
 #[test]
