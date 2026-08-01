@@ -339,3 +339,86 @@ fn error_display_output_includes_generated_values() {
     assert!(display.contains("Generated values:"), "display: {display}");
     assert!(display.contains("- u8 ="), "display: {display}");
 }
+
+#[test]
+fn gen_usize_in_records_only_the_chosen_value() {
+    // Rejection sampling can consume several u64 draws internally, but
+    // only the final chosen value must appear in the trace.
+    let result = noprop::Runner {
+        seed: 5,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let _v = noprop::gen_usize_in(rng, 0..7);
+        panic!("stop");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 1, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "usize");
+    let repr = generated[0].value_repr().unwrap();
+    let v: usize = repr.parse().unwrap();
+    assert!(v < 7);
+}
+
+#[test]
+fn gen_ratio_records_only_the_chosen_bool() {
+    let result = noprop::Runner {
+        seed: 5,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let _b = noprop::gen_ratio(rng, 1, 3);
+        panic!("stop");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 1, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "bool");
+}
+
+#[test]
+fn gen_weighted_index_records_only_the_chosen_index() {
+    let result = noprop::Runner {
+        seed: 5,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let _idx = noprop::gen_weighted_index(rng, &[1, 2, 3, 4]);
+        panic!("stop");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 1, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "usize");
+    let repr = generated[0].value_repr().unwrap();
+    let idx: usize = repr.parse().unwrap();
+    assert!(idx < 4);
+}
+
+#[test]
+fn selection_primitives_are_reproducible_across_runs() {
+    // Two independent Runner invocations with the same seed must
+    // produce the same failure case index when the property only calls
+    // the new selection primitives.
+    let seed = 0xC0FF_EE99_1234_5678u64;
+    let run = || {
+        noprop::Runner {
+            seed,
+            iterations: 64,
+        }
+        .run(|rng| {
+            let idx = noprop::gen_weighted_index(rng, &[1, 1, 1, 1]);
+            let n = noprop::gen_usize_in(rng, 0..=100);
+            let flip = noprop::gen_ratio(rng, 1, 4);
+            // Fail on a pattern that is common enough to hit within 64
+            // iterations but does not always fire, so the case index
+            // matters.
+            assert!(!(flip && idx == 0 && n < 25), "hit forbidden pattern");
+            Ok(())
+        })
+    };
+    let a = run().expect_err("expected Err");
+    let b = run().expect_err("expected Err");
+    assert_eq!(a.case_index(), b.case_index());
+}
