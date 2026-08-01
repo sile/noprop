@@ -31,6 +31,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// captured from the user's closure along with the generated-value
 /// list, so returning this from a `#[test]` function prints a
 /// self-contained failure report through the standard test harness.
+/// Both formats also print a copy-pasteable
+///
+/// ```text
+/// reproduce with: noprop::Runner { seed: 0x..., iterations: N }
+/// ```
+///
+/// line where `iterations = case_index + 1`, so re-triggering the
+/// same failure does not require the user to compute the minimum
+/// re-run size by hand.
 pub struct Error {
     seed: u64,
     case_index: usize,
@@ -110,6 +119,16 @@ impl Error {
     }
 }
 
+impl Error {
+    /// Number of `iterations` the caller needs to reproduce this
+    /// failure — always `case_index() + 1`. Split out so both
+    /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display)
+    /// share the same computation and format.
+    fn reproduce_iterations(&self) -> usize {
+        self.case_index + 1
+    }
+}
+
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Error {{")?;
@@ -131,6 +150,12 @@ impl std::fmt::Debug for Error {
                 )?;
             }
         }
+        writeln!(
+            f,
+            "    reproduce: noprop::Runner {{ seed: {:#018x}, iterations: {} }},",
+            self.seed,
+            self.reproduce_iterations(),
+        )?;
         if self.generated.is_empty() {
             writeln!(f, "    generated: [],")?;
         } else {
@@ -169,6 +194,12 @@ impl std::fmt::Display for Error {
                 )?;
             }
         }
+        writeln!(
+            f,
+            "reproduce with: noprop::Runner {{ seed: {:#018x}, iterations: {} }}",
+            self.seed,
+            self.reproduce_iterations(),
+        )?;
         if !self.generated.is_empty() {
             writeln!(f, "Generated values:")?;
             for entry in &self.generated {

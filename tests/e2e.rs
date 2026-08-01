@@ -592,3 +592,72 @@ fn reject_case_outside_runner_panics() {
     let mut rng = noprop::Rng::new(0);
     rng.reject_case();
 }
+
+// === reproduce-hint line in failure Display / Debug ===
+
+#[test]
+fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
+    // Force a failure whose case index is not zero, so `iterations`
+    // and `case_index + 1` are meaningfully distinct.
+    let seed = 0x5EED_1EAD_BEEF_C0DEu64;
+    let target = std::cell::Cell::new(0usize);
+    let run = || {
+        target.set(0);
+        noprop::Runner {
+            seed,
+            iterations: 128,
+        }
+        .run(|_rng| {
+            let n = target.get();
+            target.set(n + 1);
+            if n >= 3 {
+                panic!("boom at iteration {n}");
+            }
+            Ok(())
+        })
+    };
+
+    let err = run().expect_err("expected panic to become Err");
+    assert_eq!(err.case_index(), 3);
+
+    let display = format!("{err}");
+    let expected_iterations = err.case_index() + 1;
+    let hint = format!(
+        "reproduce with: noprop::Runner {{ seed: {:#018x}, iterations: {expected_iterations} }}",
+        err.seed(),
+    );
+    assert!(
+        display.contains(&hint),
+        "Display should contain reproduce hint {hint:?}, got:\n{display}"
+    );
+
+    // Debug output uses a slightly different framing but must carry the
+    // same seed and iterations.
+    let debug = format!("{err:?}");
+    let debug_hint = format!(
+        "reproduce: noprop::Runner {{ seed: {:#018x}, iterations: {expected_iterations} }}",
+        err.seed(),
+    );
+    assert!(
+        debug.contains(&debug_hint),
+        "Debug should contain reproduce hint {debug_hint:?}, got:\n{debug}"
+    );
+
+    // Using the hint verbatim should reproduce the same failure.
+    let target = std::cell::Cell::new(0usize);
+    let replay = noprop::Runner {
+        seed: err.seed(),
+        iterations: expected_iterations,
+    }
+    .run(|_rng| {
+        let n = target.get();
+        target.set(n + 1);
+        if n >= 3 {
+            panic!("boom at iteration {n}");
+        }
+        Ok(())
+    });
+    let replayed = replay.expect_err("hint iterations must reproduce the failure");
+    assert_eq!(replayed.seed(), err.seed());
+    assert_eq!(replayed.case_index(), err.case_index());
+}
