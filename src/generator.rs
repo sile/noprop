@@ -1847,7 +1847,7 @@ mod tests {
     #[test]
     fn empty_sequence_replay_succeeds_when_generator_draws_nothing() {
         let seq = ChoiceSequence::default();
-        let result = ReplaySession::new(seq).run(|_rng| 7u32);
+        let result = ReplaySession::new(seq).run(|_ctx| 7u32);
         assert_eq!(result, Ok(7));
     }
 
@@ -1863,7 +1863,7 @@ mod tests {
     #[test]
     fn sample_with_rejection_returns_first_accepted_value() {
         let mut ctx = TestCaseContext::new(0);
-        let v = sample_with_rejection(&mut ctx, 8, |_rng| Some(42u32));
+        let v = sample_with_rejection(&mut ctx, 8, |_ctx| Some(42u32));
         assert_eq!(v, 42);
     }
 
@@ -1871,7 +1871,7 @@ mod tests {
     fn sample_with_rejection_skips_rejected_attempts_and_returns_accepted() {
         let mut ctx = TestCaseContext::new(0);
         let counter = std::cell::Cell::new(0usize);
-        let v = sample_with_rejection(&mut ctx, 8, |_rng| {
+        let v = sample_with_rejection(&mut ctx, 8, |_ctx| {
             let n = counter.get();
             counter.set(n + 1);
             // Accept on the 4th attempt (0-indexed: 3rd retry).
@@ -1904,7 +1904,7 @@ mod tests {
     fn sample_with_rejection_records_rejected_spans_in_recording_mode() {
         let (v, seq) = RecordingSession::new(2).run(|ctx| {
             let counter = std::cell::Cell::new(0);
-            sample_with_rejection(ctx, 8, |_rng| {
+            sample_with_rejection(ctx, 8, |_ctx| {
                 let n = counter.get();
                 counter.set(n + 1);
                 if n < 2 { None } else { Some(n as u32) }
@@ -1924,7 +1924,7 @@ mod tests {
         // A pure predicate over external state — no draws.
         let (v, seq) = RecordingSession::new(1).run(|ctx| {
             let counter = std::cell::Cell::new(0);
-            sample_with_rejection(ctx, 4, |_rng| {
+            sample_with_rejection(ctx, 4, |_ctx| {
                 let n = counter.get();
                 counter.set(n + 1);
                 if n < 2 { None } else { Some(n as u32) }

@@ -1149,7 +1149,7 @@ mod tests {
             ctx.fill(&mut a);
         });
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = ReplaySession::new(seq).run(|_rng| panic!("user panic"));
+            let _ = ReplaySession::new(seq).run(|_ctx| panic!("user panic"));
         }));
         let payload = outcome.expect_err("user panic must escape replay");
         let msg = payload

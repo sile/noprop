@@ -75,7 +75,7 @@ pub struct Stats {
 /// # fn body() -> Result<(), Box<dyn std::error::Error>> {
 /// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
 /// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)?;
-/// noprop::Runner::new(seed, iterations).run(|_rng| {
+/// noprop::Runner::new(seed, iterations).run(|_ctx| {
 ///     // property
 ///     Ok(())
 /// })?;
@@ -101,7 +101,7 @@ pub struct Stats {
 /// operator works for any error type that implements [`Error`]:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner::new(0, 1).run(|_rng| {
+/// let _: noprop::Result<()> = noprop::Runner::new(0, 1).run(|_ctx| {
 ///     let _n: u32 = "42".parse()?;   // ParseIntError -> Box<dyn Error>
 ///     Ok(())
 /// });
@@ -110,7 +110,7 @@ pub struct Stats {
 /// Ad-hoc messages work via `Into`:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner::new(0, 1).run(|_rng| {
+/// let _: noprop::Result<()> = noprop::Runner::new(0, 1).run(|_ctx| {
 ///     if false { return Err("something bad".into()); }
 ///     Ok(())
 /// });

@@ -62,7 +62,7 @@ fn same_seed_reproduces_same_failure() {
 fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> {
     let invoked = std::cell::Cell::new(false);
     noprop::Runner::new(0, 0)
-    .run(|_rng| {
+    .run(|_ctx| {
         invoked.set(true);
         Ok(())
     })?;
@@ -77,7 +77,7 @@ fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> 
 fn error_debug_output_contains_seed_and_case() {
     let seed = 0xFEED_FACE_C0DE_BABE;
     let result = noprop::Runner::new(seed, 1)
-    .run(|_rng| {
+    .run(|_ctx| {
         panic!("boom");
     });
     let err = result.expect_err("expected panic to become Err");
@@ -94,7 +94,7 @@ fn subsequent_cases_are_skipped_after_failure() {
     // stopped there (no fourth invocation).
     let count = std::cell::Cell::new(0usize);
     let _ = noprop::Runner::new(0, 100)
-    .run(|_rng| {
+    .run(|_ctx| {
         let n = count.get() + 1;
         count.set(n);
         if n == 3 {
@@ -500,7 +500,7 @@ fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::
         outer_attempts.set(n + 1);
         if n < 2 {
             // First two invocations reject via sample_with_rejection exhaustion.
-            let _: u32 = noprop::sample_with_rejection(ctx, 4, |_rng| None);
+            let _: u32 = noprop::sample_with_rejection(ctx, 4, |_ctx| None);
             unreachable!("sample_with_rejection exhaustion should unwind");
         }
         Ok(())
@@ -576,7 +576,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     let run = || {
         target.set(0);
         noprop::Runner::new(seed, 128)
-        .run(|_rng| {
+        .run(|_ctx| {
             let n = target.get();
             target.set(n + 1);
             if n >= 3 {
@@ -615,7 +615,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     // Using the hint verbatim should reproduce the same failure.
     let target = std::cell::Cell::new(0usize);
     let replay = noprop::Runner::new(err.seed(), expected_iterations)
-    .run(|_rng| {
+    .run(|_ctx| {
         let n = target.get();
         target.set(n + 1);
         if n >= 3 {
