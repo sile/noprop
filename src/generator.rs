@@ -244,7 +244,11 @@ pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
 /// # });
 /// ```
 #[track_caller]
-pub fn sample_with_rejection<T, F>(ctx: &mut TestCaseContext, max_attempts: usize, mut attempt: F) -> T
+pub fn sample_with_rejection<T, F>(
+    ctx: &mut TestCaseContext,
+    max_attempts: usize,
+    mut attempt: F,
+) -> T
 where
     F: FnMut(&mut TestCaseContext) -> Option<T>,
 {
@@ -344,7 +348,10 @@ fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
 /// let _c = noprop::sample_choice(&mut ctx, &['α', 'β', 'γ']);
 /// ```
 #[track_caller]
-pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(ctx: &mut TestCaseContext, choices: &[T]) -> T {
+pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(
+    ctx: &mut TestCaseContext,
+    choices: &[T],
+) -> T {
     assert!(!choices.is_empty(), "sample_choice: empty slice");
     let loc = Location::caller();
     let idx = sample_below(ctx, choices.len() as u64) as usize;
@@ -1746,7 +1753,9 @@ mod tests {
     /// `sample_bytes_vec`, plus `if` / `match` / loop control flow.
     /// Returns a shape summary that a strict replay must reproduce
     /// bit-exactly.
-    fn composite_case(ctx: &mut TestCaseContext) -> (Vec<char>, Vec<std::num::NonZero<u8>>, Vec<u8>, u32) {
+    fn composite_case(
+        ctx: &mut TestCaseContext,
+    ) -> (Vec<char>, Vec<std::num::NonZero<u8>>, Vec<u8>, u32) {
         let branch = sample_usize_in(ctx, 0..3);
         let chars = if branch == 0 {
             Vec::new()
