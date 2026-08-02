@@ -1,5 +1,5 @@
 //! Environment-variable helpers for populating [`Runner::seed`] and
-//! [`Runner::iterations`](crate::Runner::iterations).
+//! `iterations`.
 //!
 //! The helpers are opt-in and are read only when the caller invokes
 //! them, so the "no implicit I/O" contract of the rest of the crate is
@@ -72,7 +72,7 @@ impl std::error::Error for ConfigError {}
 /// ```
 /// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")
 ///     .expect("MYAPP_SEED, if set, must parse as u64");
-/// let _ = noprop::Runner { seed, iterations: 256 };
+/// let _ = noprop::Runner::new(seed, 256);
 /// ```
 pub fn seed_from_env_or_time(var: &str) -> Result<u64, ConfigError> {
     match env::var(var) {
@@ -102,7 +102,7 @@ pub fn seed_from_env_or_time(var: &str) -> Result<u64, ConfigError> {
 /// ```
 /// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)
 ///     .expect("MYAPP_ITERATIONS, if set, must parse as usize");
-/// let _ = noprop::Runner { seed: 0, iterations };
+/// let _ = noprop::Runner::new(0, iterations);
 /// ```
 pub fn iterations_from_env(var: &str, default: usize) -> Result<usize, ConfigError> {
     match env::var(var) {

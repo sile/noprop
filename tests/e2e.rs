@@ -7,10 +7,7 @@
 
 #[test]
 fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
-    noprop::Runner {
-        seed: 0xDEAD_BEEF,
-        iterations: 16,
-    }
+    noprop::Runner::new(0xDEAD_BEEF, 16)
     .run(|ctx| {
         let x = noprop::sample_u32(ctx);
         assert_eq!(x, x);
@@ -22,10 +19,7 @@ fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
 #[test]
 fn run_returns_err_on_failed_assertion() {
     // Property "every u32 is zero" fails almost immediately.
-    let result = noprop::Runner {
-        seed: 0x1234,
-        iterations: 64,
-    }
+    let result = noprop::Runner::new(0x1234, 64)
     .run(|ctx| {
         let x = noprop::sample_u32(ctx);
         assert_eq!(x, 0, "expected zero, got {x}");
@@ -42,10 +36,7 @@ fn same_seed_reproduces_same_failure() {
     let seed = 0xABCD_1234_5678_9ABC;
 
     let run = || {
-        noprop::Runner {
-            seed,
-            iterations: 32,
-        }
+        noprop::Runner::new(seed, 32)
         .run(|ctx| {
             let x = noprop::sample_u32(ctx);
             // Roughly half of iterations fail — enough to guarantee an
@@ -70,10 +61,7 @@ fn same_seed_reproduces_same_failure() {
 #[test]
 fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> {
     let invoked = std::cell::Cell::new(false);
-    noprop::Runner {
-        seed: 0,
-        iterations: 0,
-    }
+    noprop::Runner::new(0, 0)
     .run(|_rng| {
         invoked.set(true);
         Ok(())
@@ -88,10 +76,7 @@ fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> 
 #[test]
 fn error_debug_output_contains_seed_and_case() {
     let seed = 0xFEED_FACE_C0DE_BABE;
-    let result = noprop::Runner {
-        seed,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(seed, 1)
     .run(|_rng| {
         panic!("boom");
     });
@@ -108,10 +93,7 @@ fn subsequent_cases_are_skipped_after_failure() {
     // pure `Fn`. Panic on the third invocation and verify the runner
     // stopped there (no fourth invocation).
     let count = std::cell::Cell::new(0usize);
-    let _ = noprop::Runner {
-        seed: 0,
-        iterations: 100,
-    }
+    let _ = noprop::Runner::new(0, 100)
     .run(|_rng| {
         let n = count.get() + 1;
         count.set(n);
@@ -125,10 +107,7 @@ fn subsequent_cases_are_skipped_after_failure() {
 
 #[test]
 fn generated_values_are_recorded_in_error() {
-    let result = noprop::Runner {
-        seed: 42,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(42, 1)
     .run(|ctx| {
         let x = noprop::sample_u32(ctx);
         let b = noprop::sample_bool(ctx);
@@ -154,10 +133,7 @@ fn generated_trace_dedups_same_location_run() {
     // Generate many values at a single call site inside a loop; the
     // trace should keep only the head (8) + elision marker (1) + tail
     // (8) = 17 entries.
-    let result = noprop::Runner {
-        seed: 1,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(1, 1)
     .run(|ctx| {
         for _ in 0..100 {
             let _ = noprop::sample_u8(ctx);
@@ -190,10 +166,7 @@ fn generated_trace_dedups_same_location_run() {
 fn generated_trace_does_not_dedup_below_head_plus_tail() {
     // With HEAD + TAIL = 16 slots, a run of exactly 16 same-location
     // entries fits without elision.
-    let result = noprop::Runner {
-        seed: 1,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(1, 1)
     .run(|ctx| {
         for _ in 0..16 {
             let _ = noprop::sample_u8(ctx);
@@ -211,10 +184,7 @@ fn generated_trace_does_not_dedup_below_head_plus_tail() {
 fn generated_trace_treats_different_locations_independently() {
     // Two adjacent same-location runs — a small one, then a large one.
     // Each run is deduped independently.
-    let result = noprop::Runner {
-        seed: 1,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(1, 1)
     .run(|ctx| {
         for _ in 0..3 {
             let _ = noprop::sample_u8(ctx);
@@ -252,10 +222,7 @@ fn generated_trace_is_isolated_per_case() {
     // Cell keeps the closure a pure `Fn` while still stepping through
     // per-iteration branches.
     let case = std::cell::Cell::new(0usize);
-    let result = noprop::Runner {
-        seed: 7,
-        iterations: 5,
-    }
+    let result = noprop::Runner::new(7, 5)
     .run(|ctx| {
         let c = case.get();
         if c == 0 {
@@ -277,10 +244,7 @@ fn generated_trace_is_isolated_per_case() {
 
 #[test]
 fn error_debug_output_includes_generated_values() {
-    let result = noprop::Runner {
-        seed: 42,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(42, 1)
     .run(|ctx| {
         let _ = noprop::sample_u32(ctx);
         panic!("boom");
@@ -295,10 +259,7 @@ fn error_debug_output_includes_generated_values() {
 
 #[test]
 fn sample_bytes_records_the_array_as_one_trace_entry() {
-    let result = noprop::Runner {
-        seed: 5,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(5, 1)
     .run(|ctx| {
         let _key: [u8; 16] = noprop::sample_bytes(ctx);
         panic!("stop");
@@ -311,10 +272,7 @@ fn sample_bytes_records_the_array_as_one_trace_entry() {
 
 #[test]
 fn sample_bytes_vec_records_the_vec_as_one_trace_entry() {
-    let result = noprop::Runner {
-        seed: 5,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(5, 1)
     .run(|ctx| {
         let _buf = noprop::sample_bytes_vec(ctx, 42);
         panic!("stop");
@@ -327,10 +285,7 @@ fn sample_bytes_vec_records_the_vec_as_one_trace_entry() {
 
 #[test]
 fn error_display_output_includes_generated_values() {
-    let result = noprop::Runner {
-        seed: 42,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(42, 1)
     .run(|ctx| {
         let _ = noprop::sample_u8(ctx);
         panic!("boom");
@@ -345,10 +300,7 @@ fn error_display_output_includes_generated_values() {
 fn sample_usize_in_records_only_the_chosen_value() {
     // Rejection sampling can consume several u64 draws internally, but
     // only the final chosen value must appear in the trace.
-    let result = noprop::Runner {
-        seed: 5,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(5, 1)
     .run(|ctx| {
         let _v = noprop::sample_usize_in(ctx, 0..7);
         panic!("stop");
@@ -364,10 +316,7 @@ fn sample_usize_in_records_only_the_chosen_value() {
 
 #[test]
 fn sample_ratio_records_only_the_chosen_bool() {
-    let result = noprop::Runner {
-        seed: 5,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(5, 1)
     .run(|ctx| {
         let _b = noprop::sample_ratio(ctx, 1, 3);
         panic!("stop");
@@ -380,10 +329,7 @@ fn sample_ratio_records_only_the_chosen_bool() {
 
 #[test]
 fn sample_weighted_index_records_only_the_chosen_index() {
-    let result = noprop::Runner {
-        seed: 5,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(5, 1)
     .run(|ctx| {
         let _idx = noprop::sample_weighted_index(ctx, &[1, 2, 3, 4]);
         panic!("stop");
@@ -404,10 +350,7 @@ fn selection_primitives_are_reproducible_across_runs() {
     // the new selection primitives.
     let seed = 0xC0FF_EE99_1234_5678u64;
     let run = || {
-        noprop::Runner {
-            seed,
-            iterations: 64,
-        }
+        noprop::Runner::new(seed, 64)
         .run(|ctx| {
             let idx = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1]);
             let n = noprop::sample_usize_in(ctx, 0..=100);
@@ -428,10 +371,7 @@ fn selection_primitives_are_reproducible_across_runs() {
 
 #[test]
 fn sample_with_rejection_returns_first_accepted_value() -> noprop::Result<()> {
-    noprop::Runner {
-        seed: 1,
-        iterations: 8,
-    }
+    noprop::Runner::new(1, 8)
     .run(|ctx| {
         let v = noprop::sample_with_rejection(ctx, 4, |ctx| {
             let x = noprop::sample_u32(ctx);
@@ -450,10 +390,7 @@ fn reject_case_retries_iteration_without_counting_it() -> noprop::Result<()> {
     let attempts = std::cell::Cell::new(0usize);
     let accepted = std::cell::Cell::new(0usize);
     let target_accepts = 4;
-    noprop::Runner {
-        seed: 42,
-        iterations: target_accepts,
-    }
+    noprop::Runner::new(42, target_accepts)
     .run(|ctx| {
         let n = attempts.get();
         attempts.set(n + 1);
@@ -473,10 +410,7 @@ fn reject_case_retries_iteration_without_counting_it() -> noprop::Result<()> {
 fn always_reject_hits_too_many_rejections_and_reports_case_index_zero() {
     // Runner cannot accept any iteration; TooManyRejections should
     // fire and report case_index = 0 (no accepted iteration).
-    let result = noprop::Runner {
-        seed: 7,
-        iterations: 8,
-    }
+    let result = noprop::Runner::new(7, 8)
     .run(|ctx| {
         ctx.reject_case();
     });
@@ -499,10 +433,7 @@ fn always_reject_hits_too_many_rejections_and_reports_case_index_zero() {
 fn always_reject_is_reproducible_from_seed() {
     let seed = 0xBEEF_1234u64;
     let run = || {
-        noprop::Runner {
-            seed,
-            iterations: 4,
-        }
+        noprop::Runner::new(seed, 4)
         .run(|ctx| {
             ctx.reject_case();
         })
@@ -518,10 +449,7 @@ fn rejection_state_overrides_user_catch_returning_ok() -> noprop::Result<()> {
     // User code catches the private marker and returns Ok(()) — the
     // runner must still treat the iteration as rejected.
     let attempts = std::cell::Cell::new(0usize);
-    noprop::Runner {
-        seed: 1,
-        iterations: 2,
-    }
+    noprop::Runner::new(1, 2)
     .run(|ctx| {
         let n = attempts.get();
         attempts.set(n + 1);
@@ -545,10 +473,7 @@ fn rejection_state_overrides_user_catch_and_reraise() -> noprop::Result<()> {
     // User catches the marker then panics with a different payload —
     // the runner must still treat it as rejection, not property failure.
     let attempts = std::cell::Cell::new(0usize);
-    noprop::Runner {
-        seed: 1,
-        iterations: 1,
-    }
+    noprop::Runner::new(1, 1)
     .run(|ctx| {
         let n = attempts.get();
         attempts.set(n + 1);
@@ -569,10 +494,7 @@ fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::
     // A closure that always returns None inside sample_with_rejection
     // exhausts and calls reject_case; the runner retries.
     let outer_attempts = std::cell::Cell::new(0usize);
-    noprop::Runner {
-        seed: 1,
-        iterations: 2,
-    }
+    noprop::Runner::new(1, 2)
     .run(|ctx| {
         let n = outer_attempts.get();
         outer_attempts.set(n + 1);
@@ -599,10 +521,7 @@ fn reject_case_outside_runner_panics() {
 
 #[test]
 fn sample_string_records_one_entry_per_call() {
-    let result = noprop::Runner {
-        seed: 11,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(11, 1)
     .run(|ctx| {
         let a = noprop::sample_string(ctx, 4);
         let b = noprop::sample_ascii_string(ctx, 4);
@@ -628,10 +547,7 @@ fn sample_string_records_one_entry_per_call() {
 
 #[test]
 fn sample_finite_floats_record_type_and_value() {
-    let result = noprop::Runner {
-        seed: 5,
-        iterations: 1,
-    }
+    let result = noprop::Runner::new(5, 1)
     .run(|ctx| {
         let a = noprop::sample_f32_finite(ctx);
         let b = noprop::sample_f64_finite(ctx);
@@ -659,10 +575,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     let target = std::cell::Cell::new(0usize);
     let run = || {
         target.set(0);
-        noprop::Runner {
-            seed,
-            iterations: 128,
-        }
+        noprop::Runner::new(seed, 128)
         .run(|_rng| {
             let n = target.get();
             target.set(n + 1);
@@ -679,7 +592,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     let display = format!("{err}");
     let expected_iterations = err.case_index() + 1;
     let hint = format!(
-        "reproduce with: noprop::Runner {{ seed: {:#018x}, iterations: {expected_iterations} }}",
+        "reproduce with: noprop::Runner::new({:#018x}, {expected_iterations})",
         err.seed(),
     );
     assert!(
@@ -691,7 +604,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     // same seed and iterations.
     let debug = format!("{err:?}");
     let debug_hint = format!(
-        "reproduce: noprop::Runner {{ seed: {:#018x}, iterations: {expected_iterations} }}",
+        "reproduce: noprop::Runner::new({:#018x}, {expected_iterations})",
         err.seed(),
     );
     assert!(
@@ -701,10 +614,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
 
     // Using the hint verbatim should reproduce the same failure.
     let target = std::cell::Cell::new(0usize);
-    let replay = noprop::Runner {
-        seed: err.seed(),
-        iterations: expected_iterations,
-    }
+    let replay = noprop::Runner::new(err.seed(), expected_iterations)
     .run(|_rng| {
         let n = target.get();
         target.set(n + 1);
@@ -722,17 +632,15 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
 
 #[test]
 fn stats_success_reports_accepted_iterations_and_zero_rejections() -> noprop::Result<()> {
-    let stats = noprop::Runner {
-        seed: 0xDEAD_BEEF,
-        iterations: 10,
-    }
-    .run(|ctx| {
+    let mut runner = noprop::Runner::new(0xDEAD_BEEF, 10);
+    runner.run(|ctx| {
         // Two sample_* per iteration => total_samples = 2 * iterations for a
         // clean run.
         let _a = noprop::sample_u32(ctx);
         let _b = noprop::sample_u32(ctx);
         Ok(())
     })?;
+    let stats = runner.stats();
     assert_eq!(stats.accepted_iterations, 10);
     assert_eq!(stats.rejected_iterations, 0);
     assert_eq!(stats.total_samples, 20);
@@ -743,11 +651,8 @@ fn stats_success_reports_accepted_iterations_and_zero_rejections() -> noprop::Re
 fn stats_counts_reject_case_unwinds() -> noprop::Result<()> {
     use std::cell::Cell;
     let counter = Cell::new(0usize);
-    let stats = noprop::Runner {
-        seed: 1,
-        iterations: 3,
-    }
-    .run(|ctx| {
+    let mut runner = noprop::Runner::new(1, 3);
+    runner.run(|ctx| {
         let n = counter.get();
         counter.set(n + 1);
         // First two invocations reject, then every subsequent one accepts.
@@ -756,69 +661,54 @@ fn stats_counts_reject_case_unwinds() -> noprop::Result<()> {
         }
         Ok(())
     })?;
+    let stats = runner.stats();
     assert_eq!(stats.accepted_iterations, 3);
     assert_eq!(stats.rejected_iterations, 2);
     Ok(())
 }
 
 #[test]
-fn stats_counts_sample_with_rejection_exhaustion_as_rejected_iteration()
--> noprop::Result<()> {
-    let stats = noprop::Runner {
-        seed: 1,
-        iterations: 1,
-    }
-    .run(|ctx| {
-        // Attempt closure never returns Some, so sample_with_rejection
-        // exhausts max_attempts and reject_case-unwinds the iteration.
-        // The iteration is retried; with a broadening acceptance rule
-        // one of the retries must succeed.
+fn stats_counts_sample_with_rejection_exhaustion_as_rejected_iteration() {
+    let mut runner = noprop::Runner::new(1, 1);
+    let result = runner.run(|ctx| {
+        // Attempt closure only accepts u == 0 (~2⁻³² per attempt), so
+        // every sample_with_rejection call exhausts and unwinds the
+        // iteration via reject_case. The runner will eventually give up
+        // with TooManyRejections.
         let _x = noprop::sample_with_rejection(ctx, 4, |ctx| {
             let u = noprop::sample_u32(ctx);
-            // Accept only 1 value in ~2^32 so exhaustion is overwhelmingly
-            // likely per attempt-batch; retries will eventually accept via
-            // the accept-everything second closure below is not applicable
-            // — the runner budget will bail out.
             (u == 0).then_some(u)
         });
-        assert_eq!(_x, 0);
         Ok(())
     });
-    // The property will actually never succeed (u == 0 with prob ~2^-32),
-    // so the runner is expected to exhaust its global rejection budget and
-    // return a TooManyRejections error carrying stats.
-    let err = stats.expect_err("all-reject property must fail");
-    let s = err.stats();
+    let err = result.expect_err("all-reject property must fail");
+    // Same Stats value should be reachable from both err.stats() and
+    // runner.stats().
+    assert_eq!(err.stats(), runner.stats());
+    let s = runner.stats();
     assert_eq!(s.accepted_iterations, 0);
     assert!(
         s.rejected_iterations > 0,
         "expected some rejected iterations, got {}",
         s.rejected_iterations
     );
-    Ok(())
 }
 
 #[test]
 fn stats_is_deterministic_per_seed() -> noprop::Result<()> {
-    let first = noprop::Runner {
-        seed: 42,
-        iterations: 5,
-    }
-    .run(|ctx| {
+    let mut a = noprop::Runner::new(42, 5);
+    a.run(|ctx| {
         let _ = noprop::sample_u32(ctx);
         let _ = noprop::sample_bool(ctx);
         Ok(())
     })?;
-    let second = noprop::Runner {
-        seed: 42,
-        iterations: 5,
-    }
-    .run(|ctx| {
+    let mut b = noprop::Runner::new(42, 5);
+    b.run(|ctx| {
         let _ = noprop::sample_u32(ctx);
         let _ = noprop::sample_bool(ctx);
         Ok(())
     })?;
-    assert_eq!(first, second);
+    assert_eq!(a.stats(), b.stats());
     Ok(())
 }
 
@@ -826,10 +716,7 @@ fn stats_is_deterministic_per_seed() -> noprop::Result<()> {
 fn stats_on_failure_reports_progress_up_to_failing_case() {
     use std::cell::Cell;
     let counter = Cell::new(0usize);
-    let err = noprop::Runner {
-        seed: 7,
-        iterations: 10,
-    }
+    let err = noprop::Runner::new(7, 10)
     .run(|_ctx| {
         let n = counter.get();
         counter.set(n + 1);

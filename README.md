@@ -21,7 +21,7 @@ Example
 ```rust
 #[test]
 fn addition_is_commutative() -> noprop::Result<()> {
-    noprop::Runner { seed: 0xDEAD_BEEF, iterations: 1024 }.run(|ctx| {
+    noprop::Runner::new(0xDEAD_BEEF, 1024).run(|ctx| {
         let a = noprop::sample_u32(ctx);
         let b = noprop::sample_u32(ctx);
         assert_eq!(a.wrapping_add(b), b.wrapping_add(a));

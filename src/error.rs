@@ -12,8 +12,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// A property failure (panic or returned `Err`) is deterministically
 /// reproducible from `seed()` and `case_index()`: rerunning
-/// `noprop::Runner { seed: err.seed(), .. }` with at least
-/// `err.case_index() + 1` iterations will hit the same failure again.
+/// `noprop::Runner::new(err.seed(), err.case_index() + 1)` will hit
+/// the same failure again.
 ///
 /// A `TooManyRejections` failure — raised when
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
@@ -35,7 +35,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Both formats also print a copy-pasteable
 ///
 /// ```text
-/// reproduce with: noprop::Runner { seed: 0x..., iterations: N }
+/// reproduce with: noprop::Runner::new(0x..., N)
 /// ```
 ///
 /// line where `iterations = case_index + 1`, so re-triggering the
@@ -165,7 +165,7 @@ impl std::fmt::Debug for Error {
         }
         writeln!(
             f,
-            "    reproduce: noprop::Runner {{ seed: {:#018x}, iterations: {} }},",
+            "    reproduce: noprop::Runner::new({:#018x}, {}),",
             self.seed,
             self.reproduce_iterations(),
         )?;
@@ -216,7 +216,7 @@ impl std::fmt::Display for Error {
         }
         writeln!(
             f,
-            "reproduce with: noprop::Runner {{ seed: {:#018x}, iterations: {} }}",
+            "reproduce with: noprop::Runner::new({:#018x}, {})",
             self.seed,
             self.reproduce_iterations(),
         )?;

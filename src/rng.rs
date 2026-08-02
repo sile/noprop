@@ -388,7 +388,7 @@ impl TestCaseContext {
     /// The runner discards the current iteration's generated-value
     /// trace and tries the next iteration. Rejected iterations are not
     /// counted toward
-    /// [`Runner::iterations`](crate::Runner::iterations); rejected +
+    /// `iterations`; rejected +
     /// accepted attempts together are bounded by an internal global
     /// limit so a generator that always rejects still terminates.
     #[track_caller]
