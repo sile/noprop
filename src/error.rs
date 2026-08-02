@@ -2,8 +2,8 @@
 
 use std::panic::Location;
 
-use crate::runner::Stats;
 use crate::GeneratedValue;
+use crate::runner::Stats;
 
 /// Result alias used across noprop's public API.
 pub type Result<T> = std::result::Result<T, Error>;

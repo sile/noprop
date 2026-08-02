@@ -298,11 +298,7 @@ impl Runner {
             };
             let generated = ctx.take_generated();
             return Err(Error::from_panic(
-                self.seed,
-                accepted,
-                message,
-                generated,
-                self.stats,
+                self.seed, accepted, message, generated, self.stats,
             ));
         }
         self.stats = Stats {
