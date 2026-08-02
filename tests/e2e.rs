@@ -15,7 +15,8 @@ fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
         let x = noprop::sample_u32(ctx);
         assert_eq!(x, x);
         Ok(())
-    })
+    })?;
+    Ok(())
 }
 
 #[test]
@@ -438,7 +439,8 @@ fn sample_with_rejection_returns_first_accepted_value() -> noprop::Result<()> {
         });
         assert!(v.is_multiple_of(2));
         Ok(())
-    })
+    })?;
+    Ok(())
 }
 
 #[test]
@@ -714,4 +716,132 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     let replayed = replay.expect_err("hint iterations must reproduce the failure");
     assert_eq!(replayed.seed(), err.seed());
     assert_eq!(replayed.case_index(), err.case_index());
+}
+
+// === Stats ===
+
+#[test]
+fn stats_success_reports_accepted_iterations_and_zero_rejections() -> noprop::Result<()> {
+    let stats = noprop::Runner {
+        seed: 0xDEAD_BEEF,
+        iterations: 10,
+    }
+    .run(|ctx| {
+        // Two sample_* per iteration => total_samples = 2 * iterations for a
+        // clean run.
+        let _a = noprop::sample_u32(ctx);
+        let _b = noprop::sample_u32(ctx);
+        Ok(())
+    })?;
+    assert_eq!(stats.accepted_iterations, 10);
+    assert_eq!(stats.rejected_iterations, 0);
+    assert_eq!(stats.total_samples, 20);
+    Ok(())
+}
+
+#[test]
+fn stats_counts_reject_case_unwinds() -> noprop::Result<()> {
+    use std::cell::Cell;
+    let counter = Cell::new(0usize);
+    let stats = noprop::Runner {
+        seed: 1,
+        iterations: 3,
+    }
+    .run(|ctx| {
+        let n = counter.get();
+        counter.set(n + 1);
+        // First two invocations reject, then every subsequent one accepts.
+        if n < 2 {
+            ctx.reject_case();
+        }
+        Ok(())
+    })?;
+    assert_eq!(stats.accepted_iterations, 3);
+    assert_eq!(stats.rejected_iterations, 2);
+    Ok(())
+}
+
+#[test]
+fn stats_counts_sample_with_rejection_exhaustion_as_rejected_iteration()
+-> noprop::Result<()> {
+    let stats = noprop::Runner {
+        seed: 1,
+        iterations: 1,
+    }
+    .run(|ctx| {
+        // Attempt closure never returns Some, so sample_with_rejection
+        // exhausts max_attempts and reject_case-unwinds the iteration.
+        // The iteration is retried; with a broadening acceptance rule
+        // one of the retries must succeed.
+        let _x = noprop::sample_with_rejection(ctx, 4, |ctx| {
+            let u = noprop::sample_u32(ctx);
+            // Accept only 1 value in ~2^32 so exhaustion is overwhelmingly
+            // likely per attempt-batch; retries will eventually accept via
+            // the accept-everything second closure below is not applicable
+            // — the runner budget will bail out.
+            (u == 0).then_some(u)
+        });
+        assert_eq!(_x, 0);
+        Ok(())
+    });
+    // The property will actually never succeed (u == 0 with prob ~2^-32),
+    // so the runner is expected to exhaust its global rejection budget and
+    // return a TooManyRejections error carrying stats.
+    let err = stats.expect_err("all-reject property must fail");
+    let s = err.stats();
+    assert_eq!(s.accepted_iterations, 0);
+    assert!(
+        s.rejected_iterations > 0,
+        "expected some rejected iterations, got {}",
+        s.rejected_iterations
+    );
+    Ok(())
+}
+
+#[test]
+fn stats_is_deterministic_per_seed() -> noprop::Result<()> {
+    let first = noprop::Runner {
+        seed: 42,
+        iterations: 5,
+    }
+    .run(|ctx| {
+        let _ = noprop::sample_u32(ctx);
+        let _ = noprop::sample_bool(ctx);
+        Ok(())
+    })?;
+    let second = noprop::Runner {
+        seed: 42,
+        iterations: 5,
+    }
+    .run(|ctx| {
+        let _ = noprop::sample_u32(ctx);
+        let _ = noprop::sample_bool(ctx);
+        Ok(())
+    })?;
+    assert_eq!(first, second);
+    Ok(())
+}
+
+#[test]
+fn stats_on_failure_reports_progress_up_to_failing_case() {
+    use std::cell::Cell;
+    let counter = Cell::new(0usize);
+    let err = noprop::Runner {
+        seed: 7,
+        iterations: 10,
+    }
+    .run(|_ctx| {
+        let n = counter.get();
+        counter.set(n + 1);
+        if n == 4 {
+            panic!("boom at iteration {n}");
+        }
+        Ok(())
+    })
+    .expect_err("closure must fail at case 4");
+    let stats = err.stats();
+    // Four iterations passed before the panic on the fifth (index 4).
+    assert_eq!(stats.accepted_iterations, 4);
+    assert_eq!(stats.rejected_iterations, 0);
+    assert_eq!(err.case_index(), stats.accepted_iterations);
 }

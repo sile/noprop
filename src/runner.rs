@@ -5,13 +5,44 @@ use std::panic::AssertUnwindSafe;
 use crate::rng::is_iteration_rejected;
 use crate::{Error, Result, TestCaseContext};
 
+/// Observability data from a [`Runner::run`](Runner::run) invocation.
+///
+/// Returned from a successful [`run`](Runner::run), and embedded in
+/// [`Error`] on failure so the caller can see how far the run
+/// progressed before it failed. All three counters are cumulative over
+/// the whole `run` call (across every case, accepted or rejected).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stats {
+    /// Number of iterations whose closure completed without calling
+    /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case). On
+    /// a successful `Runner::run`, this equals
+    /// [`Runner::iterations`](Runner::iterations). On failure, it is
+    /// the number of iterations that passed before the failing one
+    /// (equivalent to [`Error::case_index`](Error::case_index)).
+    pub accepted_iterations: usize,
+    /// Total number of iterations discarded via
+    /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case), including
+    /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
+    /// helpers (they discard via `reject_case` internally, so the two
+    /// origins share this single counter).
+    pub rejected_iterations: usize,
+    /// Total number of top-level `sample_*` invocations across every
+    /// case that ran. Counted per call to the primitive generator
+    /// (`sample_u32`, `sample_choice`, `sample_string`, …), not per
+    /// underlying byte read or dedup entry — a `sample_char` invocation
+    /// that internally retries its 21-bit mask still counts as one
+    /// sample. Includes samples produced by rejected iterations, since
+    /// those iterations still consumed generator budget.
+    pub total_samples: usize,
+}
+
 /// A property-based test runner.
 ///
 /// [`Runner`] is a small config struct with public fields. Construct it
 /// with a struct literal and call [`run`](Runner::run):
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, iterations: 16 }.run(|ctx| {
+/// let _: noprop::Result<noprop::Stats> = noprop::Runner { seed: 0xDEAD_BEEF, iterations: 16 }.run(|ctx| {
 ///     let x = noprop::sample_u32(ctx);
 ///     assert_eq!(x, x);
 ///     Ok(())
@@ -41,7 +72,7 @@ use crate::{Error, Result, TestCaseContext};
 /// # fn body() -> Result<(), Box<dyn std::error::Error>> {
 /// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
 /// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)?;
-/// let _: noprop::Result<()> = noprop::Runner { seed, iterations }.run(|_rng| {
+/// let _: noprop::Result<noprop::Stats> = noprop::Runner { seed, iterations }.run(|_rng| {
 ///     // property
 ///     Ok(())
 /// });
@@ -67,7 +98,7 @@ use crate::{Error, Result, TestCaseContext};
 /// operator works for any error type that implements [`Error`]:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|_rng| {
+/// let _: noprop::Result<noprop::Stats> = noprop::Runner { seed: 0, iterations: 1 }.run(|_rng| {
 ///     let _n: u32 = "42".parse()?;   // ParseIntError -> Box<dyn Error>
 ///     Ok(())
 /// });
@@ -76,7 +107,7 @@ use crate::{Error, Result, TestCaseContext};
 /// Ad-hoc messages work via `Into`:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|_rng| {
+/// let _: noprop::Result<noprop::Stats> = noprop::Runner { seed: 0, iterations: 1 }.run(|_rng| {
 ///     if false { return Err("something bad".into()); }
 ///     Ok(())
 /// });
@@ -159,7 +190,7 @@ impl Runner {
     /// (`std::cell::Cell` / `std::cell::RefCell` / atomics) so the
     /// escape from purity is spelled out in the code rather than
     /// hidden behind an unassuming `let mut`.
-    pub fn run<F>(self, f: F) -> Result<()>
+    pub fn run<F>(self, f: F) -> Result<Stats>
     where
         F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
@@ -183,6 +214,11 @@ impl Runner {
                 let _ = outcome;
                 rejected += 1;
                 if rejected > rejection_cap {
+                    let stats = Stats {
+                        accepted_iterations: accepted,
+                        rejected_iterations: rejected,
+                        total_samples: ctx.total_samples(),
+                    };
                     let generated = ctx.take_generated();
                     return Err(Error::from_too_many_rejections(
                         self.seed,
@@ -190,6 +226,7 @@ impl Runner {
                         rejected,
                         state.location,
                         generated,
+                        stats,
                     ));
                 }
                 continue;
@@ -211,6 +248,11 @@ impl Runner {
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
+                            let stats = Stats {
+                                accepted_iterations: accepted,
+                                rejected_iterations: rejected,
+                                total_samples: ctx.total_samples(),
+                            };
                             let generated = ctx.take_generated();
                             let unknown_location = std::panic::Location::caller();
                             return Err(Error::from_too_many_rejections(
@@ -219,6 +261,7 @@ impl Runner {
                                 rejected,
                                 unknown_location,
                                 generated,
+                                stats,
                             ));
                         }
                         continue;
@@ -226,10 +269,21 @@ impl Runner {
                     panic_message(panic)
                 }
             };
+            let stats = Stats {
+                accepted_iterations: accepted,
+                rejected_iterations: rejected,
+                total_samples: ctx.total_samples(),
+            };
             let generated = ctx.take_generated();
-            return Err(Error::from_panic(self.seed, accepted, message, generated));
+            return Err(Error::from_panic(
+                self.seed, accepted, message, generated, stats,
+            ));
         }
-        Ok(())
+        Ok(Stats {
+            accepted_iterations: accepted,
+            rejected_iterations: rejected,
+            total_samples: ctx.total_samples(),
+        })
     }
 }
 

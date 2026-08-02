@@ -26,7 +26,8 @@ fn addition_is_commutative() -> noprop::Result<()> {
         let b = noprop::sample_u32(ctx);
         assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
         Ok(())
-    })
+    })?;
+    Ok(())
 }
 ```
 

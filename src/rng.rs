@@ -52,6 +52,14 @@ pub struct TestCaseContext {
     /// `false`, so the private control-flow marker is never sent from a
     /// context that cannot catch it.
     inside_runner: bool,
+    /// Total number of [`record_generated`](Self::record_generated) calls
+    /// observed across every case that ran on this context. Never reset
+    /// between cases so [`Runner::run`](crate::Runner::run) can report it
+    /// as [`Stats::total_samples`](crate::Stats::total_samples). Counted
+    /// once per top-level `sample_*` invocation (dedup / elision happens
+    /// after the counter is incremented, so folded runs are still fully
+    /// counted).
+    total_samples: usize,
 }
 
 /// Private entropy source variant carried by every [`TestCaseContext`].
@@ -361,6 +369,7 @@ impl TestCaseContext {
             dedup: DedupState::default(),
             rejection: None,
             inside_runner: false,
+            total_samples: 0,
         }
     }
 
@@ -613,6 +622,8 @@ impl TestCaseContext {
         value: &T,
         location: &'static Location<'static>,
     ) {
+        self.total_samples = self.total_samples.saturating_add(1);
+
         let same_as_last = self
             .dedup
             .location
@@ -683,6 +694,14 @@ impl TestCaseContext {
     pub(crate) fn set_inside_runner(&mut self) {
         self.inside_runner = true;
     }
+
+    /// Total number of top-level `sample_*` invocations observed on this
+    /// context across every case that has run so far. Consumed by
+    /// [`Runner::run`](crate::Runner::run) when it builds
+    /// [`Stats`](crate::Stats).
+    pub(crate) fn total_samples(&self) -> usize {
+        self.total_samples
+    }
 }
 
 /// Session that records a case's [`ChoiceSequence`] from a seed.
@@ -717,6 +736,7 @@ impl RecordingSession {
             dedup: DedupState::default(),
             rejection: None,
             inside_runner: false,
+            total_samples: 0,
         };
         let value = f(&mut ctx);
         let sequence = match ctx.source {
@@ -767,6 +787,7 @@ impl ReplaySession {
             dedup: DedupState::default(),
             rejection: None,
             inside_runner: false,
+            total_samples: 0,
         };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
         let (sequence, next_draw, next_span, error) = match ctx.source {

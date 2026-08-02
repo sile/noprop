@@ -2,6 +2,7 @@
 
 use std::panic::Location;
 
+use crate::runner::Stats;
 use crate::GeneratedValue;
 
 /// Result alias used across noprop's public API.
@@ -45,6 +46,7 @@ pub struct Error {
     case_index: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
+    stats: Stats,
 }
 
 enum ErrorKind {
@@ -69,12 +71,14 @@ impl Error {
         case_index: usize,
         message: String,
         generated: Vec<GeneratedValue>,
+        stats: Stats,
     ) -> Self {
         Self {
             seed,
             case_index,
             kind: ErrorKind::Panic { message },
             generated,
+            stats,
         }
     }
 
@@ -84,6 +88,7 @@ impl Error {
         rejected_iterations: usize,
         last_reject_location: &'static Location<'static>,
         generated: Vec<GeneratedValue>,
+        stats: Stats,
     ) -> Self {
         Self {
             seed,
@@ -93,6 +98,7 @@ impl Error {
                 last_reject_location,
             },
             generated,
+            stats,
         }
     }
 
@@ -116,6 +122,13 @@ impl Error {
     /// order. This is a debugging trace, not a stack backtrace.
     pub fn generated(&self) -> &[GeneratedValue] {
         &self.generated
+    }
+
+    /// Observability counters accumulated up to (and including) the
+    /// failing case. `accepted_iterations` matches
+    /// [`case_index`](Self::case_index).
+    pub fn stats(&self) -> Stats {
+        self.stats
     }
 }
 
@@ -155,6 +168,13 @@ impl std::fmt::Debug for Error {
             "    reproduce: noprop::Runner {{ seed: {:#018x}, iterations: {} }},",
             self.seed,
             self.reproduce_iterations(),
+        )?;
+        writeln!(
+            f,
+            "    stats: {{ accepted: {}, rejected: {}, total_samples: {} }},",
+            self.stats.accepted_iterations,
+            self.stats.rejected_iterations,
+            self.stats.total_samples,
         )?;
         if self.generated.is_empty() {
             writeln!(f, "    generated: [],")?;
@@ -199,6 +219,13 @@ impl std::fmt::Display for Error {
             "reproduce with: noprop::Runner {{ seed: {:#018x}, iterations: {} }}",
             self.seed,
             self.reproduce_iterations(),
+        )?;
+        writeln!(
+            f,
+            "stats: accepted={}, rejected={}, total_samples={}",
+            self.stats.accepted_iterations,
+            self.stats.rejected_iterations,
+            self.stats.total_samples,
         )?;
         if !self.generated.is_empty() {
             writeln!(f, "Generated values:")?;
