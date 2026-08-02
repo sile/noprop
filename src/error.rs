@@ -15,7 +15,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `err.case_index() + 1` iterations will hit the same failure again.
 ///
 /// A `TooManyRejections` failure — raised when
-/// [`Rng::reject_case`](crate::Rng::reject_case) fires so often that
+/// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
 /// the internal global limit is reached — reports the number of
 /// accepted iterations that completed before the runner gave up as
 /// `case_index()`, so the same seed and iteration budget reproduce the

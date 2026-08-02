@@ -3,7 +3,7 @@
 use std::panic::AssertUnwindSafe;
 
 use crate::rng::is_iteration_rejected;
-use crate::{Error, Result, Rng};
+use crate::{Error, Result, TestCaseContext};
 
 /// A property-based test runner.
 ///
@@ -11,8 +11,8 @@ use crate::{Error, Result, Rng};
 /// with a struct literal and call [`run`](Runner::run):
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, iterations: 16 }.run(|rng| {
-///     let x = noprop::sample_u32(rng);
+/// let _: noprop::Result<()> = noprop::Runner { seed: 0xDEAD_BEEF, iterations: 16 }.run(|ctx| {
+///     let x = noprop::sample_u32(ctx);
 ///     assert_eq!(x, x);
 ///     Ok(())
 /// });
@@ -84,13 +84,13 @@ use crate::{Error, Result, Rng};
 ///
 /// [`Error`]: std::error::Error
 pub struct Runner {
-    /// The seed used to construct the internal [`Rng`].
+    /// The seed used to construct the internal [`TestCaseContext`].
     pub seed: u64,
     /// The number of *accepted* iterations to invoke the closure for.
     ///
     /// An iteration is "accepted" when the closure reaches a verdict
     /// (`Ok(())` / `Err` / panic) without calling
-    /// [`Rng::reject_case`](crate::Rng::reject_case) (directly or via
+    /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) (directly or via
     /// [`sample_with_rejection`](crate::sample_with_rejection)).
     /// Rejected iterations are retried and are *not* counted toward
     /// this budget.
@@ -109,7 +109,7 @@ pub struct Runner {
 ///
 /// Total rejected iterations (across all iteration indices) are capped
 /// so that a generator which always calls
-/// [`Rng::reject_case`](crate::Rng::reject_case) still terminates in
+/// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) still terminates in
 /// finite time with a `TooManyRejections` failure.
 ///
 /// Scaled with `iterations` so that a generous iteration budget also
@@ -123,8 +123,8 @@ fn rejection_limit(iterations: usize) -> usize {
 }
 
 impl Runner {
-    /// Invoke `f(&mut rng)` up to `iterations` times against a shared
-    /// [`Rng`] seeded with `seed`.
+    /// Invoke `f(&mut ctx)` up to `iterations` times against a shared
+    /// [`TestCaseContext`] seeded with `seed`.
     ///
     /// Each invocation is one property "iteration". A returned `Ok(())`
     /// counts as a pass; a returned `Err` or a panic (via `assert!`,
@@ -135,7 +135,7 @@ impl Runner {
     /// as `Err`. Subsequent iterations past the first failure are
     /// skipped.
     ///
-    /// A call to [`Rng::reject_case`](crate::Rng::reject_case) (either
+    /// A call to [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) (either
     /// directly or via
     /// [`sample_with_rejection`](crate::sample_with_rejection)
     /// exhaustion) discards the current iteration, does not count it
@@ -150,7 +150,7 @@ impl Runner {
     ///
     /// The closure is bound as `Fn`, not `FnMut`, so it cannot capture
     /// enclosing variables by mutable reference. Property tests are
-    /// meant to be pure functions of the `Rng`-derived input: keeping
+    /// meant to be pure functions of the `TestCaseContext`-derived input: keeping
     /// mutation off the closure's captures makes each iteration
     /// independent and each failure reproducible from the seed alone.
     ///
@@ -161,18 +161,18 @@ impl Runner {
     /// hidden behind an unassuming `let mut`.
     pub fn run<F>(self, f: F) -> Result<()>
     where
-        F: Fn(&mut Rng) -> std::result::Result<(), Box<dyn std::error::Error>>,
+        F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
-        let mut rng = Rng::new(self.seed);
-        rng.set_inside_runner();
+        let mut ctx = TestCaseContext::new(self.seed);
+        ctx.set_inside_runner();
         let rejection_cap = rejection_limit(self.iterations);
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
 
         while accepted < self.iterations {
-            rng.clear_generated();
-            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
-            let rejection = rng.take_rejection();
+            ctx.clear_generated();
+            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
+            let rejection = ctx.take_rejection();
 
             if let Some(state) = rejection {
                 // Rejection wins over any closure outcome. If the
@@ -183,7 +183,7 @@ impl Runner {
                 let _ = outcome;
                 rejected += 1;
                 if rejected > rejection_cap {
-                    let generated = rng.take_generated();
+                    let generated = ctx.take_generated();
                     return Err(Error::from_too_many_rejections(
                         self.seed,
                         accepted,
@@ -211,7 +211,7 @@ impl Runner {
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
-                            let generated = rng.take_generated();
+                            let generated = ctx.take_generated();
                             let unknown_location = std::panic::Location::caller();
                             return Err(Error::from_too_many_rejections(
                                 self.seed,
@@ -226,7 +226,7 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            let generated = rng.take_generated();
+            let generated = ctx.take_generated();
             return Err(Error::from_panic(self.seed, accepted, message, generated));
         }
         Ok(())

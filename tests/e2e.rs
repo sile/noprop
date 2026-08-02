@@ -11,8 +11,8 @@ fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
         seed: 0xDEAD_BEEF,
         iterations: 16,
     }
-    .run(|rng| {
-        let x = noprop::sample_u32(rng);
+    .run(|ctx| {
+        let x = noprop::sample_u32(ctx);
         assert_eq!(x, x);
         Ok(())
     })
@@ -25,8 +25,8 @@ fn run_returns_err_on_failed_assertion() {
         seed: 0x1234,
         iterations: 64,
     }
-    .run(|rng| {
-        let x = noprop::sample_u32(rng);
+    .run(|ctx| {
+        let x = noprop::sample_u32(ctx);
         assert_eq!(x, 0, "expected zero, got {x}");
         Ok(())
     });
@@ -45,8 +45,8 @@ fn same_seed_reproduces_same_failure() {
             seed,
             iterations: 32,
         }
-        .run(|rng| {
-            let x = noprop::sample_u32(rng);
+        .run(|ctx| {
+            let x = noprop::sample_u32(ctx);
             // Roughly half of iterations fail — enough to guarantee an
             // Err within 32 iterations with vanishing probability of Ok.
             assert!(x < 0x8000_0000, "high bit set: {x:#010x}");
@@ -128,10 +128,10 @@ fn generated_values_are_recorded_in_error() {
         seed: 42,
         iterations: 1,
     }
-    .run(|rng| {
-        let x = noprop::sample_u32(rng);
-        let b = noprop::sample_bool(rng);
-        let c = noprop::sample_ascii_char(rng);
+    .run(|ctx| {
+        let x = noprop::sample_u32(ctx);
+        let b = noprop::sample_bool(ctx);
+        let c = noprop::sample_ascii_char(ctx);
         panic!("forced failure with x={x}, b={b}, c={c:?}");
     });
 
@@ -157,9 +157,9 @@ fn generated_trace_dedups_same_location_run() {
         seed: 1,
         iterations: 1,
     }
-    .run(|rng| {
+    .run(|ctx| {
         for _ in 0..100 {
-            let _ = noprop::sample_u8(rng);
+            let _ = noprop::sample_u8(ctx);
         }
         panic!("fail after loop");
     });
@@ -193,9 +193,9 @@ fn generated_trace_does_not_dedup_below_head_plus_tail() {
         seed: 1,
         iterations: 1,
     }
-    .run(|rng| {
+    .run(|ctx| {
         for _ in 0..16 {
-            let _ = noprop::sample_u8(rng);
+            let _ = noprop::sample_u8(ctx);
         }
         panic!("fail after loop");
     });
@@ -214,12 +214,12 @@ fn generated_trace_treats_different_locations_independently() {
         seed: 1,
         iterations: 1,
     }
-    .run(|rng| {
+    .run(|ctx| {
         for _ in 0..3 {
-            let _ = noprop::sample_u8(rng);
+            let _ = noprop::sample_u8(ctx);
         }
         for _ in 0..100 {
-            let _ = noprop::sample_u16(rng);
+            let _ = noprop::sample_u16(ctx);
         }
         panic!("fail after loops");
     });
@@ -255,12 +255,12 @@ fn generated_trace_is_isolated_per_case() {
         seed: 7,
         iterations: 5,
     }
-    .run(|rng| {
+    .run(|ctx| {
         let c = case.get();
         if c == 0 {
-            let _ = noprop::sample_u64(rng);
+            let _ = noprop::sample_u64(ctx);
         } else {
-            let _ = noprop::sample_u16(rng);
+            let _ = noprop::sample_u16(ctx);
             panic!("fail on case {c}");
         }
         case.set(c + 1);
@@ -280,8 +280,8 @@ fn error_debug_output_includes_generated_values() {
         seed: 42,
         iterations: 1,
     }
-    .run(|rng| {
-        let _ = noprop::sample_u32(rng);
+    .run(|ctx| {
+        let _ = noprop::sample_u32(ctx);
         panic!("boom");
     });
     let err = result.expect_err("expected Err");
@@ -298,8 +298,8 @@ fn sample_bytes_records_the_array_as_one_trace_entry() {
         seed: 5,
         iterations: 1,
     }
-    .run(|rng| {
-        let _key: [u8; 16] = noprop::sample_bytes(rng);
+    .run(|ctx| {
+        let _key: [u8; 16] = noprop::sample_bytes(ctx);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -314,8 +314,8 @@ fn sample_bytes_vec_records_the_vec_as_one_trace_entry() {
         seed: 5,
         iterations: 1,
     }
-    .run(|rng| {
-        let _buf = noprop::sample_bytes_vec(rng, 42);
+    .run(|ctx| {
+        let _buf = noprop::sample_bytes_vec(ctx, 42);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -330,8 +330,8 @@ fn error_display_output_includes_generated_values() {
         seed: 42,
         iterations: 1,
     }
-    .run(|rng| {
-        let _ = noprop::sample_u8(rng);
+    .run(|ctx| {
+        let _ = noprop::sample_u8(ctx);
         panic!("boom");
     });
     let err = result.expect_err("expected Err");
@@ -348,8 +348,8 @@ fn sample_usize_in_records_only_the_chosen_value() {
         seed: 5,
         iterations: 1,
     }
-    .run(|rng| {
-        let _v = noprop::sample_usize_in(rng, 0..7);
+    .run(|ctx| {
+        let _v = noprop::sample_usize_in(ctx, 0..7);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -367,8 +367,8 @@ fn sample_ratio_records_only_the_chosen_bool() {
         seed: 5,
         iterations: 1,
     }
-    .run(|rng| {
-        let _b = noprop::sample_ratio(rng, 1, 3);
+    .run(|ctx| {
+        let _b = noprop::sample_ratio(ctx, 1, 3);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -383,8 +383,8 @@ fn sample_weighted_index_records_only_the_chosen_index() {
         seed: 5,
         iterations: 1,
     }
-    .run(|rng| {
-        let _idx = noprop::sample_weighted_index(rng, &[1, 2, 3, 4]);
+    .run(|ctx| {
+        let _idx = noprop::sample_weighted_index(ctx, &[1, 2, 3, 4]);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -407,10 +407,10 @@ fn selection_primitives_are_reproducible_across_runs() {
             seed,
             iterations: 64,
         }
-        .run(|rng| {
-            let idx = noprop::sample_weighted_index(rng, &[1, 1, 1, 1]);
-            let n = noprop::sample_usize_in(rng, 0..=100);
-            let flip = noprop::sample_ratio(rng, 1, 4);
+        .run(|ctx| {
+            let idx = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1]);
+            let n = noprop::sample_usize_in(ctx, 0..=100);
+            let flip = noprop::sample_ratio(ctx, 1, 4);
             // Fail on a pattern that is common enough to hit within 64
             // iterations but does not always fire, so the case index
             // matters.
@@ -431,9 +431,9 @@ fn sample_with_rejection_returns_first_accepted_value() -> noprop::Result<()> {
         seed: 1,
         iterations: 8,
     }
-    .run(|rng| {
-        let v = noprop::sample_with_rejection(rng, 4, |rng| {
-            let x = noprop::sample_u32(rng);
+    .run(|ctx| {
+        let v = noprop::sample_with_rejection(ctx, 4, |ctx| {
+            let x = noprop::sample_u32(ctx);
             x.is_multiple_of(2).then_some(x)
         });
         assert!(v.is_multiple_of(2));
@@ -452,11 +452,11 @@ fn reject_case_retries_iteration_without_counting_it() -> noprop::Result<()> {
         seed: 42,
         iterations: target_accepts,
     }
-    .run(|rng| {
+    .run(|ctx| {
         let n = attempts.get();
         attempts.set(n + 1);
         if n < 3 {
-            rng.reject_case();
+            ctx.reject_case();
         }
         accepted.set(accepted.get() + 1);
         Ok(())
@@ -475,8 +475,8 @@ fn always_reject_hits_too_many_rejections_and_reports_case_index_zero() {
         seed: 7,
         iterations: 8,
     }
-    .run(|rng| {
-        rng.reject_case();
+    .run(|ctx| {
+        ctx.reject_case();
     });
     let err = result.expect_err("expected TooManyRejections");
     assert_eq!(err.seed(), 7);
@@ -501,8 +501,8 @@ fn always_reject_is_reproducible_from_seed() {
             seed,
             iterations: 4,
         }
-        .run(|rng| {
-            rng.reject_case();
+        .run(|ctx| {
+            ctx.reject_case();
         })
     };
     let a = run().expect_err("expected Err");
@@ -520,12 +520,12 @@ fn rejection_state_overrides_user_catch_returning_ok() -> noprop::Result<()> {
         seed: 1,
         iterations: 2,
     }
-    .run(|rng| {
+    .run(|ctx| {
         let n = attempts.get();
         attempts.set(n + 1);
         if n == 0 {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                rng.reject_case();
+                ctx.reject_case();
             }));
             // If rejection state didn't override, this Ok would count.
         }
@@ -547,12 +547,12 @@ fn rejection_state_overrides_user_catch_and_reraise() -> noprop::Result<()> {
         seed: 1,
         iterations: 1,
     }
-    .run(|rng| {
+    .run(|ctx| {
         let n = attempts.get();
         attempts.set(n + 1);
         if n == 0 {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                rng.reject_case();
+                ctx.reject_case();
             }));
             std::panic::panic_any("re-raised, should be dropped");
         }
@@ -571,12 +571,12 @@ fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::
         seed: 1,
         iterations: 2,
     }
-    .run(|rng| {
+    .run(|ctx| {
         let n = outer_attempts.get();
         outer_attempts.set(n + 1);
         if n < 2 {
             // First two invocations reject via sample_with_rejection exhaustion.
-            let _: u32 = noprop::sample_with_rejection(rng, 4, |_rng| None);
+            let _: u32 = noprop::sample_with_rejection(ctx, 4, |_rng| None);
             unreachable!("sample_with_rejection exhaustion should unwind");
         }
         Ok(())
@@ -589,8 +589,8 @@ fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::
 #[test]
 #[should_panic(expected = "Runner::run")]
 fn reject_case_outside_runner_panics() {
-    let mut rng = noprop::Rng::new(0);
-    rng.reject_case();
+    let mut ctx = noprop::TestCaseContext::new(0);
+    ctx.reject_case();
 }
 
 // === sample_string / sample_ascii_string / sample_ascii_printable_string trace format ===
@@ -601,10 +601,10 @@ fn sample_string_records_one_entry_per_call() {
         seed: 11,
         iterations: 1,
     }
-    .run(|rng| {
-        let a = noprop::sample_string(rng, 4);
-        let b = noprop::sample_ascii_string(rng, 4);
-        let c = noprop::sample_ascii_printable_string(rng, 4);
+    .run(|ctx| {
+        let a = noprop::sample_string(ctx, 4);
+        let b = noprop::sample_ascii_string(ctx, 4);
+        let c = noprop::sample_ascii_printable_string(ctx, 4);
         panic!("stop with a={a:?} b={b:?} c={c:?}");
     });
     let err = result.expect_err("expected Err");
@@ -630,9 +630,9 @@ fn sample_finite_floats_record_type_and_value() {
         seed: 5,
         iterations: 1,
     }
-    .run(|rng| {
-        let a = noprop::sample_f32_finite(rng);
-        let b = noprop::sample_f64_finite(rng);
+    .run(|ctx| {
+        let a = noprop::sample_f32_finite(ctx);
+        let b = noprop::sample_f64_finite(ctx);
         panic!("stop with a={a} b={b}");
     });
     let err = result.expect_err("expected Err");

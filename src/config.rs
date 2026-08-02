@@ -3,7 +3,7 @@
 //!
 //! The helpers are opt-in and are read only when the caller invokes
 //! them, so the "no implicit I/O" contract of the rest of the crate is
-//! preserved — `Rng::new` and `Runner::run` never touch the environment
+//! preserved — `TestCaseContext::new` and `Runner::run` never touch the environment
 //! or the clock on their own.
 //!
 //! The [`Runner::seed`](crate::Runner) rustdoc shows the intended

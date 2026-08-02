@@ -24,7 +24,7 @@ const DEDUP_TAIL: usize = 8;
 /// must always be provided by the caller. This makes every property test
 /// exactly reproducible from its seed.
 ///
-/// The only public methods are [`Rng::new`] and [`Rng::reject_case`];
+/// The only public methods are [`TestCaseContext::new`] and [`TestCaseContext::reject_case`];
 /// all byte/word production happens through the `noprop::sample_*` free
 /// functions, which record the generated values into an internal trace
 /// surfaced on failure. Raw PRNG state access is deliberately hidden so
@@ -33,28 +33,28 @@ const DEDUP_TAIL: usize = 8;
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0xDEAD_BEEF);
-/// let a = noprop::sample_u32(&mut rng);
-/// let b = noprop::sample_u32(&mut rng);
+/// let mut ctx = noprop::TestCaseContext::new(0xDEAD_BEEF);
+/// let a = noprop::sample_u32(&mut ctx);
+/// let b = noprop::sample_u32(&mut ctx);
 /// assert_ne!(a, b);
 /// ```
-pub struct Rng {
-    source: RngSource,
+pub struct TestCaseContext {
+    source: RandomSource,
     generated: Vec<GeneratedValue>,
     dedup: DedupState,
-    /// Set by [`Rng::reject_case`]. [`Runner::run`](crate::Runner::run)
+    /// Set by [`TestCaseContext::reject_case`]. [`Runner::run`](crate::Runner::run)
     /// consults this after every case boundary and, if set, treats the
     /// iteration as rejected regardless of the closure's outcome.
     rejection: Option<RejectionState>,
-    /// `true` when this `Rng` was constructed inside a
-    /// [`Runner::run`](crate::Runner::run) invocation. `Rng::reject_case`
+    /// `true` when this `TestCaseContext` was constructed inside a
+    /// [`Runner::run`](crate::Runner::run) invocation. `TestCaseContext::reject_case`
     /// checks this and panics with a Runner-only message when it is
     /// `false`, so the private control-flow marker is never sent from a
     /// context that cannot catch it.
     inside_runner: bool,
 }
 
-/// Private entropy source variant carried by every [`Rng`].
+/// Private entropy source variant carried by every [`TestCaseContext`].
 ///
 /// - `Prng` is the normal path — no per-draw allocation.
 /// - `Recording` still drives the PRNG but also copies every non-empty
@@ -63,7 +63,7 @@ pub struct Rng {
 /// - `Replay` reads bytes only from a recorded sequence and reports a
 ///   [`ReplayError`] on structural mismatch, using a private
 ///   control-flow marker to abort the generator immediately.
-enum RngSource {
+enum RandomSource {
     Prng(XoshiroState),
     #[cfg(test)]
     Recording {
@@ -88,8 +88,8 @@ enum RngSource {
 /// Private `xoshiro256**` state and step function used by both `Prng`
 /// and `Recording` sources.
 ///
-/// Kept out of [`Rng`] itself so `Rng` has only one entropy boundary
-/// ([`Rng::fill`]) — Recording / Replay cannot expose a separate raw
+/// Kept out of [`TestCaseContext`] itself so `TestCaseContext` has only one entropy boundary
+/// ([`TestCaseContext::fill`]) — Recording / Replay cannot expose a separate raw
 /// `next_u64` path with mode-dependent semantics.
 struct XoshiroState {
     state: [u64; 4],
@@ -137,12 +137,12 @@ impl XoshiroState {
 
 /// Bytes and attempt spans consumed by a single case, in call order.
 ///
-/// - Each non-empty [`Rng::fill`] call is one entry in `draws`.
+/// - Each non-empty [`TestCaseContext::fill`] call is one entry in `draws`.
 /// - Each `sample_with_rejection` attempt (including nested ones) is
 ///   one entry in `spans`.
 ///
 /// Empty `fill` calls neither consume PRNG state nor produce a draw
-/// entry, matching the existing `Rng::fill(&mut [])` contract.
+/// entry, matching the existing `TestCaseContext::fill(&mut [])` contract.
 #[cfg(test)]
 #[derive(Default, Clone)]
 pub(crate) struct ChoiceSequence {
@@ -180,7 +180,7 @@ pub(crate) struct AttemptSpan {
 ///
 /// Kept out of `#[cfg(test)]` because `sample_with_rejection` (a
 /// public production function) needs to pass this to
-/// `Rng::end_attempt`; the Prng branch discards it, so it costs
+/// `TestCaseContext::end_attempt`; the Prng branch discards it, so it costs
 /// nothing at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttemptVerdict {
@@ -238,15 +238,15 @@ pub(crate) enum SpanMismatchReason {
 #[cfg(test)]
 struct ReplayAbort;
 
-/// Private control-flow marker used by [`Rng::reject_case`] to unwind
+/// Private control-flow marker used by [`TestCaseContext::reject_case`] to unwind
 /// out of the property closure. [`Runner::run`](crate::Runner::run)
 /// catches it and, in combination with the `rejection` state saved on
-/// the [`Rng`], treats the iteration as rejected. Never sent from a
+/// the [`TestCaseContext`], treats the iteration as rejected. Never sent from a
 /// context that lacks the catching boundary — `reject_case` checks
-/// `Rng::inside_runner` first.
+/// `TestCaseContext::inside_runner` first.
 pub(crate) struct IterationRejected;
 
-/// Diagnostic state saved by [`Rng::reject_case`] before it unwinds.
+/// Diagnostic state saved by [`TestCaseContext::reject_case`] before it unwinds.
 /// Runner reads this after `catch_unwind` and reports it on
 /// [`TooManyRejections`](crate::Error) failures.
 #[derive(Debug, Clone, Copy)]
@@ -348,15 +348,15 @@ struct DedupState {
     elided: usize,
 }
 
-impl Rng {
-    /// Create a new [`Rng`] from a 64-bit seed.
+impl TestCaseContext {
+    /// Create a new [`TestCaseContext`] from a 64-bit seed.
     ///
     /// The seed is expanded to the 256-bit internal state through
     /// SplitMix64. Passing the same seed twice always produces the same
     /// output stream.
     pub fn new(seed: u64) -> Self {
         Self {
-            source: RngSource::Prng(XoshiroState::from_seed(seed)),
+            source: RandomSource::Prng(XoshiroState::from_seed(seed)),
             generated: Vec::new(),
             dedup: DedupState::default(),
             rejection: None,
@@ -366,7 +366,7 @@ impl Rng {
 
     /// Reject the current iteration and unwind out of the property
     /// closure. Only valid inside [`Runner::run`](crate::Runner::run);
-    /// calling this from a `Rng` constructed outside a runner panics
+    /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
     /// Prefer
@@ -386,8 +386,8 @@ impl Rng {
     pub fn reject_case(&mut self) -> ! {
         if !self.inside_runner {
             panic!(
-                "noprop::Rng::reject_case can only be called from inside a Runner::run \
-                 property closure. Constructing an Rng directly via Rng::new does not \
+                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run \
+                 property closure. Constructing an TestCaseContext directly via TestCaseContext::new does not \
                  create a Runner boundary."
             );
         }
@@ -399,28 +399,28 @@ impl Rng {
     /// Fill `dst` with random bytes. An empty slice consumes no RNG
     /// state and produces no [`ChoiceSequence`] entry.
     ///
-    /// This is the single entropy boundary of [`Rng`]. In `Recording`
+    /// This is the single entropy boundary of [`TestCaseContext`]. In `Recording`
     /// mode each non-empty call is copied into the sequence in order;
     /// in `Replay` mode bytes are read strictly from the recorded
     /// sequence and structural mismatch aborts via a private
     /// control-flow marker.
     ///
-    /// `pub(crate)` — see the [`Rng`] type-level docs for why.
+    /// `pub(crate)` — see the [`TestCaseContext`] type-level docs for why.
     pub(crate) fn fill(&mut self, dst: &mut [u8]) {
         if dst.is_empty() {
             return;
         }
         match &mut self.source {
-            RngSource::Prng(state) => state.fill(dst),
+            RandomSource::Prng(state) => state.fill(dst),
             #[cfg(test)]
-            RngSource::Recording {
+            RandomSource::Recording {
                 state, sequence, ..
             } => {
                 state.fill(dst);
                 sequence.draws.push(dst.to_vec());
             }
             #[cfg(test)]
-            RngSource::Replay {
+            RandomSource::Replay {
                 sequence,
                 next_draw,
                 error,
@@ -457,9 +457,9 @@ impl Rng {
     /// back to `end_attempt`.
     pub(crate) fn begin_attempt(&mut self) -> Option<usize> {
         match &mut self.source {
-            RngSource::Prng(_) => None,
+            RandomSource::Prng(_) => None,
             #[cfg(test)]
-            RngSource::Recording {
+            RandomSource::Recording {
                 sequence,
                 current_parent,
                 ..
@@ -476,7 +476,7 @@ impl Rng {
                 Some(idx)
             }
             #[cfg(test)]
-            RngSource::Replay {
+            RandomSource::Replay {
                 sequence,
                 next_draw,
                 next_span,
@@ -525,12 +525,12 @@ impl Rng {
     pub(crate) fn end_attempt(&mut self, id: Option<usize>, verdict: AttemptVerdict) {
         debug_assert!(!matches!(verdict, AttemptVerdict::Pending));
         match &mut self.source {
-            RngSource::Prng(_) => {
+            RandomSource::Prng(_) => {
                 let _ = id;
                 let _ = verdict;
             }
             #[cfg(test)]
-            RngSource::Recording {
+            RandomSource::Recording {
                 sequence,
                 current_parent,
                 ..
@@ -543,7 +543,7 @@ impl Rng {
                 *current_parent = span.parent;
             }
             #[cfg(test)]
-            RngSource::Replay {
+            RandomSource::Replay {
                 sequence,
                 next_draw,
                 current_parent,
@@ -581,7 +581,7 @@ impl Rng {
     }
 
     /// Consume and return any pending rejection state saved by
-    /// [`Rng::reject_case`]. Called by
+    /// [`TestCaseContext::reject_case`]. Called by
     /// [`Runner::run`](crate::Runner::run) after each case boundary so
     /// a set state wins over the closure's own `Ok` / `Err` / non-marker
     /// panic outcome.
@@ -589,7 +589,7 @@ impl Rng {
         self.rejection.take()
     }
 
-    /// Record a generated value in this Rng's buffer. Called from every
+    /// Record a generated value in this TestCaseContext's buffer. Called from every
     /// primitive generator right after producing the value.
     ///
     /// `location` should be `std::panic::Location::caller()` captured at
@@ -677,9 +677,9 @@ impl Rng {
     }
 
     /// Enable the Runner-only guard on
-    /// [`Rng::reject_case`]. Called by
+    /// [`TestCaseContext::reject_case`]. Called by
     /// [`Runner::run`](crate::Runner::run) immediately after
-    /// constructing its `Rng`.
+    /// constructing its `TestCaseContext`.
     pub(crate) fn set_inside_runner(&mut self) {
         self.inside_runner = true;
     }
@@ -687,9 +687,9 @@ impl Rng {
 
 /// Session that records a case's [`ChoiceSequence`] from a seed.
 ///
-/// The session owns the `Rng` handed to the closure and returns it
+/// The session owns the `TestCaseContext` handed to the closure and returns it
 /// alongside the closure's own return value. Recording is not woven
-/// into `Rng::new` or `Runner::run` because those production paths
+/// into `TestCaseContext::new` or `Runner::run` because those production paths
 /// have no consumer for the sequence — [`RecordingSession`] is the
 /// only entry point that allocates one.
 #[cfg(test)]
@@ -705,10 +705,10 @@ impl RecordingSession {
 
     pub(crate) fn run<T, F>(self, f: F) -> (T, ChoiceSequence)
     where
-        F: FnOnce(&mut Rng) -> T,
+        F: FnOnce(&mut TestCaseContext) -> T,
     {
-        let mut rng = Rng {
-            source: RngSource::Recording {
+        let mut ctx = TestCaseContext {
+            source: RandomSource::Recording {
                 state: XoshiroState::from_seed(self.seed),
                 sequence: ChoiceSequence::default(),
                 current_parent: None,
@@ -718,9 +718,9 @@ impl RecordingSession {
             rejection: None,
             inside_runner: false,
         };
-        let value = f(&mut rng);
-        let sequence = match rng.source {
-            RngSource::Recording { sequence, .. } => sequence,
+        let value = f(&mut ctx);
+        let sequence = match ctx.source {
+            RandomSource::Recording { sequence, .. } => sequence,
             _ => unreachable!("RecordingSession constructs Recording variant"),
         };
         (value, sequence)
@@ -736,8 +736,8 @@ impl RecordingSession {
 /// state.
 ///
 /// Because [`AssertUnwindSafe`] does not roll back external state,
-/// anything the closure mutated outside `Rng` before hitting a replay
-/// mismatch stays mutated after this method returns. `Rng` external
+/// anything the closure mutated outside `TestCaseContext` before hitting a replay
+/// mismatch stays mutated after this method returns. `TestCaseContext` external
 /// state is not covered by the replay contract.
 #[cfg(test)]
 pub(crate) struct ReplaySession {
@@ -752,11 +752,11 @@ impl ReplaySession {
 
     pub(crate) fn run<T, F>(self, f: F) -> Result<T, ReplayError>
     where
-        F: FnOnce(&mut Rng) -> T,
+        F: FnOnce(&mut TestCaseContext) -> T,
     {
         let total_spans = self.sequence.spans.len();
-        let mut rng = Rng {
-            source: RngSource::Replay {
+        let mut ctx = TestCaseContext {
+            source: RandomSource::Replay {
                 sequence: self.sequence,
                 next_draw: 0,
                 next_span: 0,
@@ -768,9 +768,9 @@ impl ReplaySession {
             rejection: None,
             inside_runner: false,
         };
-        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut rng)));
-        let (sequence, next_draw, next_span, error) = match rng.source {
-            RngSource::Replay {
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
+        let (sequence, next_draw, next_span, error) = match ctx.source {
+            RandomSource::Replay {
                 sequence,
                 next_draw,
                 next_span,
@@ -821,7 +821,7 @@ impl ReplaySession {
 }
 
 /// Returns whether an unwind payload is the private
-/// [`IterationRejected`] marker sent by [`Rng::reject_case`]. Used by
+/// [`IterationRejected`] marker sent by [`TestCaseContext::reject_case`]. Used by
 /// [`Runner::run`](crate::Runner::run) to distinguish rejection from
 /// user panics.
 pub(crate) fn is_iteration_rejected(payload: &(dyn Any + Send)) -> bool {
@@ -866,12 +866,12 @@ impl SplitMix64 {
 mod tests {
     use super::*;
 
-    // === Seed determinism (fill-based; next_u64 is no longer on Rng) ===
+    // === Seed determinism (fill-based; next_u64 is no longer on TestCaseContext) ===
 
     #[test]
     fn same_seed_gives_same_sequence() {
-        let mut a = Rng::new(0xDEAD_BEEF);
-        let mut b = Rng::new(0xDEAD_BEEF);
+        let mut a = TestCaseContext::new(0xDEAD_BEEF);
+        let mut b = TestCaseContext::new(0xDEAD_BEEF);
         for _ in 0..256 {
             let mut buf_a = [0u8; 8];
             let mut buf_b = [0u8; 8];
@@ -883,8 +883,8 @@ mod tests {
 
     #[test]
     fn different_seeds_differ() {
-        let mut a = Rng::new(1);
-        let mut b = Rng::new(2);
+        let mut a = TestCaseContext::new(1);
+        let mut b = TestCaseContext::new(2);
         let mut buf_a = [0u8; 8];
         let mut buf_b = [0u8; 8];
         a.fill(&mut buf_a);
@@ -894,20 +894,20 @@ mod tests {
 
     #[test]
     fn seed_zero_produces_nonzero_output() {
-        let mut rng = Rng::new(0);
+        let mut ctx = TestCaseContext::new(0);
         let mut buf = [0u8; 8];
-        rng.fill(&mut buf);
+        ctx.fill(&mut buf);
         assert_ne!(buf, [0u8; 8]);
     }
 
     #[test]
     fn fill_matches_le_bytes_of_xoshiro_step() {
-        // `Rng::fill` must emit the little-endian bytes of successive
+        // `TestCaseContext::fill` must emit the little-endian bytes of successive
         // xoshiro256** `next_u64()` outputs, in order.
-        let mut rng = Rng::new(42);
+        let mut ctx = TestCaseContext::new(42);
         let mut xs = XoshiroState::from_seed(42);
         let mut buf = [0u8; 24];
-        rng.fill(&mut buf);
+        ctx.fill(&mut buf);
         for chunk in buf.chunks_exact(8) {
             assert_eq!(chunk, &xs.next_u64().to_le_bytes());
         }
@@ -915,8 +915,8 @@ mod tests {
 
     #[test]
     fn fill_is_deterministic_for_non_multiple_of_eight() {
-        let mut a = Rng::new(7);
-        let mut b = Rng::new(7);
+        let mut a = TestCaseContext::new(7);
+        let mut b = TestCaseContext::new(7);
         let mut buf_a = [0u8; 5];
         let mut buf_b = [0u8; 5];
         a.fill(&mut buf_a);
@@ -927,14 +927,14 @@ mod tests {
     #[test]
     fn fill_empty_buffer_does_not_advance() {
         // Filling an empty slice must not consume any PRNG state, so
-        // the next non-empty fill must match a fresh Rng's first fill.
-        let mut rng = Rng::new(1);
+        // the next non-empty fill must match a fresh TestCaseContext's first fill.
+        let mut ctx = TestCaseContext::new(1);
         let empty: &mut [u8] = &mut [];
-        rng.fill(empty);
-        let mut fresh = Rng::new(1);
+        ctx.fill(empty);
+        let mut fresh = TestCaseContext::new(1);
         let mut buf_after = [0u8; 8];
         let mut buf_fresh = [0u8; 8];
-        rng.fill(&mut buf_after);
+        ctx.fill(&mut buf_after);
         fresh.fill(&mut buf_fresh);
         assert_eq!(buf_after, buf_fresh);
     }
@@ -943,10 +943,10 @@ mod tests {
 
     #[test]
     fn fill_bit_exact_multiple_of_eight() {
-        let mut rng = Rng::new(0xDEAD_BEEF);
+        let mut ctx = TestCaseContext::new(0xDEAD_BEEF);
         let mut buf = [0u8; 16];
-        rng.fill(&mut buf);
-        let mut fresh = Rng::new(0xDEAD_BEEF);
+        ctx.fill(&mut buf);
+        let mut fresh = TestCaseContext::new(0xDEAD_BEEF);
         let mut expected = [0u8; 16];
         fresh.fill(&mut expected);
         assert_eq!(buf, expected);
@@ -955,19 +955,19 @@ mod tests {
 
     #[test]
     fn fill_bit_exact_non_multiple_of_eight_tail() {
-        let mut rng = Rng::new(0xDEAD_BEEF);
+        let mut ctx = TestCaseContext::new(0xDEAD_BEEF);
         let mut buf = [0u8; 5];
-        rng.fill(&mut buf);
+        ctx.fill(&mut buf);
         assert_eq!(buf, expected_bytes(0xDEAD_BEEF, 5).as_slice());
     }
 
     #[test]
     fn fill_bit_exact_empty_slice_leaves_state_untouched() {
-        let mut rng = Rng::new(0xDEAD_BEEF);
+        let mut ctx = TestCaseContext::new(0xDEAD_BEEF);
         let empty: &mut [u8] = &mut [];
-        rng.fill(empty);
+        ctx.fill(empty);
         let mut buf = [0u8; 8];
-        rng.fill(&mut buf);
+        ctx.fill(&mut buf);
         assert_eq!(buf, expected_bytes(0xDEAD_BEEF, 8).as_slice());
     }
 
@@ -1004,15 +1004,15 @@ mod tests {
 
     #[test]
     fn recording_session_captures_one_draw_per_non_empty_fill() {
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
             let mut b = [0u8; 3];
-            rng.fill(&mut b);
+            ctx.fill(&mut b);
             let empty: &mut [u8] = &mut [];
-            rng.fill(empty);
+            ctx.fill(empty);
             let mut c = [0u8; 8];
-            rng.fill(&mut c);
+            ctx.fill(&mut c);
         });
         assert_eq!(seq.draws().len(), 3);
         assert_eq!(seq.draws()[0].len(), 4);
@@ -1022,22 +1022,22 @@ mod tests {
 
     #[test]
     fn replay_reproduces_recorded_bytes() {
-        let ((), seq) = RecordingSession::new(0xFEED).run(|rng| {
+        let ((), seq) = RecordingSession::new(0xFEED).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
             let mut b = [0u8; 8];
-            rng.fill(&mut b);
+            ctx.fill(&mut b);
         });
 
         let recorded_a = seq.draws()[0].clone();
         let recorded_b = seq.draws()[1].clone();
 
         let result = ReplaySession::new(seq)
-            .run(|rng| {
+            .run(|ctx| {
                 let mut a = [0u8; 4];
-                rng.fill(&mut a);
+                ctx.fill(&mut a);
                 let mut b = [0u8; 8];
-                rng.fill(&mut b);
+                ctx.fill(&mut b);
                 (a.to_vec(), b.to_vec())
             })
             .expect("replay of same shape must succeed");
@@ -1047,15 +1047,15 @@ mod tests {
 
     #[test]
     fn replay_reports_sequence_exhausted() {
-        let (_, seq) = RecordingSession::new(1).run(|rng| {
+        let (_, seq) = RecordingSession::new(1).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
+        let result = ReplaySession::new(seq).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
             let mut b = [0u8; 4];
-            rng.fill(&mut b);
+            ctx.fill(&mut b);
         });
         assert!(matches!(
             result,
@@ -1065,13 +1065,13 @@ mod tests {
 
     #[test]
     fn replay_reports_draw_length_mismatch() {
-        let (_, seq) = RecordingSession::new(1).run(|rng| {
+        let (_, seq) = RecordingSession::new(1).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
+        let result = ReplaySession::new(seq).run(|ctx| {
             let mut a = [0u8; 8];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
         assert!(matches!(
             result,
@@ -1084,15 +1084,15 @@ mod tests {
 
     #[test]
     fn replay_reports_leftover_draws() {
-        let (_, seq) = RecordingSession::new(1).run(|rng| {
+        let (_, seq) = RecordingSession::new(1).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
             let mut b = [0u8; 4];
-            rng.fill(&mut b);
+            ctx.fill(&mut b);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
+        let result = ReplaySession::new(seq).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
         assert!(matches!(
             result,
@@ -1102,16 +1102,16 @@ mod tests {
 
     #[test]
     fn replay_error_persists_when_user_catches_marker() {
-        let (_, seq) = RecordingSession::new(1).run(|rng| {
+        let (_, seq) = RecordingSession::new(1).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
+        let result = ReplaySession::new(seq).run(|ctx| {
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut a = [0u8; 4];
-                rng.fill(&mut a);
+                ctx.fill(&mut a);
                 let mut b = [0u8; 4];
-                rng.fill(&mut b);
+                ctx.fill(&mut b);
             }));
             42u32
         });
@@ -1123,9 +1123,9 @@ mod tests {
 
     #[test]
     fn replay_reraises_non_marker_user_panic() {
-        let (_, seq) = RecordingSession::new(1).run(|rng| {
+        let (_, seq) = RecordingSession::new(1).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let _ = ReplaySession::new(seq).run(|_rng| panic!("user panic"));
@@ -1141,19 +1141,19 @@ mod tests {
 
     #[test]
     fn prng_source_allocates_no_choice_sequence() {
-        let rng = Rng::new(1);
-        assert!(matches!(rng.source, RngSource::Prng(_)));
+        let ctx = TestCaseContext::new(1);
+        assert!(matches!(ctx.source, RandomSource::Prng(_)));
     }
 
     #[test]
     fn recording_and_prng_produce_same_bytes_for_same_seed() {
-        let mut prng = Rng::new(0x00C0_FFEE);
+        let mut prng = TestCaseContext::new(0x00C0_FFEE);
         let mut expected = [0u8; 32];
         prng.fill(&mut expected);
 
-        let ((), seq) = RecordingSession::new(0x00C0_FFEE).run(|rng| {
+        let ((), seq) = RecordingSession::new(0x00C0_FFEE).run(|ctx| {
             let mut buf = [0u8; 32];
-            rng.fill(&mut buf);
+            ctx.fill(&mut buf);
         });
         assert_eq!(seq.draws().len(), 1);
         assert_eq!(seq.draws()[0], expected);
@@ -1164,25 +1164,25 @@ mod tests {
     #[test]
     #[should_panic(expected = "Runner::run")]
     fn reject_case_outside_runner_panics_with_helpful_message() {
-        let mut rng = Rng::new(1);
-        rng.reject_case();
+        let mut ctx = TestCaseContext::new(1);
+        ctx.reject_case();
     }
 
     // === Attempt span recording + replay ===
 
     #[test]
     fn recording_captures_flat_attempt_spans() {
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
             // Two top-level attempts, each of which does one 4-byte fill.
-            let id = rng.begin_attempt();
+            let id = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            rng.end_attempt(id, AttemptVerdict::Rejected);
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Rejected);
 
-            let id = rng.begin_attempt();
+            let id = ctx.begin_attempt();
             let mut b = [0u8; 4];
-            rng.fill(&mut b);
-            rng.end_attempt(id, AttemptVerdict::Accepted);
+            ctx.fill(&mut b);
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
         });
         assert_eq!(seq.spans().len(), 2);
         assert_eq!(seq.spans()[0].parent, None);
@@ -1197,19 +1197,19 @@ mod tests {
 
     #[test]
     fn recording_captures_nested_attempt_spans() {
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
-            let outer = rng.begin_attempt();
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let outer = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            let inner = rng.begin_attempt();
+            ctx.fill(&mut a);
+            let inner = ctx.begin_attempt();
             let mut b = [0u8; 4];
-            rng.fill(&mut b);
-            rng.end_attempt(inner, AttemptVerdict::Rejected);
-            let inner2 = rng.begin_attempt();
+            ctx.fill(&mut b);
+            ctx.end_attempt(inner, AttemptVerdict::Rejected);
+            let inner2 = ctx.begin_attempt();
             let mut c = [0u8; 4];
-            rng.fill(&mut c);
-            rng.end_attempt(inner2, AttemptVerdict::Accepted);
-            rng.end_attempt(outer, AttemptVerdict::Accepted);
+            ctx.fill(&mut c);
+            ctx.end_attempt(inner2, AttemptVerdict::Accepted);
+            ctx.end_attempt(outer, AttemptVerdict::Accepted);
         });
         assert_eq!(seq.spans().len(), 3);
         assert_eq!(seq.spans()[0].parent, None);
@@ -1225,42 +1225,42 @@ mod tests {
 
     #[test]
     fn replay_reproduces_nested_attempt_spans() {
-        let ((), seq) = RecordingSession::new(9).run(|rng| {
-            let outer = rng.begin_attempt();
+        let ((), seq) = RecordingSession::new(9).run(|ctx| {
+            let outer = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            let inner = rng.begin_attempt();
+            ctx.fill(&mut a);
+            let inner = ctx.begin_attempt();
             let mut b = [0u8; 4];
-            rng.fill(&mut b);
-            rng.end_attempt(inner, AttemptVerdict::Rejected);
-            rng.end_attempt(outer, AttemptVerdict::Accepted);
+            ctx.fill(&mut b);
+            ctx.end_attempt(inner, AttemptVerdict::Rejected);
+            ctx.end_attempt(outer, AttemptVerdict::Accepted);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
-            let outer = rng.begin_attempt();
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let outer = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            let inner = rng.begin_attempt();
+            ctx.fill(&mut a);
+            let inner = ctx.begin_attempt();
             let mut b = [0u8; 4];
-            rng.fill(&mut b);
-            rng.end_attempt(inner, AttemptVerdict::Rejected);
-            rng.end_attempt(outer, AttemptVerdict::Accepted);
+            ctx.fill(&mut b);
+            ctx.end_attempt(inner, AttemptVerdict::Rejected);
+            ctx.end_attempt(outer, AttemptVerdict::Accepted);
         });
         assert_eq!(result, Ok(()));
     }
 
     #[test]
     fn replay_flags_verdict_mismatch() {
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
-            let id = rng.begin_attempt();
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let id = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            rng.end_attempt(id, AttemptVerdict::Accepted);
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
-            let id = rng.begin_attempt();
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let id = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            rng.end_attempt(id, AttemptVerdict::Rejected);
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Rejected);
         });
         assert!(matches!(
             result,
@@ -1276,19 +1276,19 @@ mod tests {
 
     #[test]
     fn replay_flags_span_sequence_exhausted() {
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
-            let id = rng.begin_attempt();
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let id = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            rng.end_attempt(id, AttemptVerdict::Accepted);
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
-            let id = rng.begin_attempt();
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let id = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            rng.end_attempt(id, AttemptVerdict::Accepted);
-            let extra = rng.begin_attempt();
-            rng.end_attempt(extra, AttemptVerdict::Accepted);
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
+            let extra = ctx.begin_attempt();
+            ctx.end_attempt(extra, AttemptVerdict::Accepted);
         });
         assert!(matches!(
             result,
@@ -1304,15 +1304,15 @@ mod tests {
         // Recording had a span wrapping one draw; replay consumed the
         // draw directly without a matching begin/end, so all draws are
         // used but one span is unread.
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
-            let id = rng.begin_attempt();
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let id = ctx.begin_attempt();
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
-            rng.end_attempt(id, AttemptVerdict::Accepted);
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
         });
-        let result = ReplaySession::new(seq).run(|rng| {
+        let result = ReplaySession::new(seq).run(|ctx| {
             let mut a = [0u8; 4];
-            rng.fill(&mut a);
+            ctx.fill(&mut a);
         });
         assert!(matches!(
             result,
@@ -1322,11 +1322,11 @@ mod tests {
 
     #[test]
     fn zero_draw_attempts_are_recorded_as_empty_range() {
-        let ((), seq) = RecordingSession::new(1).run(|rng| {
-            let id = rng.begin_attempt();
-            rng.end_attempt(id, AttemptVerdict::Rejected);
-            let id = rng.begin_attempt();
-            rng.end_attempt(id, AttemptVerdict::Accepted);
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let id = ctx.begin_attempt();
+            ctx.end_attempt(id, AttemptVerdict::Rejected);
+            let id = ctx.begin_attempt();
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
         });
         assert_eq!(seq.spans().len(), 2);
         assert_eq!(seq.spans()[0].start_draw, seq.spans()[0].end_draw);

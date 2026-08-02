@@ -17,5 +17,5 @@ pub use generator::{
     sample_u16, sample_u32, sample_u64, sample_u128, sample_usize, sample_usize_in,
     sample_weighted_index, sample_with_rejection,
 };
-pub use rng::{GeneratedValue, Rng};
+pub use rng::{GeneratedValue, TestCaseContext};
 pub use runner::Runner;

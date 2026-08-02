@@ -1,9 +1,9 @@
 //! Value generators.
 //!
-//! Every generator has the shape `fn sample_X(rng: &mut Rng) -> X`. User
+//! Every generator has the shape `fn sample_X(ctx: &mut TestCaseContext) -> X`. User
 //! code composes generators with plain Rust — closures, `match`, `for`,
 //! iterators — so property tests read like ordinary Rust code, and user
-//! generators (`fn sample_person(rng: &mut Rng) -> Person`) have the
+//! generators (`fn sample_person(ctx: &mut TestCaseContext) -> Person`) have the
 //! same shape as the built-in ones.
 //!
 //! # Composing generators
@@ -12,26 +12,26 @@
 //! them sequentially inside a plain function or closure:
 //!
 //! ```
-//! use noprop::Rng;
+//! use noprop::TestCaseContext;
 //!
-//! fn sample_bounded_vec(rng: &mut Rng) -> Vec<u32> {
+//! fn sample_bounded_vec(ctx: &mut TestCaseContext) -> Vec<u32> {
 //!     // Pick a length first, then a Vec of that length.
-//!     let len = noprop::sample_usize_in(rng, 0..10);
-//!     (0..len).map(|_| noprop::sample_u32(rng)).collect()
+//!     let len = noprop::sample_usize_in(ctx, 0..10);
+//!     (0..len).map(|_| noprop::sample_u32(ctx)).collect()
 //! }
 //!
-//! let mut rng = Rng::new(0);
-//! let _v: Vec<u32> = sample_bounded_vec(&mut rng);
+//! let mut ctx = TestCaseContext::new(0);
+//! let _v: Vec<u32> = sample_bounded_vec(&mut ctx);
 //! ```
 //!
 //! For "one-of-N" branching between code paths, `match` on a small
 //! random value produced by [`sample_usize_in`]:
 //!
 //! ```
-//! let mut rng = noprop::Rng::new(0);
-//! let _x: u32 = match noprop::sample_usize_in(&mut rng, 0..3) {
+//! let mut ctx = noprop::TestCaseContext::new(0);
+//! let _x: u32 = match noprop::sample_usize_in(&mut ctx, 0..3) {
 //!     0 => 0,
-//!     1 => noprop::sample_u32(&mut rng),
+//!     1 => noprop::sample_u32(&mut ctx),
 //!     _ => u32::MAX,
 //! };
 //! ```
@@ -40,11 +40,11 @@
 //! [`sample_ratio`] for a two-way split):
 //!
 //! ```
-//! let mut rng = noprop::Rng::new(0);
+//! let mut ctx = noprop::TestCaseContext::new(0);
 //! // Pick branch 0 with weight 5, branch 1 with weight 3, branch 2 with weight 2.
-//! let _x: u32 = match noprop::sample_weighted_index(&mut rng, &[5, 3, 2]) {
+//! let _x: u32 = match noprop::sample_weighted_index(&mut ctx, &[5, 3, 2]) {
 //!     0 => 0,
-//!     1 => noprop::sample_u32(&mut rng),
+//!     1 => noprop::sample_u32(&mut ctx),
 //!     _ => u32::MAX,
 //! };
 //! ```
@@ -52,18 +52,18 @@
 //! To pick one value from a fixed list, use [`sample_choice`]:
 //!
 //! ```
-//! let mut rng = noprop::Rng::new(0);
-//! let _n = noprop::sample_choice(&mut rng, &[1, 2, 3, 5, 8]);
-//! let _digit = noprop::sample_choice(&mut rng, b"0123456789") as char;
+//! let mut ctx = noprop::TestCaseContext::new(0);
+//! let _n = noprop::sample_choice(&mut ctx, &[1, 2, 3, 5, 8]);
+//! let _digit = noprop::sample_choice(&mut ctx, b"0123456789") as char;
 //! ```
 //!
 //! For bounded retry (filter-style generation), combine a range iterator
 //! with `.find()`:
 //!
 //! ```
-//! let mut rng = noprop::Rng::new(0);
+//! let mut ctx = noprop::TestCaseContext::new(0);
 //! let even: Option<u32> = (0..100)
-//!     .map(|_| noprop::sample_u32(&mut rng))
+//!     .map(|_| noprop::sample_u32(&mut ctx))
 //!     .find(|x| x % 2 == 0);
 //! # assert!(even.is_some());
 //! ```
@@ -76,7 +76,7 @@
 //! a hand-written `loop { … }`. Unbounded manual retries can wedge on
 //! specific choice sequences; the helper enforces a `max_attempts`
 //! bound and, on exhaustion, calls
-//! [`Rng::reject_case`](crate::Rng::reject_case) so the enclosing
+//! [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) so the enclosing
 //! [`Runner::run`](crate::Runner::run) discards the iteration and
 //! moves on. Prefer valid-by-construction generators when the accepted
 //! rate is very low.
@@ -92,7 +92,7 @@
 //! outcome depends on where the call sits: inside a
 //! [`Runner::run`](crate::Runner::run) the four APIs above indirectly
 //! reject the iteration (via
-//! [`Rng::reject_case`](crate::Rng::reject_case)); outside a runner
+//! [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case)); outside a runner
 //! the call panics with a Runner-only message. This is a semantic
 //! change from the previous unbounded loop, kept explicit here rather
 //! than repeated in every affected function's rustdoc.
@@ -114,10 +114,10 @@
 //! it.
 //!
 //! ```
-//! # let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|rng| {
+//! # let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|ctx| {
 //! use std::num::NonZeroU32;
-//! let n = noprop::sample_with_rejection(rng, 64, |rng| {
-//!     NonZeroU32::new(noprop::sample_u32(rng))
+//! let n = noprop::sample_with_rejection(ctx, 64, |ctx| {
+//!     NonZeroU32::new(noprop::sample_u32(ctx))
 //! });
 //! assert!(n.get() != 0);
 //! # Ok(())
@@ -131,8 +131,8 @@
 //!
 //! ```
 //! use std::num::NonZeroU32;
-//! let mut rng = noprop::Rng::new(0);
-//! let v = noprop::sample_u32(&mut rng);
+//! let mut ctx = noprop::TestCaseContext::new(0);
+//! let v = noprop::sample_u32(&mut ctx);
 //! let n = NonZeroU32::new(if v == 0 { 1 } else { v })
 //!     .expect("v was remapped away from zero");
 //! assert!(n.get() != 0);
@@ -161,16 +161,16 @@
 use std::ops::{Bound, RangeBounds};
 use std::panic::Location;
 
-use crate::Rng;
+use crate::TestCaseContext;
 use crate::rng::AttemptVerdict;
 
-/// Read `N` bytes from `rng` without recording. Used by every primitive
+/// Read `N` bytes from `ctx` without recording. Used by every primitive
 /// so that composite generators (non-zero variants, `sample_char`,
 /// floats, `sample_choice`) can consume randomness without producing
 /// intermediate trace entries for the raw byte source.
-fn raw_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
+fn raw_bytes<const N: usize>(ctx: &mut TestCaseContext) -> [u8; N] {
     let mut buf = [0u8; N];
-    rng.fill(&mut buf);
+    ctx.fill(&mut buf);
     buf
 }
 
@@ -185,7 +185,7 @@ pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
 /// Repeatedly invoke `attempt` up to `max_attempts` times until it
 /// returns `Some`, then return that value. On exhaustion (all attempts
 /// returned `None`) this calls
-/// [`Rng::reject_case`](crate::Rng::reject_case), which unwinds out to
+/// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case), which unwinds out to
 /// the enclosing [`Runner::run`](crate::Runner::run) and marks the
 /// current iteration as rejected — so this function's return type is
 /// `T`, not `Option<T>`.
@@ -231,12 +231,12 @@ pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
 /// # Examples
 ///
 /// ```
-/// # let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|rng| {
+/// # let _: noprop::Result<()> = noprop::Runner { seed: 0, iterations: 1 }.run(|ctx| {
 /// // Sample an even u32 in at most 8 attempts. If all 8 attempts are
 /// // odd (probability 1/256), the iteration is rejected and Runner
 /// // tries the next one.
-/// let even = noprop::sample_with_rejection(rng, 8, |rng| {
-///     let x = noprop::sample_u32(rng);
+/// let even = noprop::sample_with_rejection(ctx, 8, |ctx| {
+///     let x = noprop::sample_u32(ctx);
 ///     if x % 2 == 0 { Some(x) } else { None }
 /// });
 /// assert_eq!(even % 2, 0);
@@ -244,27 +244,27 @@ pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
 /// # });
 /// ```
 #[track_caller]
-pub fn sample_with_rejection<T, F>(rng: &mut Rng, max_attempts: usize, mut attempt: F) -> T
+pub fn sample_with_rejection<T, F>(ctx: &mut TestCaseContext, max_attempts: usize, mut attempt: F) -> T
 where
-    F: FnMut(&mut Rng) -> Option<T>,
+    F: FnMut(&mut TestCaseContext) -> Option<T>,
 {
     assert!(
         max_attempts > 0,
         "sample_with_rejection: max_attempts must be > 0"
     );
     for _ in 0..max_attempts {
-        let id = rng.begin_attempt();
-        match attempt(rng) {
+        let id = ctx.begin_attempt();
+        match attempt(ctx) {
             Some(value) => {
-                rng.end_attempt(id, AttemptVerdict::Accepted);
+                ctx.end_attempt(id, AttemptVerdict::Accepted);
                 return value;
             }
             None => {
-                rng.end_attempt(id, AttemptVerdict::Rejected);
+                ctx.end_attempt(id, AttemptVerdict::Rejected);
             }
         }
     }
-    rng.reject_case()
+    ctx.reject_case()
 }
 
 // === Bounded-domain sampler ===
@@ -287,7 +287,7 @@ where
 /// just above a power of two; the probability of exhausting 64
 /// attempts is therefore `< 2⁻⁶⁴`.
 #[track_caller]
-fn sample_below(rng: &mut Rng, n: u64) -> u64 {
+fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
     debug_assert!(n > 0, "sample_below: n must be non-zero");
     if n == 1 {
         return 0;
@@ -302,11 +302,11 @@ fn sample_below(rng: &mut Rng, n: u64) -> u64 {
     //     values, i.e. accept iff x < u64::MAX - r.
     let r = u64::MAX % n;
     if r == n - 1 {
-        return u64::from_le_bytes(raw_bytes(rng)) % n;
+        return u64::from_le_bytes(raw_bytes(ctx)) % n;
     }
     let bound = u64::MAX - r;
-    sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        let x = u64::from_le_bytes(raw_bytes(rng));
+    sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        let x = u64::from_le_bytes(raw_bytes(ctx));
         (x < bound).then_some(x % n)
     })
 }
@@ -335,21 +335,21 @@ fn sample_below(rng: &mut Rng, n: u64) -> u64 {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
+/// let mut ctx = noprop::TestCaseContext::new(0);
 /// // Explicit list of ints
-/// let _n = noprop::sample_choice(&mut rng, &[1, 2, 3, 5, 8]);
+/// let _n = noprop::sample_choice(&mut ctx, &[1, 2, 3, 5, 8]);
 /// // ASCII digit from a byte string literal
-/// let _d = noprop::sample_choice(&mut rng, b"0123456789") as char;
+/// let _d = noprop::sample_choice(&mut ctx, b"0123456789") as char;
 /// // Non-ASCII via array literal
-/// let _c = noprop::sample_choice(&mut rng, &['α', 'β', 'γ']);
+/// let _c = noprop::sample_choice(&mut ctx, &['α', 'β', 'γ']);
 /// ```
 #[track_caller]
-pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choices: &[T]) -> T {
+pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(ctx: &mut TestCaseContext, choices: &[T]) -> T {
     assert!(!choices.is_empty(), "sample_choice: empty slice");
     let loc = Location::caller();
-    let idx = sample_below(rng, choices.len() as u64) as usize;
+    let idx = sample_below(ctx, choices.len() as u64) as usize;
     let v = choices[idx].clone();
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -378,16 +378,16 @@ pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(rng: &mut Rng, choice
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
+/// let mut ctx = noprop::TestCaseContext::new(0);
 ///
-/// let idx = noprop::sample_usize_in(&mut rng, 0..10);
+/// let idx = noprop::sample_usize_in(&mut ctx, 0..10);
 /// assert!(idx < 10);
 ///
-/// let day = noprop::sample_usize_in(&mut rng, 1..=31);
+/// let day = noprop::sample_usize_in(&mut ctx, 1..=31);
 /// assert!((1..=31).contains(&day));
 /// ```
 #[track_caller]
-pub fn sample_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize {
+pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: R) -> usize {
     let loc = Location::caller();
     let lo = match range.start_bound() {
         Bound::Included(&s) => s,
@@ -403,16 +403,16 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize 
     let v = if lo == 0 && hi == usize::MAX {
         // Full pointer-width range: a raw byte draw is already unbiased,
         // and hi - lo + 1 would wrap.
-        usize::from_le_bytes(raw_bytes(rng))
+        usize::from_le_bytes(raw_bytes(ctx))
     } else {
         // hi - lo cannot overflow because hi >= lo, and (hi - lo) + 1
         // cannot overflow because we excluded the only case where
         // hi - lo == usize::MAX. Cast to u64 is safe on every Rust
         // target (usize width <= 64).
         let width = (hi - lo) as u64 + 1;
-        lo + sample_below(rng, width) as usize
+        lo + sample_below(ctx, width) as usize
     };
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -420,7 +420,7 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize 
 ///
 /// The typical use is weighting a two-way branch by an exact rational
 /// probability instead of a floating-point one, so that
-/// e.g. `sample_ratio(rng, 1, 3)` is exactly one-in-three, not
+/// e.g. `sample_ratio(ctx, 1, 3)` is exactly one-in-three, not
 /// `0.333…`-close.
 ///
 /// # Panics
@@ -440,16 +440,16 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(rng: &mut Rng, range: R) -> usize 
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
+/// let mut ctx = noprop::TestCaseContext::new(0);
 /// // 1 in 3 chance of true.
-/// let _b = noprop::sample_ratio(&mut rng, 1, 3);
+/// let _b = noprop::sample_ratio(&mut ctx, 1, 3);
 /// // Always false; consumes no RNG.
-/// assert!(!noprop::sample_ratio(&mut rng, 0, 5));
+/// assert!(!noprop::sample_ratio(&mut ctx, 0, 5));
 /// // Always true; consumes no RNG.
-/// assert!(noprop::sample_ratio(&mut rng, 5, 5));
+/// assert!(noprop::sample_ratio(&mut ctx, 5, 5));
 /// ```
 #[track_caller]
-pub fn sample_ratio(rng: &mut Rng, numerator: u32, denominator: u32) -> bool {
+pub fn sample_ratio(ctx: &mut TestCaseContext, numerator: u32, denominator: u32) -> bool {
     let loc = Location::caller();
     assert!(
         denominator != 0,
@@ -464,9 +464,9 @@ pub fn sample_ratio(rng: &mut Rng, numerator: u32, denominator: u32) -> bool {
     } else if numerator == denominator {
         true
     } else {
-        sample_below(rng, denominator as u64) < numerator as u64
+        sample_below(ctx, denominator as u64) < numerator as u64
     };
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -497,13 +497,13 @@ pub fn sample_ratio(rng: &mut Rng, numerator: u32, denominator: u32) -> bool {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
+/// let mut ctx = noprop::TestCaseContext::new(0);
 /// // Roughly 50% branch 0, 30% branch 1, 20% branch 2.
-/// let idx = noprop::sample_weighted_index(&mut rng, &[5, 3, 2]);
+/// let idx = noprop::sample_weighted_index(&mut ctx, &[5, 3, 2]);
 /// assert!(idx < 3);
 /// ```
 #[track_caller]
-pub fn sample_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
+pub fn sample_weighted_index(ctx: &mut TestCaseContext, weights: &[u32]) -> usize {
     let loc = Location::caller();
     assert!(!weights.is_empty(), "sample_weighted_index: empty weights");
     let mut total: u64 = 0;
@@ -513,7 +513,7 @@ pub fn sample_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
             .expect("sample_weighted_index: weight sum overflows u64");
     }
     assert!(total > 0, "sample_weighted_index: all weights are zero");
-    let mut pick = sample_below(rng, total);
+    let mut pick = sample_below(ctx, total);
     let mut chosen = weights.len(); // sentinel; overwritten below
     for (i, &w) in weights.iter().enumerate() {
         let w = w as u64;
@@ -526,7 +526,7 @@ pub fn sample_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
     // Every non-zero-weight index is reachable and pick < total, so the
     // loop must have hit the `pick < w` branch at least once.
     debug_assert!(chosen < weights.len());
-    rng.record_generated(&chosen, loc);
+    ctx.record_generated(&chosen, loc);
     chosen
 }
 
@@ -541,37 +541,37 @@ pub fn sample_weighted_index(rng: &mut Rng, weights: &[u32]) -> usize {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let key: [u8; 32] = noprop::sample_bytes(&mut rng);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let key: [u8; 32] = noprop::sample_bytes(&mut ctx);
 /// assert_eq!(key.len(), 32);
 /// ```
 #[track_caller]
-pub fn sample_bytes<const N: usize>(rng: &mut Rng) -> [u8; N] {
+pub fn sample_bytes<const N: usize>(ctx: &mut TestCaseContext) -> [u8; N] {
     let loc = Location::caller();
-    let bytes = raw_bytes::<N>(rng);
-    rng.record_generated(&bytes, loc);
+    let bytes = raw_bytes::<N>(ctx);
+    ctx.record_generated(&bytes, loc);
     bytes
 }
 
 /// Uniformly-distributed `Vec<u8>` of length `len`.
 ///
 /// Use this when the byte-buffer length is known only at runtime
-/// (`sample_bytes_vec(rng, sample_usize_in(rng, 0..1024))`). The whole
+/// (`sample_bytes_vec(ctx, sample_usize_in(ctx, 0..1024))`). The whole
 /// buffer is recorded as a single trace entry.
 ///
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let bytes = noprop::sample_bytes_vec(&mut rng, 100);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let bytes = noprop::sample_bytes_vec(&mut ctx, 100);
 /// assert_eq!(bytes.len(), 100);
 /// ```
 #[track_caller]
-pub fn sample_bytes_vec(rng: &mut Rng, len: usize) -> Vec<u8> {
+pub fn sample_bytes_vec(ctx: &mut TestCaseContext, len: usize) -> Vec<u8> {
     let loc = Location::caller();
     let mut bytes = vec![0u8; len];
-    rng.fill(&mut bytes);
-    rng.record_generated(&bytes, loc);
+    ctx.fill(&mut bytes);
+    ctx.record_generated(&bytes, loc);
     bytes
 }
 
@@ -579,18 +579,18 @@ pub fn sample_bytes_vec(rng: &mut Rng, len: usize) -> Vec<u8> {
 
 /// Uniformly-distributed `bool`.
 #[track_caller]
-pub fn sample_bool(rng: &mut Rng) -> bool {
+pub fn sample_bool(ctx: &mut TestCaseContext) -> bool {
     let loc = Location::caller();
     // Consume one byte so this primitive shares the "read a fixed-size
     // byte slice" shape with the integer generators.
-    let v = raw_bytes::<1>(rng)[0] & 1 != 0;
-    rng.record_generated(&v, loc);
+    let v = raw_bytes::<1>(ctx)[0] & 1 != 0;
+    ctx.record_generated(&v, loc);
     v
 }
 
 // === Integer generators ===
 //
-// All primitives draw randomness through `Rng::fill` (LE bytes ->
+// All primitives draw randomness through `TestCaseContext::fill` (LE bytes ->
 // `from_le_bytes`) so that every primitive consumes a fixed-size byte
 // slice from the RNG. This keeps every generator compatible with a
 // future bytes-based shrink implementation that swaps the RNG for a
@@ -598,109 +598,109 @@ pub fn sample_bool(rng: &mut Rng) -> bool {
 
 /// Uniformly-distributed `u8`.
 #[track_caller]
-pub fn sample_u8(rng: &mut Rng) -> u8 {
+pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
     let loc = Location::caller();
-    let v = raw_bytes::<1>(rng)[0];
-    rng.record_generated(&v, loc);
+    let v = raw_bytes::<1>(ctx)[0];
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `u16`.
 #[track_caller]
-pub fn sample_u16(rng: &mut Rng) -> u16 {
+pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
     let loc = Location::caller();
-    let v = u16::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = u16::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `u32`.
 #[track_caller]
-pub fn sample_u32(rng: &mut Rng) -> u32 {
+pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
     let loc = Location::caller();
-    let v = u32::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = u32::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `u64`.
 #[track_caller]
-pub fn sample_u64(rng: &mut Rng) -> u64 {
+pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
     let loc = Location::caller();
-    let v = u64::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = u64::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `u128`.
 #[track_caller]
-pub fn sample_u128(rng: &mut Rng) -> u128 {
+pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
     let loc = Location::caller();
-    let v = u128::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = u128::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `usize`.
 #[track_caller]
-pub fn sample_usize(rng: &mut Rng) -> usize {
+pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
     let loc = Location::caller();
-    let v = usize::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = usize::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `i8`.
 #[track_caller]
-pub fn sample_i8(rng: &mut Rng) -> i8 {
+pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
     let loc = Location::caller();
-    let v = raw_bytes::<1>(rng)[0] as i8;
-    rng.record_generated(&v, loc);
+    let v = raw_bytes::<1>(ctx)[0] as i8;
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `i16`.
 #[track_caller]
-pub fn sample_i16(rng: &mut Rng) -> i16 {
+pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
     let loc = Location::caller();
-    let v = i16::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = i16::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `i32`.
 #[track_caller]
-pub fn sample_i32(rng: &mut Rng) -> i32 {
+pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
     let loc = Location::caller();
-    let v = i32::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = i32::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `i64`.
 #[track_caller]
-pub fn sample_i64(rng: &mut Rng) -> i64 {
+pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
     let loc = Location::caller();
-    let v = i64::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = i64::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `i128`.
 #[track_caller]
-pub fn sample_i128(rng: &mut Rng) -> i128 {
+pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
     let loc = Location::caller();
-    let v = i128::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = i128::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed `isize`.
 #[track_caller]
-pub fn sample_isize(rng: &mut Rng) -> isize {
+pub fn sample_isize(ctx: &mut TestCaseContext) -> isize {
     let loc = Location::caller();
-    let v = isize::from_le_bytes(raw_bytes(rng));
-    rng.record_generated(&v, loc);
+    let v = isize::from_le_bytes(raw_bytes(ctx));
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -710,8 +710,8 @@ pub fn sample_isize(rng: &mut Rng) -> isize {
 // etc.), compose with `sample_choice` over a byte-string literal, for
 // example:
 //
-//     let d = sample_choice(rng, b"0123456789") as char;
-//     let a = sample_choice(rng, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") as char;
+//     let d = sample_choice(ctx, b"0123456789") as char;
+//     let a = sample_choice(ctx, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") as char;
 
 /// Uniformly-distributed `char` over the valid Unicode scalar values
 /// (`0..=0x10FFFF`, excluding the surrogate range `0xD800..=0xDFFF`).
@@ -720,35 +720,35 @@ pub fn sample_isize(rng: &mut Rng) -> isize {
 /// bound: rejection sampling on a 21-bit mask, ~47% per-attempt
 /// rejection rate, so `P(all 64 fail) < 10⁻²⁰`.
 #[track_caller]
-pub fn sample_char(rng: &mut Rng) -> char {
+pub fn sample_char(ctx: &mut TestCaseContext) -> char {
     let loc = Location::caller();
-    let c = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        let n = u32::from_le_bytes(raw_bytes(rng)) & 0x1F_FFFF;
+    let c = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        let n = u32::from_le_bytes(raw_bytes(ctx)) & 0x1F_FFFF;
         char::from_u32(n)
     });
-    rng.record_generated(&c, loc);
+    ctx.record_generated(&c, loc);
     c
 }
 
 /// Uniformly-distributed ASCII `char` (`0x00..=0x7F`, including control
 /// characters).
 #[track_caller]
-pub fn sample_ascii_char(rng: &mut Rng) -> char {
+pub fn sample_ascii_char(ctx: &mut TestCaseContext) -> char {
     let loc = Location::caller();
-    let v = (raw_bytes::<1>(rng)[0] & 0x7F) as char;
-    rng.record_generated(&v, loc);
+    let v = (raw_bytes::<1>(ctx)[0] & 0x7F) as char;
+    ctx.record_generated(&v, loc);
     v
 }
 
 /// Uniformly-distributed printable ASCII `char` (`0x20..=0x7E`, space
 /// through `~`, excluding control characters and DEL).
 #[track_caller]
-pub fn sample_ascii_printable_char(rng: &mut Rng) -> char {
+pub fn sample_ascii_printable_char(ctx: &mut TestCaseContext) -> char {
     let loc = Location::caller();
     // 95 characters. Use u32 for negligible modulo bias
     // (2^32 mod 95 = 6, so bias factor is at most 1 + 1/45210182).
-    let v = (0x20 + u32::from_le_bytes(raw_bytes(rng)) % 95) as u8 as char;
-    rng.record_generated(&v, loc);
+    let v = (0x20 + u32::from_le_bytes(raw_bytes(ctx)) % 95) as u8 as char;
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -757,12 +757,12 @@ pub fn sample_ascii_printable_char(rng: &mut Rng) -> char {
 // Length is measured in Unicode code points (equal to `.chars().count()`
 // of the returned `String`). Random-length strings compose from
 // `sample_usize_in` + one of these primitives, matching the
-// `sample_bytes_vec(rng, len)` shape:
+// `sample_bytes_vec(ctx, len)` shape:
 //
-//     let n = noprop::sample_usize_in(rng, 0..=max_len);
-//     let s = noprop::sample_string(rng, n);
+//     let n = noprop::sample_usize_in(ctx, 0..=max_len);
+//     let s = noprop::sample_string(ctx, n);
 //
-// A higher-order `sample_string_of(rng, len, |rng| ...)` helper is
+// A higher-order `sample_string_of(ctx, len, |ctx| ...)` helper is
 // deliberately not provided: `(0..len).map(|_| ...).collect()` is
 // short enough that a helper would only obscure the imperative
 // generator's control flow.
@@ -790,15 +790,15 @@ pub fn sample_ascii_printable_char(rng: &mut Rng) -> char {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let s = noprop::sample_string(&mut rng, 10);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let s = noprop::sample_string(&mut ctx, 10);
 /// assert_eq!(s.chars().count(), 10);
 /// ```
 #[track_caller]
-pub fn sample_string(rng: &mut Rng, len: usize) -> String {
+pub fn sample_string(ctx: &mut TestCaseContext, len: usize) -> String {
     let loc = Location::caller();
-    let s: String = (0..len).map(|_| sample_char_raw(rng)).collect();
-    rng.record_generated(&s, loc);
+    let s: String = (0..len).map(|_| sample_char_raw(ctx)).collect();
+    ctx.record_generated(&s, loc);
     s
 }
 
@@ -819,16 +819,16 @@ pub fn sample_string(rng: &mut Rng, len: usize) -> String {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let s = noprop::sample_ascii_string(&mut rng, 8);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let s = noprop::sample_ascii_string(&mut ctx, 8);
 /// assert_eq!(s.len(), 8);
 /// assert!(s.chars().all(|c| c.is_ascii()));
 /// ```
 #[track_caller]
-pub fn sample_ascii_string(rng: &mut Rng, len: usize) -> String {
+pub fn sample_ascii_string(ctx: &mut TestCaseContext, len: usize) -> String {
     let loc = Location::caller();
-    let s: String = (0..len).map(|_| sample_ascii_char_raw(rng)).collect();
-    rng.record_generated(&s, loc);
+    let s: String = (0..len).map(|_| sample_ascii_char_raw(ctx)).collect();
+    ctx.record_generated(&s, loc);
     s
 }
 
@@ -846,18 +846,18 @@ pub fn sample_ascii_string(rng: &mut Rng, len: usize) -> String {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let s = noprop::sample_ascii_printable_string(&mut rng, 12);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let s = noprop::sample_ascii_printable_string(&mut ctx, 12);
 /// assert_eq!(s.len(), 12);
 /// assert!(s.chars().all(|c| (0x20..=0x7E).contains(&(c as u32))));
 /// ```
 #[track_caller]
-pub fn sample_ascii_printable_string(rng: &mut Rng, len: usize) -> String {
+pub fn sample_ascii_printable_string(ctx: &mut TestCaseContext, len: usize) -> String {
     let loc = Location::caller();
     let s: String = (0..len)
-        .map(|_| sample_ascii_printable_char_raw(rng))
+        .map(|_| sample_ascii_printable_char_raw(ctx))
         .collect();
-    rng.record_generated(&s, loc);
+    ctx.record_generated(&s, loc);
     s
 }
 
@@ -866,19 +866,19 @@ pub fn sample_ascii_printable_string(rng: &mut Rng, len: usize) -> String {
 /// `sample_*_string` so the trace shows one `String` entry rather
 /// than `len` `char` entries.
 #[track_caller]
-fn sample_char_raw(rng: &mut Rng) -> char {
-    sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        let n = u32::from_le_bytes(raw_bytes(rng)) & 0x1F_FFFF;
+fn sample_char_raw(ctx: &mut TestCaseContext) -> char {
+    sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        let n = u32::from_le_bytes(raw_bytes(ctx)) & 0x1F_FFFF;
         char::from_u32(n)
     })
 }
 
-fn sample_ascii_char_raw(rng: &mut Rng) -> char {
-    (raw_bytes::<1>(rng)[0] & 0x7F) as char
+fn sample_ascii_char_raw(ctx: &mut TestCaseContext) -> char {
+    (raw_bytes::<1>(ctx)[0] & 0x7F) as char
 }
 
-fn sample_ascii_printable_char_raw(rng: &mut Rng) -> char {
-    (0x20 + u32::from_le_bytes(raw_bytes(rng)) % 95) as u8 as char
+fn sample_ascii_printable_char_raw(ctx: &mut TestCaseContext) -> char {
+    (0x20 + u32::from_le_bytes(raw_bytes(ctx)) % 95) as u8 as char
 }
 
 // === Floating-point generators ===
@@ -890,9 +890,9 @@ fn sample_ascii_printable_char_raw(rng: &mut Rng) -> char {
 /// [`sample_choice`]:
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
+/// let mut ctx = noprop::TestCaseContext::new(0);
 /// let _x = noprop::sample_choice(
-///     &mut rng,
+///     &mut ctx,
 ///     &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0],
 /// );
 /// ```
@@ -901,8 +901,8 @@ fn sample_ascii_printable_char_raw(rng: &mut Rng) -> char {
 /// subnormals):
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let _x = f32::from_bits(noprop::sample_u32(&mut rng));
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let _x = f32::from_bits(noprop::sample_u32(&mut ctx));
 /// ```
 ///
 /// For the full finite domain without a specific range, use
@@ -912,7 +912,7 @@ fn sample_ascii_printable_char_raw(rng: &mut Rng) -> char {
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
 #[track_caller]
-pub fn sample_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
+pub fn sample_f32(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
     assert!(
         min.is_finite() && max.is_finite(),
         "sample_f32: min and max must be finite"
@@ -923,10 +923,10 @@ pub fn sample_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
     // [1, 2) by injecting 23 random bits into the mantissa of a fixed
     // exponent, then subtract 1. This is bias-free (every representable
     // value in [0, 1) with 24-bit precision is equally likely).
-    let bits = 0x3F80_0000 | (u32::from_le_bytes(raw_bytes(rng)) >> 9);
+    let bits = 0x3F80_0000 | (u32::from_le_bytes(raw_bytes(ctx)) >> 9);
     let unit = f32::from_bits(bits) - 1.0;
     let v = min + (max - min) * unit;
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -934,14 +934,14 @@ pub fn sample_f32(rng: &mut Rng, min: f32, max: f32) -> f32 {
 ///
 /// Same conventions as [`sample_f32`]: NaN and infinities are excluded from
 /// the output. Use [`sample_choice`] to include specific special values, or
-/// `f64::from_bits(sample_u64(rng))` for an arbitrary bit pattern. For the
+/// `f64::from_bits(sample_u64(ctx))` for an arbitrary bit pattern. For the
 /// full finite domain without a specific range, use [`sample_f64_finite`].
 ///
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
 #[track_caller]
-pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
+pub fn sample_f64(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
     assert!(
         min.is_finite() && max.is_finite(),
         "sample_f64: min and max must be finite"
@@ -949,10 +949,10 @@ pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
     assert!(min < max, "sample_f64: min must be less than max");
     let loc = Location::caller();
     // Same construction as sample_f32 but with 53-bit precision.
-    let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(rng)) >> 12);
+    let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(ctx)) >> 12);
     let unit = f64::from_bits(bits) - 1.0;
     let v = min + (max - min) * unit;
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -963,7 +963,7 @@ pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
 /// This is the common shape for roundtrip / serialization property
 /// tests, where NaN and infinity are typically outside the format's
 /// support. For an arbitrary bit pattern (including NaN / ±∞), use
-/// `f32::from_bits(noprop::sample_u32(rng))` instead. For a specific
+/// `f32::from_bits(noprop::sample_u32(ctx))` instead. For a specific
 /// finite subrange, use [`sample_f32`].
 ///
 /// # Implementation
@@ -976,18 +976,18 @@ pub fn sample_f64(rng: &mut Rng, min: f64, max: f64) -> f64 {
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let x = noprop::sample_f32_finite(&mut rng);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let x = noprop::sample_f32_finite(&mut ctx);
 /// assert!(x.is_finite());
 /// ```
 #[track_caller]
-pub fn sample_f32_finite(rng: &mut Rng) -> f32 {
+pub fn sample_f32_finite(ctx: &mut TestCaseContext) -> f32 {
     let loc = Location::caller();
-    let v = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        let candidate = f32::from_bits(u32::from_le_bytes(raw_bytes(rng)));
+    let v = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        let candidate = f32::from_bits(u32::from_le_bytes(raw_bytes(ctx)));
         candidate.is_finite().then_some(candidate)
     });
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -997,24 +997,24 @@ pub fn sample_f32_finite(rng: &mut Rng) -> f32 {
 /// patterns are non-finite).
 ///
 /// For an arbitrary bit pattern, use
-/// `f64::from_bits(noprop::sample_u64(rng))`. For a specific finite
+/// `f64::from_bits(noprop::sample_u64(ctx))`. For a specific finite
 /// subrange, use [`sample_f64`].
 ///
 /// # Examples
 ///
 /// ```
-/// let mut rng = noprop::Rng::new(0);
-/// let x = noprop::sample_f64_finite(&mut rng);
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// let x = noprop::sample_f64_finite(&mut ctx);
 /// assert!(x.is_finite());
 /// ```
 #[track_caller]
-pub fn sample_f64_finite(rng: &mut Rng) -> f64 {
+pub fn sample_f64_finite(ctx: &mut TestCaseContext) -> f64 {
     let loc = Location::caller();
-    let v = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-        let candidate = f64::from_bits(u64::from_le_bytes(raw_bytes(rng)));
+    let v = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        let candidate = f64::from_bits(u64::from_le_bytes(raw_bytes(ctx)));
         candidate.is_finite().then_some(candidate)
     });
-    rng.record_generated(&v, loc);
+    ctx.record_generated(&v, loc);
     v
 }
 
@@ -1022,22 +1022,22 @@ pub fn sample_f64_finite(rng: &mut Rng) -> f64 {
 mod tests {
     use super::*;
 
-    /// Assert that `rng` and `fresh` (built from the same seed) still
+    /// Assert that `ctx` and `fresh` (built from the same seed) still
     /// produce identical output — used by the "consumes no RNG state"
     /// tests. Compares `fill` outputs rather than the removed
-    /// `Rng::next_u64`.
-    fn assert_state_unadvanced(rng: &mut Rng, fresh: &mut Rng) {
+    /// `TestCaseContext::next_u64`.
+    fn assert_state_unadvanced(ctx: &mut TestCaseContext, fresh: &mut TestCaseContext) {
         let mut a = [0u8; 8];
         let mut b = [0u8; 8];
-        rng.fill(&mut a);
+        ctx.fill(&mut a);
         fresh.fill(&mut b);
-        assert_eq!(a, b, "rng advanced when it should not have");
+        assert_eq!(a, b, "ctx advanced when it should not have");
     }
 
     #[test]
     fn primitives_are_deterministic() {
-        let mut a = Rng::new(123);
-        let mut b = Rng::new(123);
+        let mut a = TestCaseContext::new(123);
+        let mut b = TestCaseContext::new(123);
         assert_eq!(sample_bool(&mut a), sample_bool(&mut b));
         assert_eq!(sample_u8(&mut a), sample_u8(&mut b));
         assert_eq!(sample_u16(&mut a), sample_u16(&mut b));
@@ -1055,10 +1055,10 @@ mod tests {
 
     #[test]
     fn bool_produces_both_values() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let (mut t, mut f) = (false, false);
         for _ in 0..64 {
-            match sample_bool(&mut rng) {
+            match sample_bool(&mut ctx) {
                 true => t = true,
                 false => f = true,
             }
@@ -1071,10 +1071,10 @@ mod tests {
 
     #[test]
     fn u8_covers_both_halves_of_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let (mut low, mut high) = (false, false);
         for _ in 0..64 {
-            let v = sample_u8(&mut rng);
+            let v = sample_u8(&mut ctx);
             low |= v < 128;
             high |= v >= 128;
             if low && high {
@@ -1086,10 +1086,10 @@ mod tests {
 
     #[test]
     fn i8_can_be_negative_and_nonnegative() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let (mut neg, mut nonneg) = (false, false);
         for _ in 0..64 {
-            let v = sample_i8(&mut rng);
+            let v = sample_i8(&mut ctx);
             neg |= v < 0;
             nonneg |= v >= 0;
             if neg && nonneg {
@@ -1101,20 +1101,20 @@ mod tests {
 
     #[test]
     fn sample_choice_returns_only_from_slice() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let choices = [10, 20, 30];
         for _ in 0..256 {
-            assert!(choices.contains(&sample_choice(&mut rng, &choices)));
+            assert!(choices.contains(&sample_choice(&mut ctx, &choices)));
         }
     }
 
     #[test]
     fn sample_choice_can_hit_every_element() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let choices = [10, 20, 30];
         let mut seen = [false; 3];
         for _ in 0..256 {
-            let v = sample_choice(&mut rng, &choices);
+            let v = sample_choice(&mut ctx, &choices);
             let idx = choices.iter().position(|&x| x == v).unwrap();
             seen[idx] = true;
             if seen.iter().all(|&s| s) {
@@ -1127,24 +1127,24 @@ mod tests {
     #[test]
     #[should_panic(expected = "empty slice")]
     fn sample_choice_panics_on_empty() {
-        let mut rng = Rng::new(0);
+        let mut ctx = TestCaseContext::new(0);
         let empty: [u32; 0] = [];
-        let _ = sample_choice(&mut rng, &empty);
+        let _ = sample_choice(&mut ctx, &empty);
     }
 
     #[test]
     fn sample_choice_works_with_clone_only_types() {
         // Verify T: Clone + Debug bound accepts non-Copy types with Debug.
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let choices = vec![String::from("a"), String::from("b"), String::from("c")];
-        let picked = sample_choice(&mut rng, &choices);
+        let picked = sample_choice(&mut ctx, &choices);
         assert!(choices.contains(&picked));
     }
 
     #[test]
     fn char_generators_are_deterministic() {
-        let mut a = Rng::new(789);
-        let mut b = Rng::new(789);
+        let mut a = TestCaseContext::new(789);
+        let mut b = TestCaseContext::new(789);
         assert_eq!(sample_char(&mut a), sample_char(&mut b));
         assert_eq!(sample_ascii_char(&mut a), sample_ascii_char(&mut b));
         assert_eq!(
@@ -1155,18 +1155,18 @@ mod tests {
 
     #[test]
     fn sample_ascii_char_always_in_ascii_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let c = sample_ascii_char(&mut rng);
+            let c = sample_ascii_char(&mut ctx);
             assert!(c.is_ascii());
         }
     }
 
     #[test]
     fn sample_ascii_printable_char_always_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let c = sample_ascii_printable_char(&mut rng);
+            let c = sample_ascii_printable_char(&mut ctx);
             let n = c as u32;
             assert!((0x20..=0x7E).contains(&n));
         }
@@ -1176,22 +1176,22 @@ mod tests {
 
     #[test]
     fn sample_string_returns_requested_code_point_count() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for len in [0, 1, 7, 32] {
-            let s = sample_string(&mut rng, len);
+            let s = sample_string(&mut ctx, len);
             assert_eq!(
                 s.chars().count(),
                 len,
-                "sample_string(rng, {len}) chars().count() differed"
+                "sample_string(ctx, {len}) chars().count() differed"
             );
         }
     }
 
     #[test]
     fn sample_ascii_string_returns_ascii_bytes_of_requested_length() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for len in [0, 1, 7, 32] {
-            let s = sample_ascii_string(&mut rng, len);
+            let s = sample_ascii_string(&mut ctx, len);
             assert_eq!(s.chars().count(), len);
             assert_eq!(s.len(), len, "ASCII code point count == byte count");
             assert!(s.is_ascii());
@@ -1200,9 +1200,9 @@ mod tests {
 
     #[test]
     fn sample_ascii_printable_string_returns_printable_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for len in [0, 1, 7, 32] {
-            let s = sample_ascii_printable_string(&mut rng, len);
+            let s = sample_ascii_printable_string(&mut ctx, len);
             assert_eq!(s.chars().count(), len);
             assert_eq!(s.len(), len);
             assert!(
@@ -1214,8 +1214,8 @@ mod tests {
 
     #[test]
     fn string_generators_are_deterministic() {
-        let mut a = Rng::new(0x517A_2E70);
-        let mut b = Rng::new(0x517A_2E70);
+        let mut a = TestCaseContext::new(0x517A_2E70);
+        let mut b = TestCaseContext::new(0x517A_2E70);
         for len in [0, 3, 16] {
             assert_eq!(sample_string(&mut a, len), sample_string(&mut b, len));
             assert_eq!(
@@ -1231,20 +1231,20 @@ mod tests {
 
     #[test]
     fn sample_string_zero_length_is_empty() {
-        let mut rng = Rng::new(1);
-        assert_eq!(sample_string(&mut rng, 0), "");
-        assert_eq!(sample_ascii_string(&mut rng, 0), "");
-        assert_eq!(sample_ascii_printable_string(&mut rng, 0), "");
+        let mut ctx = TestCaseContext::new(1);
+        assert_eq!(sample_string(&mut ctx, 0), "");
+        assert_eq!(sample_ascii_string(&mut ctx, 0), "");
+        assert_eq!(sample_ascii_printable_string(&mut ctx, 0), "");
     }
 
     #[test]
     fn sample_char_produces_varied_values() {
         // Valid Unicode scalar space is ~1.1M chars, so 256 samples should
         // be nearly all distinct (collision probability is negligible).
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let mut seen = std::collections::HashSet::new();
         for _ in 0..256 {
-            seen.insert(sample_char(&mut rng));
+            seen.insert(sample_char(&mut ctx));
         }
         assert!(
             seen.len() > 200,
@@ -1255,8 +1255,8 @@ mod tests {
 
     #[test]
     fn float_generators_are_deterministic() {
-        let mut a = Rng::new(999);
-        let mut b = Rng::new(999);
+        let mut a = TestCaseContext::new(999);
+        let mut b = TestCaseContext::new(999);
         assert_eq!(sample_f32(&mut a, 0.0, 1.0), sample_f32(&mut b, 0.0, 1.0));
         assert_eq!(
             sample_f64(&mut a, -100.0, 100.0),
@@ -1266,28 +1266,28 @@ mod tests {
 
     #[test]
     fn sample_f32_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let v = sample_f32(&mut rng, 10.0, 20.0);
+            let v = sample_f32(&mut ctx, 10.0, 20.0);
             assert!((10.0..20.0).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
     fn sample_f64_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let v = sample_f64(&mut rng, -1.0, 1.0);
+            let v = sample_f64(&mut ctx, -1.0, 1.0);
             assert!((-1.0..1.0).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
     fn sample_f32_covers_both_halves_of_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let (mut low, mut high) = (false, false);
         for _ in 0..64 {
-            let v = sample_f32(&mut rng, 0.0, 1.0);
+            let v = sample_f32(&mut ctx, 0.0, 1.0);
             low |= v < 0.5;
             high |= v >= 0.5;
             if low && high {
@@ -1300,38 +1300,38 @@ mod tests {
     #[test]
     #[should_panic(expected = "must be less than")]
     fn sample_f32_panics_when_min_equals_max() {
-        let mut rng = Rng::new(0);
-        let _ = sample_f32(&mut rng, 5.0, 5.0);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f32(&mut ctx, 5.0, 5.0);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
     fn sample_f32_panics_on_nan() {
-        let mut rng = Rng::new(0);
-        let _ = sample_f32(&mut rng, f32::NAN, 1.0);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f32(&mut ctx, f32::NAN, 1.0);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
     fn sample_f32_panics_on_infinity() {
-        let mut rng = Rng::new(0);
-        let _ = sample_f32(&mut rng, 0.0, f32::INFINITY);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f32(&mut ctx, 0.0, f32::INFINITY);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
     fn sample_f64_panics_on_nan() {
-        let mut rng = Rng::new(0);
-        let _ = sample_f64(&mut rng, 0.0, f64::NAN);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f64(&mut ctx, 0.0, f64::NAN);
     }
 
     // === sample_f32_finite / sample_f64_finite ===
 
     #[test]
     fn sample_f32_finite_always_returns_finite() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..10_000 {
-            let v = sample_f32_finite(&mut rng);
+            let v = sample_f32_finite(&mut ctx);
             assert!(v.is_finite(), "expected finite, got {v:?}");
             assert!(!v.is_nan(), "expected non-NaN, got {v:?}");
         }
@@ -1339,9 +1339,9 @@ mod tests {
 
     #[test]
     fn sample_f64_finite_always_returns_finite() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..10_000 {
-            let v = sample_f64_finite(&mut rng);
+            let v = sample_f64_finite(&mut ctx);
             assert!(v.is_finite(), "expected finite, got {v:?}");
             assert!(!v.is_nan(), "expected non-NaN, got {v:?}");
         }
@@ -1349,8 +1349,8 @@ mod tests {
 
     #[test]
     fn finite_float_generators_are_deterministic() {
-        let mut a = Rng::new(0xF10A_7000);
-        let mut b = Rng::new(0xF10A_7000);
+        let mut a = TestCaseContext::new(0xF10A_7000);
+        let mut b = TestCaseContext::new(0xF10A_7000);
         for _ in 0..64 {
             assert_eq!(sample_f32_finite(&mut a), sample_f32_finite(&mut b));
             assert_eq!(sample_f64_finite(&mut a), sample_f64_finite(&mut b));
@@ -1361,10 +1361,10 @@ mod tests {
     fn sample_f32_finite_covers_both_signs() {
         // ~half of finite f32 patterns are negative (the sign bit is
         // uniform over accepted candidates).
-        let mut rng = Rng::new(2);
+        let mut ctx = TestCaseContext::new(2);
         let (mut pos, mut neg) = (false, false);
         for _ in 0..256 {
-            let v = sample_f32_finite(&mut rng);
+            let v = sample_f32_finite(&mut ctx);
             if v > 0.0 {
                 pos = true;
             } else if v < 0.0 {
@@ -1382,27 +1382,27 @@ mod tests {
     #[test]
     fn sample_below_one_returns_zero_without_drawing() {
         // n == 1 has a single legal value, so no RNG bytes must be consumed.
-        let mut rng = Rng::new(1);
-        let mut fresh = Rng::new(1);
-        assert_eq!(sample_below(&mut rng, 1), 0);
-        assert_state_unadvanced(&mut rng, &mut fresh);
+        let mut ctx = TestCaseContext::new(1);
+        let mut fresh = TestCaseContext::new(1);
+        assert_eq!(sample_below(&mut ctx, 1), 0);
+        assert_state_unadvanced(&mut ctx, &mut fresh);
     }
 
     #[test]
     fn sample_below_stays_in_range() {
-        let mut rng = Rng::new(42);
+        let mut ctx = TestCaseContext::new(42);
         for _ in 0..10_000 {
-            let v = sample_below(&mut rng, 7);
+            let v = sample_below(&mut ctx, 7);
             assert!(v < 7);
         }
     }
 
     #[test]
     fn sample_below_hits_every_value() {
-        let mut rng = Rng::new(42);
+        let mut ctx = TestCaseContext::new(42);
         let mut seen = [false; 5];
         for _ in 0..1024 {
-            let v = sample_below(&mut rng, 5) as usize;
+            let v = sample_below(&mut ctx, 5) as usize;
             seen[v] = true;
             if seen.iter().all(|&s| s) {
                 return;
@@ -1415,11 +1415,11 @@ mod tests {
     fn sample_below_is_roughly_uniform_on_non_divisor() {
         // 3 does not divide 2^64, so the sampler must actively reject.
         // Verify that a large batch of draws is roughly balanced.
-        let mut rng = Rng::new(7);
+        let mut ctx = TestCaseContext::new(7);
         let mut counts = [0usize; 3];
         let total = 30_000;
         for _ in 0..total {
-            counts[sample_below(&mut rng, 3) as usize] += 1;
+            counts[sample_below(&mut ctx, 3) as usize] += 1;
         }
         // Expected ~10_000 per bucket. Allow a very generous slack.
         let expected = total / 3;
@@ -1435,46 +1435,46 @@ mod tests {
     fn sample_below_accepts_full_u64_domain() {
         // u64::MAX is odd (not a multiple of 2), so this exercises the
         // rejection path with the widest possible bound.
-        let mut rng = Rng::new(1);
-        let _v = sample_below(&mut rng, u64::MAX);
+        let mut ctx = TestCaseContext::new(1);
+        let _v = sample_below(&mut ctx, u64::MAX);
     }
 
     // === sample_usize_in ===
 
     #[test]
     fn sample_usize_in_exclusive_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let v = sample_usize_in(&mut rng, 10..20);
+            let v = sample_usize_in(&mut ctx, 10..20);
             assert!((10..20).contains(&v));
         }
     }
 
     #[test]
     fn sample_usize_in_inclusive_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let v = sample_usize_in(&mut rng, 10..=20);
+            let v = sample_usize_in(&mut ctx, 10..=20);
             assert!((10..=20).contains(&v));
         }
     }
 
     #[test]
     fn sample_usize_in_single_element_returns_that_element() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         // 5..=5 is one element; the runner should return it without
         // consuming any RNG.
-        let mut fresh = Rng::new(1);
-        assert_eq!(sample_usize_in(&mut rng, 5..=5), 5);
-        assert_state_unadvanced(&mut rng, &mut fresh);
+        let mut fresh = TestCaseContext::new(1);
+        assert_eq!(sample_usize_in(&mut ctx, 5..=5), 5);
+        assert_state_unadvanced(&mut ctx, &mut fresh);
     }
 
     #[test]
     fn sample_usize_in_hits_both_endpoints() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let (mut lo, mut hi) = (false, false);
         for _ in 0..1024 {
-            let v = sample_usize_in(&mut rng, 0..=3);
+            let v = sample_usize_in(&mut ctx, 0..=3);
             lo |= v == 0;
             hi |= v == 3;
             if lo && hi {
@@ -1486,9 +1486,9 @@ mod tests {
 
     #[test]
     fn sample_usize_in_full_range_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..100 {
-            let _v = sample_usize_in(&mut rng, ..);
+            let _v = sample_usize_in(&mut ctx, ..);
             // Any usize is in range; just verify no panic.
         }
     }
@@ -1497,26 +1497,26 @@ mod tests {
     fn sample_usize_in_inclusive_up_to_max_stays_in_range() {
         // Exercises the max - lo + 1 arithmetic on the widest non-full
         // range so it must not overflow.
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..100 {
-            let v = sample_usize_in(&mut rng, 1..=usize::MAX);
+            let v = sample_usize_in(&mut ctx, 1..=usize::MAX);
             assert!(v >= 1);
         }
     }
 
     #[test]
     fn sample_usize_in_unbounded_end_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..100 {
-            let v = sample_usize_in(&mut rng, 100..);
+            let v = sample_usize_in(&mut ctx, 100..);
             assert!(v >= 100);
         }
     }
 
     #[test]
     fn sample_usize_in_is_deterministic() {
-        let mut a = Rng::new(999);
-        let mut b = Rng::new(999);
+        let mut a = TestCaseContext::new(999);
+        let mut b = TestCaseContext::new(999);
         for _ in 0..64 {
             assert_eq!(
                 sample_usize_in(&mut a, 0..137),
@@ -1528,33 +1528,33 @@ mod tests {
     #[test]
     #[should_panic(expected = "empty range")]
     fn sample_usize_in_panics_on_empty_exclusive() {
-        let mut rng = Rng::new(0);
-        let _ = sample_usize_in(&mut rng, 5..5);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_usize_in(&mut ctx, 5..5);
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
     fn sample_usize_in_panics_on_reversed_inclusive() {
-        let mut rng = Rng::new(0);
+        let mut ctx = TestCaseContext::new(0);
         #[expect(clippy::reversed_empty_ranges)]
-        let _ = sample_usize_in(&mut rng, 5..=4);
+        let _ = sample_usize_in(&mut ctx, 5..=4);
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
     fn sample_usize_in_panics_on_zero_exclusive_end() {
-        let mut rng = Rng::new(0);
-        let _ = sample_usize_in(&mut rng, ..0);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_usize_in(&mut ctx, ..0);
     }
 
     #[test]
     #[should_panic(expected = "empty range")]
     fn sample_usize_in_panics_on_excluded_max_start() {
-        let mut rng = Rng::new(0);
+        let mut ctx = TestCaseContext::new(0);
         // An excluded start of usize::MAX would need start + 1, which
         // overflows — semantically the range is empty.
         let _ = sample_usize_in(
-            &mut rng,
+            &mut ctx,
             (
                 std::ops::Bound::Excluded(usize::MAX),
                 std::ops::Bound::<usize>::Unbounded,
@@ -1566,31 +1566,31 @@ mod tests {
 
     #[test]
     fn sample_ratio_zero_numerator_always_false_and_draws_nothing() {
-        let mut rng = Rng::new(1);
-        let mut fresh = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
+        let mut fresh = TestCaseContext::new(1);
         for _ in 0..64 {
-            assert!(!sample_ratio(&mut rng, 0, 10));
+            assert!(!sample_ratio(&mut ctx, 0, 10));
         }
         // No RNG bytes consumed.
-        assert_state_unadvanced(&mut rng, &mut fresh);
+        assert_state_unadvanced(&mut ctx, &mut fresh);
     }
 
     #[test]
     fn sample_ratio_full_numerator_always_true_and_draws_nothing() {
-        let mut rng = Rng::new(1);
-        let mut fresh = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
+        let mut fresh = TestCaseContext::new(1);
         for _ in 0..64 {
-            assert!(sample_ratio(&mut rng, 7, 7));
+            assert!(sample_ratio(&mut ctx, 7, 7));
         }
-        assert_state_unadvanced(&mut rng, &mut fresh);
+        assert_state_unadvanced(&mut ctx, &mut fresh);
     }
 
     #[test]
     fn sample_ratio_produces_both_outcomes() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let (mut t, mut f) = (false, false);
         for _ in 0..256 {
-            match sample_ratio(&mut rng, 1, 2) {
+            match sample_ratio(&mut ctx, 1, 2) {
                 true => t = true,
                 false => f = true,
             }
@@ -1603,8 +1603,8 @@ mod tests {
 
     #[test]
     fn sample_ratio_is_deterministic() {
-        let mut a = Rng::new(999);
-        let mut b = Rng::new(999);
+        let mut a = TestCaseContext::new(999);
+        let mut b = TestCaseContext::new(999);
         for _ in 0..64 {
             assert_eq!(sample_ratio(&mut a, 3, 7), sample_ratio(&mut b, 3, 7));
         }
@@ -1613,11 +1613,11 @@ mod tests {
     #[test]
     fn sample_ratio_biased_matches_expected_frequency() {
         // 1-in-10 draws should sit near 10% out of 10_000 samples.
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let mut trues: usize = 0;
         let total: usize = 10_000;
         for _ in 0..total {
-            if sample_ratio(&mut rng, 1, 10) {
+            if sample_ratio(&mut ctx, 1, 10) {
                 trues += 1;
             }
         }
@@ -1631,35 +1631,35 @@ mod tests {
     #[test]
     #[should_panic(expected = "denominator must be non-zero")]
     fn sample_ratio_panics_on_zero_denominator() {
-        let mut rng = Rng::new(0);
-        let _ = sample_ratio(&mut rng, 0, 0);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_ratio(&mut ctx, 0, 0);
     }
 
     #[test]
     #[should_panic(expected = "must be <= denominator")]
     fn sample_ratio_panics_when_numerator_exceeds_denominator() {
-        let mut rng = Rng::new(0);
-        let _ = sample_ratio(&mut rng, 11, 10);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_ratio(&mut ctx, 11, 10);
     }
 
     // === sample_weighted_index ===
 
     #[test]
     fn sample_weighted_index_stays_in_range() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let idx = sample_weighted_index(&mut rng, &[1, 2, 3, 4]);
+            let idx = sample_weighted_index(&mut ctx, &[1, 2, 3, 4]);
             assert!(idx < 4);
         }
     }
 
     #[test]
     fn sample_weighted_index_hits_every_nonzero_index() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let weights = [1, 1, 1];
         let mut seen = [false; 3];
         for _ in 0..1024 {
-            seen[sample_weighted_index(&mut rng, &weights)] = true;
+            seen[sample_weighted_index(&mut ctx, &weights)] = true;
             if seen.iter().all(|&s| s) {
                 return;
             }
@@ -1669,25 +1669,25 @@ mod tests {
 
     #[test]
     fn sample_weighted_index_skips_zero_weight_slot() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let idx = sample_weighted_index(&mut rng, &[3, 0, 5]);
+            let idx = sample_weighted_index(&mut ctx, &[3, 0, 5]);
             assert_ne!(idx, 1, "index 1 has weight 0 and must never be picked");
         }
     }
 
     #[test]
     fn sample_weighted_index_single_nonzero_always_returns_it() {
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         for _ in 0..100 {
-            assert_eq!(sample_weighted_index(&mut rng, &[0, 0, 42, 0]), 2);
+            assert_eq!(sample_weighted_index(&mut ctx, &[0, 0, 42, 0]), 2);
         }
     }
 
     #[test]
     fn sample_weighted_index_is_deterministic() {
-        let mut a = Rng::new(123);
-        let mut b = Rng::new(123);
+        let mut a = TestCaseContext::new(123);
+        let mut b = TestCaseContext::new(123);
         let weights = [4, 1, 2, 3];
         for _ in 0..64 {
             assert_eq!(
@@ -1700,12 +1700,12 @@ mod tests {
     #[test]
     fn sample_weighted_index_frequencies_approximate_weights() {
         // Weights 1:2:3 → ~1/6, 2/6, 3/6 of samples.
-        let mut rng = Rng::new(1);
+        let mut ctx = TestCaseContext::new(1);
         let weights = [1, 2, 3];
         let mut counts = [0usize; 3];
         let total = 12_000;
         for _ in 0..total {
-            counts[sample_weighted_index(&mut rng, &weights)] += 1;
+            counts[sample_weighted_index(&mut ctx, &weights)] += 1;
         }
         // Expected 2000 / 4000 / 6000. Allow ±30% slack.
         for (i, (&c, &w)) in counts.iter().zip(weights.iter()).enumerate() {
@@ -1720,15 +1720,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "empty weights")]
     fn sample_weighted_index_panics_on_empty() {
-        let mut rng = Rng::new(0);
-        let _ = sample_weighted_index(&mut rng, &[]);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_weighted_index(&mut ctx, &[]);
     }
 
     #[test]
     #[should_panic(expected = "all weights are zero")]
     fn sample_weighted_index_panics_when_all_weights_zero() {
-        let mut rng = Rng::new(0);
-        let _ = sample_weighted_index(&mut rng, &[0, 0, 0]);
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_weighted_index(&mut ctx, &[0, 0, 0]);
     }
 
     // === choice sequence record / replay through the sampling primitives ===
@@ -1746,26 +1746,26 @@ mod tests {
     /// `sample_bytes_vec`, plus `if` / `match` / loop control flow.
     /// Returns a shape summary that a strict replay must reproduce
     /// bit-exactly.
-    fn composite_case(rng: &mut Rng) -> (Vec<char>, Vec<std::num::NonZero<u8>>, Vec<u8>, u32) {
-        let branch = sample_usize_in(rng, 0..3);
+    fn composite_case(ctx: &mut TestCaseContext) -> (Vec<char>, Vec<std::num::NonZero<u8>>, Vec<u8>, u32) {
+        let branch = sample_usize_in(ctx, 0..3);
         let chars = if branch == 0 {
             Vec::new()
         } else {
-            (0..branch).map(|_| sample_char(rng)).collect()
+            (0..branch).map(|_| sample_char(ctx)).collect()
         };
-        let nz_count = sample_usize_in(rng, 1..=4);
+        let nz_count = sample_usize_in(ctx, 1..=4);
         let mut nzs = Vec::with_capacity(nz_count);
         for _ in 0..nz_count {
-            let nz = sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
-                std::num::NonZero::new(sample_u8(rng))
+            let nz = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+                std::num::NonZero::new(sample_u8(ctx))
             });
             nzs.push(nz);
         }
-        let buf_len = sample_usize_in(rng, 0..=16);
-        let bytes = sample_bytes_vec(rng, buf_len);
-        let tail = match sample_usize_in(rng, 0..3) {
-            0 => sample_u32(rng),
-            1 => sample_u32(rng).wrapping_add(1),
+        let buf_len = sample_usize_in(ctx, 0..=16);
+        let bytes = sample_bytes_vec(ctx, buf_len);
+        let tail = match sample_usize_in(ctx, 0..3) {
+            0 => sample_u32(ctx),
+            1 => sample_u32(ctx).wrapping_add(1),
             _ => 0,
         };
         (chars, nzs, bytes, tail)
@@ -1789,14 +1789,14 @@ mod tests {
         // recorded 1-byte draw. `DrawLengthMismatch` must fire AND the
         // "unreachable" flag must stay false, proving the generator
         // body did not continue past the mismatch.
-        let (_, seq) = RecordingSession::new(1).run(|rng| {
-            let _ = sample_u8(rng);
-            let _ = sample_u8(rng);
+        let (_, seq) = RecordingSession::new(1).run(|ctx| {
+            let _ = sample_u8(ctx);
+            let _ = sample_u8(ctx);
         });
         let flag = std::cell::Cell::new(false);
-        let result = ReplaySession::new(seq).run(|rng| {
-            let _ = sample_u8(rng); // matches first recorded draw
-            let _ = sample_u32(rng); // 4 bytes vs recorded 1 → mismatch
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let _ = sample_u8(ctx); // matches first recorded draw
+            let _ = sample_u32(ctx); // 4 bytes vs recorded 1 → mismatch
             flag.set(true); // must not run
         });
         assert!(
@@ -1814,11 +1814,11 @@ mod tests {
 
     #[test]
     fn replay_after_sample_bytes_vec_matches_bytes() {
-        // sample_bytes_vec issues a single Rng::fill of arbitrary length —
+        // sample_bytes_vec issues a single TestCaseContext::fill of arbitrary length —
         // the recorded draw's length must match at replay time.
-        let (recorded, seq) = RecordingSession::new(7).run(|rng| sample_bytes_vec(rng, 100));
+        let (recorded, seq) = RecordingSession::new(7).run(|ctx| sample_bytes_vec(ctx, 100));
         let replayed = ReplaySession::new(seq)
-            .run(|rng| sample_bytes_vec(rng, 100))
+            .run(|ctx| sample_bytes_vec(ctx, 100))
             .expect("same-length replay must succeed");
         assert_eq!(replayed, recorded);
     }
@@ -1827,10 +1827,10 @@ mod tests {
     fn recorded_composite_case_matches_plain_prng() {
         // Recording must not shift the byte stream: the composite case
         // recorded from a given seed must equal the same closure run
-        // against a plain Rng::new(seed).
+        // against a plain TestCaseContext::new(seed).
         let seed = 0xABCD_1234u64;
         let (recorded_value, _seq) = RecordingSession::new(seed).run(composite_case);
-        let mut prng = Rng::new(seed);
+        let mut prng = TestCaseContext::new(seed);
         let plain_value = composite_case(&mut prng);
         assert_eq!(recorded_value, plain_value);
     }
@@ -1847,22 +1847,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "max_attempts must be > 0")]
     fn sample_with_rejection_panics_on_zero_max_attempts() {
-        let mut rng = Rng::new(0);
-        let _: u32 = sample_with_rejection(&mut rng, 0, |_| Some(1));
+        let mut ctx = TestCaseContext::new(0);
+        let _: u32 = sample_with_rejection(&mut ctx, 0, |_| Some(1));
     }
 
     #[test]
     fn sample_with_rejection_returns_first_accepted_value() {
-        let mut rng = Rng::new(0);
-        let v = sample_with_rejection(&mut rng, 8, |_rng| Some(42u32));
+        let mut ctx = TestCaseContext::new(0);
+        let v = sample_with_rejection(&mut ctx, 8, |_rng| Some(42u32));
         assert_eq!(v, 42);
     }
 
     #[test]
     fn sample_with_rejection_skips_rejected_attempts_and_returns_accepted() {
-        let mut rng = Rng::new(0);
+        let mut ctx = TestCaseContext::new(0);
         let counter = std::cell::Cell::new(0usize);
-        let v = sample_with_rejection(&mut rng, 8, |_rng| {
+        let v = sample_with_rejection(&mut ctx, 8, |_rng| {
             let n = counter.get();
             counter.set(n + 1);
             // Accept on the 4th attempt (0-indexed: 3rd retry).
@@ -1874,10 +1874,10 @@ mod tests {
 
     #[test]
     fn sample_with_rejection_records_nested_spans_in_recording_mode() {
-        let (v, seq): ((u8, u8), _) = RecordingSession::new(1).run(|rng| {
-            sample_with_rejection(rng, 8, |rng| {
-                let x = sample_u8(rng);
-                let y = sample_with_rejection(rng, 8, |rng| Some(sample_u8(rng)));
+        let (v, seq): ((u8, u8), _) = RecordingSession::new(1).run(|ctx| {
+            sample_with_rejection(ctx, 8, |ctx| {
+                let x = sample_u8(ctx);
+                let y = sample_with_rejection(ctx, 8, |ctx| Some(sample_u8(ctx)));
                 Some((x, y))
             })
         });
@@ -1893,9 +1893,9 @@ mod tests {
 
     #[test]
     fn sample_with_rejection_records_rejected_spans_in_recording_mode() {
-        let (v, seq) = RecordingSession::new(2).run(|rng| {
+        let (v, seq) = RecordingSession::new(2).run(|ctx| {
             let counter = std::cell::Cell::new(0);
-            sample_with_rejection(rng, 8, |_rng| {
+            sample_with_rejection(ctx, 8, |_rng| {
                 let n = counter.get();
                 counter.set(n + 1);
                 if n < 2 { None } else { Some(n as u32) }
@@ -1913,9 +1913,9 @@ mod tests {
     #[test]
     fn sample_with_rejection_allows_drawless_rejected_attempts() {
         // A pure predicate over external state — no draws.
-        let (v, seq) = RecordingSession::new(1).run(|rng| {
+        let (v, seq) = RecordingSession::new(1).run(|ctx| {
             let counter = std::cell::Cell::new(0);
-            sample_with_rejection(rng, 4, |_rng| {
+            sample_with_rejection(ctx, 4, |_rng| {
                 let n = counter.get();
                 counter.set(n + 1);
                 if n < 2 { None } else { Some(n as u32) }
