@@ -593,6 +593,35 @@ fn reject_case_outside_runner_panics() {
     rng.reject_case();
 }
 
+// === sample_string / sample_ascii_string / sample_ascii_printable_string trace format ===
+
+#[test]
+fn sample_string_records_one_entry_per_call() {
+    let result = noprop::Runner {
+        seed: 11,
+        iterations: 1,
+    }
+    .run(|rng| {
+        let a = noprop::sample_string(rng, 4);
+        let b = noprop::sample_ascii_string(rng, 4);
+        let c = noprop::sample_ascii_printable_string(rng, 4);
+        panic!("stop with a={a:?} b={b:?} c={c:?}");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 3, "generated: {generated:?}");
+    for entry in generated {
+        assert_eq!(entry.type_name(), "alloc::string::String");
+        assert!(entry.location().file().ends_with("e2e.rs"));
+        let repr = entry.value_repr().expect("value entry");
+        // Debug output for a String starts and ends with a double quote.
+        assert!(
+            repr.starts_with('"') && repr.ends_with('"'),
+            "expected quoted Debug form, got {repr:?}"
+        );
+    }
+}
+
 // === sample_f32_finite / sample_f64_finite trace format ===
 
 #[test]

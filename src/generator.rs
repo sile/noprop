@@ -752,6 +752,135 @@ pub fn sample_ascii_printable_char(rng: &mut Rng) -> char {
     v
 }
 
+// === String generators ===
+//
+// Length is measured in Unicode code points (equal to `.chars().count()`
+// of the returned `String`). Random-length strings compose from
+// `sample_usize_in` + one of these primitives, matching the
+// `sample_bytes_vec(rng, len)` shape:
+//
+//     let n = noprop::sample_usize_in(rng, 0..=max_len);
+//     let s = noprop::sample_string(rng, n);
+//
+// A higher-order `sample_string_of(rng, len, |rng| ...)` helper is
+// deliberately not provided: `(0..len).map(|_| ...).collect()` is
+// short enough that a helper would only obscure the imperative
+// generator's control flow.
+
+/// Uniformly-distributed `String` of exactly `len` Unicode scalar
+/// values. Each code point is produced by calling [`sample_char`] once.
+///
+/// `len` is a code-point count, not a UTF-8 byte count. The returned
+/// string's `.chars().count()` equals `len`; its byte length is up to
+/// `4 * len`.
+///
+/// For random-length strings, wrap this call with [`sample_usize_in`]
+/// (see the module-level "String generators" note). For a byte buffer,
+/// use [`sample_bytes_vec`]. For a single character, use [`sample_char`].
+///
+/// # Trace
+///
+/// One trace entry is recorded per call (`alloc::string::String =
+/// "..."`, Rust `Debug` escape). Because [`sample_char`] internally
+/// uses a bounded rejection loop, each call to `sample_string`
+/// consumes up to `len × 64` internal attempts and, in Recording
+/// mode, opens `len` attempt spans in the choice sequence — one per
+/// character.
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let s = noprop::sample_string(&mut rng, 10);
+/// assert_eq!(s.chars().count(), 10);
+/// ```
+#[track_caller]
+pub fn sample_string(rng: &mut Rng, len: usize) -> String {
+    let loc = Location::caller();
+    let s: String = (0..len).map(|_| sample_char_raw(rng)).collect();
+    rng.record_generated(&s, loc);
+    s
+}
+
+/// Uniformly-distributed ASCII `String` of exactly `len` code points
+/// (`0x00..=0x7F`, including control characters). Each character is
+/// produced by calling [`sample_ascii_char`] once.
+///
+/// The returned string's byte length equals `len` (ASCII is 1 byte per
+/// code point). For printable ASCII only, use
+/// [`sample_ascii_printable_string`].
+///
+/// # Trace
+///
+/// One trace entry is recorded per call. Unlike [`sample_string`],
+/// this primitive uses no internal rejection loop, so it consumes
+/// exactly `len` bytes from the RNG and opens no attempt spans.
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let s = noprop::sample_ascii_string(&mut rng, 8);
+/// assert_eq!(s.len(), 8);
+/// assert!(s.chars().all(|c| c.is_ascii()));
+/// ```
+#[track_caller]
+pub fn sample_ascii_string(rng: &mut Rng, len: usize) -> String {
+    let loc = Location::caller();
+    let s: String = (0..len).map(|_| sample_ascii_char_raw(rng)).collect();
+    rng.record_generated(&s, loc);
+    s
+}
+
+/// Uniformly-distributed printable-ASCII `String` of exactly `len`
+/// code points (`0x20..=0x7E`, space through `~`). Each character is
+/// produced by calling [`sample_ascii_printable_char`] once.
+///
+/// The returned string's byte length equals `len`. For arbitrary
+/// ASCII (including control characters), use [`sample_ascii_string`].
+///
+/// # Trace
+///
+/// One trace entry is recorded per call; no attempt spans are opened.
+///
+/// # Examples
+///
+/// ```
+/// let mut rng = noprop::Rng::new(0);
+/// let s = noprop::sample_ascii_printable_string(&mut rng, 12);
+/// assert_eq!(s.len(), 12);
+/// assert!(s.chars().all(|c| (0x20..=0x7E).contains(&(c as u32))));
+/// ```
+#[track_caller]
+pub fn sample_ascii_printable_string(rng: &mut Rng, len: usize) -> String {
+    let loc = Location::caller();
+    let s: String = (0..len)
+        .map(|_| sample_ascii_printable_char_raw(rng))
+        .collect();
+    rng.record_generated(&s, loc);
+    s
+}
+
+/// Internal helpers that mirror the public `sample_*_char` primitives
+/// but skip the per-character `record_generated` call. Used inside
+/// `sample_*_string` so the trace shows one `String` entry rather
+/// than `len` `char` entries.
+#[track_caller]
+fn sample_char_raw(rng: &mut Rng) -> char {
+    sample_with_rejection(rng, DEFAULT_MAX_ATTEMPTS, |rng| {
+        let n = u32::from_le_bytes(raw_bytes(rng)) & 0x1F_FFFF;
+        char::from_u32(n)
+    })
+}
+
+fn sample_ascii_char_raw(rng: &mut Rng) -> char {
+    (raw_bytes::<1>(rng)[0] & 0x7F) as char
+}
+
+fn sample_ascii_printable_char_raw(rng: &mut Rng) -> char {
+    (0x20 + u32::from_le_bytes(raw_bytes(rng)) % 95) as u8 as char
+}
+
 // === Floating-point generators ===
 
 /// Uniformly-distributed `f32` in `[min, max)`.
@@ -1041,6 +1170,71 @@ mod tests {
             let n = c as u32;
             assert!((0x20..=0x7E).contains(&n));
         }
+    }
+
+    // === sample_string / sample_ascii_string / sample_ascii_printable_string ===
+
+    #[test]
+    fn sample_string_returns_requested_code_point_count() {
+        let mut rng = Rng::new(1);
+        for len in [0, 1, 7, 32] {
+            let s = sample_string(&mut rng, len);
+            assert_eq!(
+                s.chars().count(),
+                len,
+                "sample_string(rng, {len}) chars().count() differed"
+            );
+        }
+    }
+
+    #[test]
+    fn sample_ascii_string_returns_ascii_bytes_of_requested_length() {
+        let mut rng = Rng::new(1);
+        for len in [0, 1, 7, 32] {
+            let s = sample_ascii_string(&mut rng, len);
+            assert_eq!(s.chars().count(), len);
+            assert_eq!(s.len(), len, "ASCII code point count == byte count");
+            assert!(s.is_ascii());
+        }
+    }
+
+    #[test]
+    fn sample_ascii_printable_string_returns_printable_range() {
+        let mut rng = Rng::new(1);
+        for len in [0, 1, 7, 32] {
+            let s = sample_ascii_printable_string(&mut rng, len);
+            assert_eq!(s.chars().count(), len);
+            assert_eq!(s.len(), len);
+            assert!(
+                s.chars().all(|c| (0x20..=0x7E).contains(&(c as u32))),
+                "found non-printable in {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn string_generators_are_deterministic() {
+        let mut a = Rng::new(0x517A_2E70);
+        let mut b = Rng::new(0x517A_2E70);
+        for len in [0, 3, 16] {
+            assert_eq!(sample_string(&mut a, len), sample_string(&mut b, len));
+            assert_eq!(
+                sample_ascii_string(&mut a, len),
+                sample_ascii_string(&mut b, len)
+            );
+            assert_eq!(
+                sample_ascii_printable_string(&mut a, len),
+                sample_ascii_printable_string(&mut b, len)
+            );
+        }
+    }
+
+    #[test]
+    fn sample_string_zero_length_is_empty() {
+        let mut rng = Rng::new(1);
+        assert_eq!(sample_string(&mut rng, 0), "");
+        assert_eq!(sample_ascii_string(&mut rng, 0), "");
+        assert_eq!(sample_ascii_printable_string(&mut rng, 0), "");
     }
 
     #[test]
