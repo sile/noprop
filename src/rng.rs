@@ -14,6 +14,12 @@ const DEDUP_HEAD: usize = 8;
 /// buffer once the head is full.
 const DEDUP_TAIL: usize = 8;
 
+/// Maximum number of draws one case may consume during exploratory
+/// replay. Reaching the cap aborts the case as a rejection so a
+/// mutated candidate whose control flow keeps drawing cannot loop
+/// forever.
+const MAX_CHOICES_PER_CASE: usize = 4096;
+
 /// Seedable non-cryptographic PRNG used by all noprop generators.
 ///
 /// The underlying algorithm is `xoshiro256**` with the initial 256-bit
@@ -60,6 +66,36 @@ pub struct TestCaseContext {
     /// after the counter is incremented, so folded runs are still fully
     /// counted).
     total_samples: usize,
+    /// Scalar / semantic feedback collected during the current case.
+    /// Always [`FeedbackState::Disabled`] when constructed via
+    /// [`TestCaseContext::new`]; a runner switches it to `Targeted`
+    /// before running its case loop.
+    feedback: FeedbackState,
+}
+
+/// Private feedback state carried by every [`TestCaseContext`].
+///
+/// `Disabled` is the default and must stay allocation-free: `maximize`
+/// and the future semantic methods are no-ops while it is active. The
+/// `Targeted` variant collects the maximum scalar reported via
+/// [`TestCaseContext::maximize`] during one case.
+#[derive(Debug)]
+pub(crate) enum FeedbackState {
+    Disabled,
+    Targeted { max_score: ScalarFeedback },
+}
+
+/// Three-state scalar feedback for one case.
+///
+/// `Missing` marks an accepted case that never called `maximize`;
+/// `Invalid` marks a `NaN` / infinity report. Keeping invalid out of
+/// the `f64` payload means a later `Valid` score can never mask an
+/// earlier invalid report.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ScalarFeedback {
+    Missing,
+    Valid(f64),
+    Invalid,
 }
 
 /// Private entropy source variant carried by every [`TestCaseContext`].
@@ -70,18 +106,22 @@ pub struct TestCaseContext {
 ///   spans opened by `sample_with_rejection`.
 /// - `Replay` reads bytes only from a recorded sequence and reports a
 ///   [`ReplayError`] on structural mismatch, using a private
-///   control-flow marker to abort the generator immediately.
+///   control-flow marker to abort the generator immediately. In
+///   exploratory mode (`explore` is `Some`), draws beyond the recorded
+///   sequence are generated from the carried PRNG instead of aborting,
+///   and the total draw count is capped by [`MAX_CHOICES_PER_CASE`].
 enum RandomSource {
     Prng(XoshiroState),
-    #[cfg(test)]
     Recording {
         state: XoshiroState,
         sequence: ChoiceSequence,
         /// Index into `sequence.spans` of the currently in-flight
         /// attempt, or `None` when no attempt is open (top level).
         current_parent: Option<usize>,
+        /// Metadata to attach to the next draw (set by bounded-domain
+        /// primitives right before they draw).
+        pending_choice: Option<ChoiceMeta>,
     },
-    #[cfg(test)]
     Replay {
         sequence: ChoiceSequence,
         next_draw: usize,
@@ -90,6 +130,13 @@ enum RandomSource {
         /// attempt, or `None` when no attempt is open.
         current_parent: Option<usize>,
         error: Option<ReplayError>,
+        /// `Some` when running exploratory replay: draws beyond the
+        /// recorded sequence are generated from this PRNG instead of
+        /// aborting, and the total draw count is capped.
+        explore: Option<XoshiroState>,
+        /// Draws consumed so far (recorded + generated), used to
+        /// enforce the exploratory cap.
+        consumed: usize,
     },
 }
 
@@ -99,12 +146,12 @@ enum RandomSource {
 /// Kept out of [`TestCaseContext`] itself so `TestCaseContext` has only one entropy boundary
 /// ([`TestCaseContext::fill`]) — Recording / Replay cannot expose a separate raw
 /// `next_u64` path with mode-dependent semantics.
-struct XoshiroState {
+pub(crate) struct XoshiroState {
     state: [u64; 4],
 }
 
 impl XoshiroState {
-    fn from_seed(seed: u64) -> Self {
+    pub(crate) fn from_seed(seed: u64) -> Self {
         let mut sm = SplitMix64 { state: seed };
         Self {
             state: [sm.next(), sm.next(), sm.next(), sm.next()],
@@ -112,7 +159,7 @@ impl XoshiroState {
     }
 
     /// Advance the PRNG by one step and return the next 64 random bits.
-    fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         let result = self.state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
 
         let t = self.state[1] << 17;
@@ -141,6 +188,27 @@ impl XoshiroState {
             dst[i..].copy_from_slice(&bytes[..remaining]);
         }
     }
+
+    /// Uniform value in `[0, n)` using rejection sampling directly on
+    /// the PRNG stream. Mirrors `sample_below` but operates on the
+    /// carried state instead of a `TestCaseContext`.
+    pub(crate) fn sample_below(&mut self, n: u64) -> u64 {
+        debug_assert!(n > 0, "sample_below: n must be non-zero");
+        if n == 1 {
+            return 0;
+        }
+        let r = u64::MAX % n;
+        if r == n - 1 {
+            return self.next_u64() % n;
+        }
+        let bound = u64::MAX - r;
+        loop {
+            let x = self.next_u64();
+            if x < bound {
+                return x % n;
+            }
+        }
+    }
 }
 
 /// Bytes and attempt spans consumed by a single case, in call order.
@@ -148,31 +216,65 @@ impl XoshiroState {
 /// - Each non-empty [`TestCaseContext::fill`] call is one entry in `draws`.
 /// - Each `sample_with_rejection` attempt (including nested ones) is
 ///   one entry in `spans`.
+/// - Each draw's bounded-domain metadata (if any) is one entry in
+///   `metas`, parallel to `draws`.
 ///
 /// Empty `fill` calls neither consume PRNG state nor produce a draw
 /// entry, matching the existing `TestCaseContext::fill(&mut [])` contract.
-#[cfg(test)]
 #[derive(Default, Clone)]
 pub(crate) struct ChoiceSequence {
     draws: Vec<Vec<u8>>,
     spans: Vec<AttemptSpan>,
+    metas: Vec<ChoiceMeta>,
 }
 
-#[cfg(test)]
 impl ChoiceSequence {
+    #[cfg(test)]
     pub(crate) fn draws(&self) -> &[Vec<u8>] {
         &self.draws
     }
 
+    #[cfg(test)]
     pub(crate) fn spans(&self) -> &[AttemptSpan] {
         &self.spans
     }
+
+    pub(crate) fn metas(&self) -> &[ChoiceMeta] {
+        &self.metas
+    }
+
+    pub(crate) fn draws_mut(&mut self) -> &mut [Vec<u8>] {
+        &mut self.draws
+    }
+
+    pub(crate) fn push_draw(&mut self, bytes: Vec<u8>, meta: ChoiceMeta) {
+        self.draws.push(bytes);
+        self.metas.push(meta);
+    }
+}
+
+/// Bounded-domain metadata for one draw.
+///
+/// `Raw` marks a draw with no mutation constraint (raw bytes, string
+/// payload, etc.). The variants carry enough information for
+/// constraint-aware mutation: a `Bounded` draw may only be rewritten to
+/// another value in `[0, bound)`, a `Choice` draw to another index in
+/// `[0, len)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChoiceMeta {
+    /// Drawn uniformly from `[0, bound)` via the rejection-sampling
+    /// core (`sample_below`).
+    Bounded { bound: u64 },
+    /// Drawn as an index into a candidate slice of length `len`
+    /// (`sample_choice`).
+    Choice { len: usize },
+    /// No bounded domain (raw bytes, string payload, …).
+    Raw,
 }
 
 /// One `sample_with_rejection` attempt, recorded in the order the
 /// enclosing case opened it. Nested attempts point back to their parent
 /// via `parent`; top-level attempts carry `parent = None`.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AttemptSpan {
     pub parent: Option<usize>,
@@ -192,14 +294,12 @@ pub(crate) struct AttemptSpan {
 /// nothing at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttemptVerdict {
-    #[cfg_attr(not(test), expect(dead_code))]
     Pending,
     Accepted,
     Rejected,
 }
 
 /// Reason a strict replay could not reproduce the recorded case.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReplayError {
     /// The generator asked for another draw but the sequence had no more entries.
@@ -207,6 +307,7 @@ pub(crate) enum ReplayError {
     /// The next recorded draw's length does not match the requested length.
     DrawLengthMismatch { expected: usize, actual: usize },
     /// The generator returned but recorded draws remain unread.
+    #[cfg_attr(not(test), expect(dead_code))]
     LeftoverDraws { unused: usize },
     /// The attempt span structure (parent nesting, draw range, or
     /// verdict) diverged from the recorded sequence — distinct from
@@ -217,10 +318,10 @@ pub(crate) enum ReplayError {
         reason: SpanMismatchReason,
     },
     /// The generator returned but recorded spans remain unread.
+    #[cfg_attr(not(test), expect(dead_code))]
     LeftoverSpans { unused: usize },
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SpanMismatchReason {
     /// The generator opened or closed a span but the recorded sequence
@@ -243,7 +344,6 @@ pub(crate) enum SpanMismatchReason {
 /// structural replay mismatch. Sent via [`std::panic::resume_unwind`]
 /// so it bypasses the panic hook, and identified back in the session
 /// via `Any::is::<ReplayAbort>()`.
-#[cfg(test)]
 struct ReplayAbort;
 
 /// Private control-flow marker used by [`TestCaseContext::reject_case`] to unwind
@@ -370,6 +470,61 @@ impl TestCaseContext {
             rejection: None,
             inside_runner: false,
             total_samples: 0,
+            feedback: FeedbackState::Disabled,
+        }
+    }
+
+    /// Construct a context in recording mode for the targeted runner.
+    /// Every draw is appended to the carried [`ChoiceSequence`], which
+    /// the runner recovers via [`take_sequence`](Self::take_sequence)
+    /// at the case boundary.
+    pub(crate) fn recording(seed: u64) -> Self {
+        Self {
+            source: RandomSource::Recording {
+                state: XoshiroState::from_seed(seed),
+                sequence: ChoiceSequence::default(),
+                current_parent: None,
+                pending_choice: None,
+            },
+            generated: Vec::new(),
+            dedup: DedupState::default(),
+            rejection: None,
+            inside_runner: false,
+            total_samples: 0,
+            feedback: FeedbackState::Disabled,
+        }
+    }
+
+    /// Construct a context in exploratory replay mode for a mutated
+    /// candidate. Draws within the recorded sequence are replayed
+    /// verbatim; draws beyond it are generated from the carried PRNG
+    /// (seeded from `prng_seed`), up to [`MAX_CHOICES_PER_CASE`].
+    pub(crate) fn exploring(sequence: ChoiceSequence, prng_seed: u64) -> Self {
+        Self {
+            source: RandomSource::Replay {
+                sequence,
+                next_draw: 0,
+                next_span: 0,
+                current_parent: None,
+                error: None,
+                explore: Some(XoshiroState::from_seed(prng_seed)),
+                consumed: 0,
+            },
+            generated: Vec::new(),
+            dedup: DedupState::default(),
+            rejection: None,
+            inside_runner: false,
+            total_samples: 0,
+            feedback: FeedbackState::Disabled,
+        }
+    }
+
+    /// Recover the recorded choice sequence from a recording-mode
+    /// context, leaving an empty sequence behind.
+    pub(crate) fn take_sequence(&mut self) -> Option<ChoiceSequence> {
+        match &mut self.source {
+            RandomSource::Recording { sequence, .. } => Some(std::mem::take(sequence)),
+            _ => None,
         }
     }
 
@@ -421,21 +576,39 @@ impl TestCaseContext {
         }
         match &mut self.source {
             RandomSource::Prng(state) => state.fill(dst),
-            #[cfg(test)]
             RandomSource::Recording {
-                state, sequence, ..
+                state,
+                sequence,
+                pending_choice,
+                ..
             } => {
                 state.fill(dst);
-                sequence.draws.push(dst.to_vec());
+                let meta = pending_choice.take().unwrap_or(ChoiceMeta::Raw);
+                sequence.push_draw(dst.to_vec(), meta);
             }
-            #[cfg(test)]
             RandomSource::Replay {
                 sequence,
                 next_draw,
                 error,
+                explore,
+                consumed,
                 ..
             } => {
                 if error.is_none() {
+                    if let Some(prng) = explore {
+                        *consumed += 1;
+                        if *consumed > MAX_CHOICES_PER_CASE {
+                            // The mutated candidate keeps drawing past
+                            // the cap: abort the case as a rejection so
+                            // the run still terminates.
+                            self.rejection = Some(RejectionState {
+                                location: std::panic::Location::caller(),
+                            });
+                            std::panic::resume_unwind(Box::new(IterationRejected));
+                        }
+                        prng.fill(dst);
+                        return;
+                    }
                     if *next_draw >= sequence.draws.len() {
                         *error = Some(ReplayError::SequenceExhausted {
                             requested: dst.len(),
@@ -467,7 +640,6 @@ impl TestCaseContext {
     pub(crate) fn begin_attempt(&mut self) -> Option<usize> {
         match &mut self.source {
             RandomSource::Prng(_) => None,
-            #[cfg(test)]
             RandomSource::Recording {
                 sequence,
                 current_parent,
@@ -484,13 +656,13 @@ impl TestCaseContext {
                 *current_parent = Some(idx);
                 Some(idx)
             }
-            #[cfg(test)]
             RandomSource::Replay {
                 sequence,
                 next_draw,
                 next_span,
                 current_parent,
                 error,
+                ..
             } => {
                 if error.is_some() {
                     std::panic::resume_unwind(Box::new(ReplayAbort));
@@ -538,7 +710,6 @@ impl TestCaseContext {
                 let _ = id;
                 let _ = verdict;
             }
-            #[cfg(test)]
             RandomSource::Recording {
                 sequence,
                 current_parent,
@@ -551,7 +722,6 @@ impl TestCaseContext {
                 span.verdict = verdict;
                 *current_parent = span.parent;
             }
-            #[cfg(test)]
             RandomSource::Replay {
                 sequence,
                 next_draw,
@@ -695,6 +865,56 @@ impl TestCaseContext {
         self.inside_runner = true;
     }
 
+    /// Report a scalar "distance to failure" for the current case.
+    ///
+    /// Only meaningful in targeted mode: [`Runner::run_targeted`](crate::Runner::run_targeted)
+    /// switches the context into that mode before running its case
+    /// loop. In the default mode (plain [`Runner::run`](crate::Runner::run)
+    /// or a directly constructed context) this is an allocation-free
+    /// no-op.
+    ///
+    /// A larger finite value means "closer to failure". Multiple calls
+    /// within one case keep the maximum; a `NaN` / infinity report
+    /// marks the whole case invalid.
+    #[track_caller]
+    pub fn maximize(&mut self, score: f64) {
+        if let FeedbackState::Targeted { max_score } = &mut self.feedback {
+            let next = if score.is_finite() {
+                match *max_score {
+                    ScalarFeedback::Missing => ScalarFeedback::Valid(score),
+                    ScalarFeedback::Valid(current) => ScalarFeedback::Valid(current.max(score)),
+                    ScalarFeedback::Invalid => ScalarFeedback::Invalid,
+                }
+            } else {
+                ScalarFeedback::Invalid
+            };
+            *max_score = next;
+        }
+    }
+
+    /// Switch the context into targeted feedback mode for the upcoming
+    /// case. Called by [`Runner::run_targeted`](crate::Runner::run_targeted)
+    /// before each case; the case-local score is drained via
+    /// [`take_feedback`](Self::take_feedback) at the case boundary.
+    pub(crate) fn enable_targeted(&mut self) {
+        self.feedback = FeedbackState::Targeted {
+            max_score: ScalarFeedback::Missing,
+        };
+    }
+
+    /// Drain the case-local feedback state, resetting to disabled.
+    pub(crate) fn take_feedback(&mut self) -> FeedbackState {
+        std::mem::replace(&mut self.feedback, FeedbackState::Disabled)
+    }
+
+    /// Declare the bounded domain of the next draw. Consumed by
+    /// [`fill`](Self::fill) in Recording mode; ignored otherwise.
+    pub(crate) fn set_next_choice_meta(&mut self, meta: ChoiceMeta) {
+        if let RandomSource::Recording { pending_choice, .. } = &mut self.source {
+            *pending_choice = Some(meta);
+        }
+    }
+
     /// Total number of top-level `sample_*` invocations observed on this
     /// context across every case that has run so far. Consumed by
     /// [`Runner::run`](crate::Runner::run) when it builds
@@ -710,7 +930,7 @@ impl TestCaseContext {
 /// alongside the closure's own return value. Recording is not woven
 /// into `TestCaseContext::new` or `Runner::run` because those production paths
 /// have no consumer for the sequence — [`RecordingSession`] is the
-/// only entry point that allocates one.
+/// only entry point that allocates one outside the targeted runner.
 #[cfg(test)]
 pub(crate) struct RecordingSession {
     seed: u64,
@@ -731,12 +951,14 @@ impl RecordingSession {
                 state: XoshiroState::from_seed(self.seed),
                 sequence: ChoiceSequence::default(),
                 current_parent: None,
+                pending_choice: None,
             },
             generated: Vec::new(),
             dedup: DedupState::default(),
             rejection: None,
             inside_runner: false,
             total_samples: 0,
+            feedback: FeedbackState::Disabled,
         };
         let value = f(&mut ctx);
         let sequence = match ctx.source {
@@ -782,12 +1004,15 @@ impl ReplaySession {
                 next_span: 0,
                 current_parent: None,
                 error: None,
+                explore: None,
+                consumed: 0,
             },
             generated: Vec::new(),
             dedup: DedupState::default(),
             rejection: None,
             inside_runner: false,
             total_samples: 0,
+            feedback: FeedbackState::Disabled,
         };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
         let (sequence, next_draw, next_span, error) = match ctx.source {
@@ -849,8 +1074,7 @@ pub(crate) fn is_iteration_rejected(payload: &(dyn Any + Send)) -> bool {
     payload.is::<IterationRejected>()
 }
 
-#[cfg(test)]
-fn is_replay_abort(payload: &(dyn Any + Send)) -> bool {
+pub(crate) fn is_replay_abort(payload: &(dyn Any + Send)) -> bool {
     payload.is::<ReplayAbort>()
 }
 
@@ -1353,5 +1577,106 @@ mod tests {
         assert_eq!(seq.spans()[0].start_draw, seq.spans()[0].end_draw);
         assert_eq!(seq.spans()[1].start_draw, seq.spans()[1].end_draw);
         assert_eq!(seq.draws().len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod targeted_tests {
+    use super::*;
+    use crate::rng::{FeedbackState, ScalarFeedback, TestCaseContext};
+
+    // === maximize / feedback state ===
+
+    #[test]
+    fn maximize_keeps_maximum_within_case() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_targeted();
+        ctx.maximize(1.0);
+        ctx.maximize(3.0);
+        ctx.maximize(2.0);
+        match ctx.take_feedback() {
+            FeedbackState::Targeted { max_score } => {
+                assert_eq!(max_score, ScalarFeedback::Valid(3.0));
+            }
+            other => panic!("expected targeted feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_report_wins_over_earlier_valid_scores() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_targeted();
+        ctx.maximize(5.0);
+        ctx.maximize(f64::NAN);
+        match ctx.take_feedback() {
+            FeedbackState::Targeted { max_score } => {
+                assert_eq!(max_score, ScalarFeedback::Invalid);
+            }
+            other => panic!("expected targeted feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maximize_is_noop_when_disabled() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.maximize(f64::NAN);
+        ctx.maximize(1.0);
+        assert!(matches!(ctx.take_feedback(), FeedbackState::Disabled));
+    }
+
+    #[test]
+    fn take_feedback_resets_to_disabled() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_targeted();
+        ctx.maximize(1.0);
+        let _ = ctx.take_feedback();
+        assert!(matches!(ctx.feedback, FeedbackState::Disabled));
+    }
+
+    // === choice metadata recording ===
+
+    #[test]
+    fn recording_tags_bounded_and_choice_draws() {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let _ = crate::sample_usize_in(ctx, 0..10);
+            let _ = crate::sample_choice(ctx, &[1, 2, 3, 4]);
+            let _ = crate::sample_u32(ctx);
+        });
+        let metas = seq.metas();
+        assert!(matches!(metas[0], ChoiceMeta::Bounded { bound: 10 }));
+        assert!(matches!(metas[1], ChoiceMeta::Choice { len: 4 }));
+        assert!(matches!(metas[2], ChoiceMeta::Raw));
+    }
+
+    // === exploratory replay ===
+
+    #[test]
+    fn exploring_generates_draws_beyond_recorded_sequence() {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let mut buf = [0u8; 4];
+            ctx.fill(&mut buf);
+        });
+        assert_eq!(seq.draws().len(), 1);
+        let mut ctx = TestCaseContext::exploring(seq, 42);
+        let mut buf = [0u8; 4];
+        ctx.fill(&mut buf); // replayed from the recorded draw
+        ctx.fill(&mut buf); // generated from the explore PRNG
+    }
+
+    #[test]
+    fn exploring_aborts_at_choice_cap() {
+        let mut ctx = TestCaseContext::exploring(ChoiceSequence::default(), 1);
+        let mut buf = [0u8; 4];
+        for _ in 0..MAX_CHOICES_PER_CASE {
+            ctx.fill(&mut buf);
+        }
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            ctx.fill(&mut buf);
+        }));
+        assert!(outcome.is_err(), "drawing past the cap must unwind");
+        assert!(
+            ctx.take_rejection().is_some(),
+            "the cap abort must be recorded as a rejection"
+        );
     }
 }

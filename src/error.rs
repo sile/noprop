@@ -47,6 +47,10 @@ pub struct Error {
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
     stats: Stats,
+    /// `true` when the failure came from
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted). Switches
+    /// the reproduce hint to the targeted entry point.
+    targeted: bool,
 }
 
 enum ErrorKind {
@@ -63,6 +67,12 @@ enum ErrorKind {
         rejected_iterations: usize,
         last_reject_location: &'static Location<'static>,
     },
+    /// An accepted targeted case finished without calling
+    /// [`TestCaseContext::maximize`](crate::TestCaseContext::maximize).
+    MissingFeedback,
+    /// An accepted targeted case reported `NaN` or infinity via
+    /// [`TestCaseContext::maximize`](crate::TestCaseContext::maximize).
+    InvalidFeedback,
 }
 
 impl Error {
@@ -73,13 +83,31 @@ impl Error {
         generated: Vec<GeneratedValue>,
         stats: Stats,
     ) -> Self {
-        Self {
+        Self::new(
             seed,
             case_index,
-            kind: ErrorKind::Panic { message },
+            ErrorKind::Panic { message },
             generated,
             stats,
-        }
+            false,
+        )
+    }
+
+    pub(crate) fn from_panic_targeted(
+        seed: u64,
+        case_index: usize,
+        message: String,
+        generated: Vec<GeneratedValue>,
+        stats: Stats,
+    ) -> Self {
+        Self::new(
+            seed,
+            case_index,
+            ErrorKind::Panic { message },
+            generated,
+            stats,
+            true,
+        )
     }
 
     pub(crate) fn from_too_many_rejections(
@@ -90,15 +118,87 @@ impl Error {
         generated: Vec<GeneratedValue>,
         stats: Stats,
     ) -> Self {
-        Self {
+        Self::new(
             seed,
             case_index,
-            kind: ErrorKind::TooManyRejections {
+            ErrorKind::TooManyRejections {
                 rejected_iterations,
                 last_reject_location,
             },
             generated,
             stats,
+            false,
+        )
+    }
+
+    pub(crate) fn from_too_many_rejections_targeted(
+        seed: u64,
+        case_index: usize,
+        rejected_iterations: usize,
+        last_reject_location: &'static Location<'static>,
+        generated: Vec<GeneratedValue>,
+        stats: Stats,
+    ) -> Self {
+        Self::new(
+            seed,
+            case_index,
+            ErrorKind::TooManyRejections {
+                rejected_iterations,
+                last_reject_location,
+            },
+            generated,
+            stats,
+            true,
+        )
+    }
+
+    pub(crate) fn from_missing_feedback(
+        seed: u64,
+        case_index: usize,
+        generated: Vec<GeneratedValue>,
+        stats: Stats,
+    ) -> Self {
+        Self::new(
+            seed,
+            case_index,
+            ErrorKind::MissingFeedback,
+            generated,
+            stats,
+            true,
+        )
+    }
+
+    pub(crate) fn from_invalid_feedback(
+        seed: u64,
+        case_index: usize,
+        generated: Vec<GeneratedValue>,
+        stats: Stats,
+    ) -> Self {
+        Self::new(
+            seed,
+            case_index,
+            ErrorKind::InvalidFeedback,
+            generated,
+            stats,
+            true,
+        )
+    }
+
+    fn new(
+        seed: u64,
+        case_index: usize,
+        kind: ErrorKind,
+        generated: Vec<GeneratedValue>,
+        stats: Stats,
+        targeted: bool,
+    ) -> Self {
+        Self {
+            seed,
+            case_index,
+            kind,
+            generated,
+            stats,
+            targeted,
         }
     }
 
@@ -162,13 +262,28 @@ impl std::fmt::Debug for Error {
                     last_reject_location.line(),
                 )?;
             }
+            ErrorKind::MissingFeedback => {
+                writeln!(f, "    missing_feedback: true,")?;
+            }
+            ErrorKind::InvalidFeedback => {
+                writeln!(f, "    invalid_feedback: true,")?;
+            }
         }
-        writeln!(
-            f,
-            "    reproduce: noprop::Runner::new({:#018x}, {}),",
-            self.seed,
-            self.reproduce_iterations(),
-        )?;
+        if self.targeted {
+            writeln!(
+                f,
+                "    reproduce: noprop::Runner::new({:#018x}, {}).run_targeted(|ctx| ...),",
+                self.seed,
+                self.reproduce_iterations(),
+            )?;
+        } else {
+            writeln!(
+                f,
+                "    reproduce: noprop::Runner::new({:#018x}, {}),",
+                self.seed,
+                self.reproduce_iterations(),
+            )?;
+        }
         writeln!(
             f,
             "    stats: {{ accepted: {}, rejected: {}, total_samples: {} }},",
@@ -213,13 +328,38 @@ impl std::fmt::Display for Error {
                     last_reject_location.line(),
                 )?;
             }
+            ErrorKind::MissingFeedback => {
+                writeln!(
+                    f,
+                    "noprop missing feedback at case {} (seed={:#018x}): \
+                     an accepted targeted case never called TestCaseContext::maximize",
+                    self.case_index, self.seed,
+                )?;
+            }
+            ErrorKind::InvalidFeedback => {
+                writeln!(
+                    f,
+                    "noprop invalid feedback at case {} (seed={:#018x}): \
+                     TestCaseContext::maximize received NaN or infinity",
+                    self.case_index, self.seed,
+                )?;
+            }
         }
-        writeln!(
-            f,
-            "reproduce with: noprop::Runner::new({:#018x}, {})",
-            self.seed,
-            self.reproduce_iterations(),
-        )?;
+        if self.targeted {
+            writeln!(
+                f,
+                "reproduce with: noprop::Runner::new({:#018x}, {}).run_targeted(|ctx| ...)",
+                self.seed,
+                self.reproduce_iterations(),
+            )?;
+        } else {
+            writeln!(
+                f,
+                "reproduce with: noprop::Runner::new({:#018x}, {})",
+                self.seed,
+                self.reproduce_iterations(),
+            )?;
+        }
         writeln!(
             f,
             "stats: accepted={}, rejected={}, total_samples={}",

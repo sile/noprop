@@ -702,3 +702,116 @@ fn stats_on_failure_reports_progress_up_to_failing_case() {
     assert_eq!(stats.rejected_iterations, 0);
     assert_eq!(err.case_index(), stats.accepted_iterations);
 }
+
+// === Targeted PBT (Runner::run_targeted / TestCaseContext::maximize) ===
+
+#[test]
+fn run_targeted_succeeds_when_feedback_is_reported() {
+    let mut runner = noprop::Runner::new(42, 64);
+    runner
+        .run_targeted(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            ctx.maximize((x as f64) / u32::MAX as f64);
+            Ok(())
+        })
+        .expect("targeted run with valid feedback must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+}
+
+#[test]
+fn run_targeted_is_deterministic_for_same_seed() {
+    let mut a = noprop::Runner::new(7, 64);
+    a.run_targeted(|ctx| {
+        let x = noprop::sample_u32(ctx);
+        ctx.maximize((x as f64) / u32::MAX as f64);
+        Ok(())
+    })
+    .expect("first targeted run");
+    let mut b = noprop::Runner::new(7, 64);
+    b.run_targeted(|ctx| {
+        let x = noprop::sample_u32(ctx);
+        ctx.maximize((x as f64) / u32::MAX as f64);
+        Ok(())
+    })
+    .expect("second targeted run");
+    assert_eq!(a.stats(), b.stats());
+}
+
+#[test]
+fn run_targeted_missing_feedback_is_reported() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            // Deliberately no maximize call.
+            Ok(())
+        })
+        .expect_err("accepted case without feedback must fail");
+    let display = format!("{err}");
+    assert!(
+        display.contains("missing feedback"),
+        "unexpected message: {display}"
+    );
+    assert!(
+        display.contains("run_targeted"),
+        "reproduce hint must name the targeted entry point: {display}"
+    );
+}
+
+#[test]
+fn run_targeted_invalid_feedback_is_reported() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let err = noprop::Runner::new(1, 8)
+            .run_targeted(|ctx| {
+                ctx.maximize(bad);
+                Ok(())
+            })
+            .expect_err("NaN / infinity feedback must fail");
+        let display = format!("{err}");
+        assert!(
+            display.contains("invalid feedback"),
+            "unexpected message: {display}"
+        );
+    }
+}
+
+#[test]
+fn maximize_is_noop_under_plain_run() {
+    noprop::Runner::new(1, 8)
+        .run(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            ctx.maximize((x as f64) / u32::MAX as f64);
+            Ok(())
+        })
+        .expect("maximize must be ignored by the plain runner");
+}
+
+#[test]
+fn run_targeted_reports_property_failure() {
+    let err = noprop::Runner::new(1, 32)
+        .run_targeted(|_ctx| {
+            panic!("deterministic failure");
+        })
+        .expect_err("panicking closure must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("deterministic failure"), "{display}");
+    assert!(display.contains("run_targeted"), "{display}");
+    assert_eq!(err.case_index(), 0);
+}
+
+#[test]
+fn run_targeted_counts_rejections() {
+    let mut runner = noprop::Runner::new(3, 16);
+    runner
+        .run_targeted(|ctx| {
+            if noprop::sample_bool(ctx) {
+                ctx.reject_case();
+            }
+            ctx.maximize(0.5);
+            Ok(())
+        })
+        .expect("rejections must be retried like the plain runner");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 16);
+    assert!(stats.rejected_iterations > 0);
+}

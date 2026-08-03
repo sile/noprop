@@ -162,7 +162,7 @@ use std::ops::{Bound, RangeBounds};
 use std::panic::Location;
 
 use crate::TestCaseContext;
-use crate::rng::AttemptVerdict;
+use crate::rng::{AttemptVerdict, ChoiceMeta};
 
 /// Read `N` bytes from `ctx` without recording. Used by every primitive
 /// so that composite generators (non-zero variants, `sample_char`,
@@ -292,6 +292,15 @@ where
 /// attempts is therefore `< 2⁻⁶⁴`.
 #[track_caller]
 fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
+    sample_below_with_meta(ctx, n, ChoiceMeta::Bounded { bound: n })
+}
+
+/// `sample_below` with an explicit [`ChoiceMeta`] for the draws it
+/// consumes. `sample_choice` uses this to tag its index draw as a
+/// `Choice` instead of a plain `Bounded` draw, so the metadata records
+/// the primitive that produced it rather than the shared core.
+#[track_caller]
+fn sample_below_with_meta(ctx: &mut TestCaseContext, n: u64, meta: ChoiceMeta) -> u64 {
     debug_assert!(n > 0, "sample_below: n must be non-zero");
     if n == 1 {
         return 0;
@@ -306,10 +315,12 @@ fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
     //     values, i.e. accept iff x < u64::MAX - r.
     let r = u64::MAX % n;
     if r == n - 1 {
+        ctx.set_next_choice_meta(meta);
         return u64::from_le_bytes(raw_bytes(ctx)) % n;
     }
     let bound = u64::MAX - r;
     sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        ctx.set_next_choice_meta(meta);
         let x = u64::from_le_bytes(raw_bytes(ctx));
         (x < bound).then_some(x % n)
     })
@@ -354,7 +365,11 @@ pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(
 ) -> T {
     assert!(!choices.is_empty(), "sample_choice: empty slice");
     let loc = Location::caller();
-    let idx = sample_below(ctx, choices.len() as u64) as usize;
+    let idx = sample_below_with_meta(
+        ctx,
+        choices.len() as u64,
+        ChoiceMeta::Choice { len: choices.len() },
+    ) as usize;
     let v = choices[idx].clone();
     ctx.record_generated(&v, loc);
     v
