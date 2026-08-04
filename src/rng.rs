@@ -249,12 +249,20 @@ impl ChoiceSequence {
         &self.spans
     }
 
+    #[cfg(test)]
     pub(crate) fn metas(&self) -> &[ChoiceMeta] {
         &self.metas
     }
 
+    #[cfg(test)]
     pub(crate) fn draws_mut(&mut self) -> &mut [Vec<u8>] {
         &mut self.draws
+    }
+
+    /// Split borrow of draws and their metadata, so mutation can walk
+    /// both without allocating a copy.
+    pub(crate) fn draws_and_metas(&mut self) -> (&mut [Vec<u8>], &[ChoiceMeta]) {
+        (&mut self.draws, &self.metas)
     }
 
     pub(crate) fn push_draw(&mut self, bytes: Vec<u8>, meta: ChoiceMeta) {

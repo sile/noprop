@@ -724,8 +724,8 @@ impl TargetedSearch {
 /// structure are preserved, so the mutated sequence still replays
 /// structurally.
 fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
-    let metas: Vec<ChoiceMeta> = sequence.metas().to_vec();
-    for (draw, meta) in sequence.draws_mut().iter_mut().zip(metas.iter()) {
+    let (draws, metas) = sequence.draws_and_metas();
+    for (draw, meta) in draws.iter_mut().zip(metas.iter()) {
         if prng.sample_below(MUTATION_DENOM) != 0 {
             continue;
         }
