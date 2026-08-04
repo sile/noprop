@@ -7,6 +7,8 @@ mod generator;
 mod rng;
 mod runner;
 
+pub mod docs;
+
 pub use config::{ConfigError, iterations_from_env, seed_from_env_or_time};
 pub use error::{Error, Result};
 pub use generator::{

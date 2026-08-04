@@ -561,7 +561,9 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     assert_eq!(err.case_index(), 3);
 
     let display = format!("{err}");
-    let expected_iterations = err.case_index() + 1;
+    // The hint reuses the original iteration budget so the rerun hits
+    // the same rejection cap (a `case_index + 1` hint would shrink it).
+    let expected_iterations = 128;
     let hint = format!(
         "reproduce with: noprop::Runner::new({:#018x}, {expected_iterations})",
         err.seed(),
@@ -701,4 +703,445 @@ fn stats_on_failure_reports_progress_up_to_failing_case() {
     assert_eq!(stats.accepted_iterations, 4);
     assert_eq!(stats.rejected_iterations, 0);
     assert_eq!(err.case_index(), stats.accepted_iterations);
+}
+
+// === Targeted PBT (Runner::run_targeted / TestCaseContext::maximize) ===
+
+#[test]
+fn run_targeted_succeeds_when_feedback_is_reported() {
+    let mut runner = noprop::Runner::new(42, 64);
+    runner
+        .run_targeted(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            ctx.maximize((x as f64) / u32::MAX as f64);
+            Ok(())
+        })
+        .expect("targeted run with valid feedback must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+}
+
+#[test]
+fn run_targeted_missing_feedback_is_reported() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            // Deliberately no maximize call.
+            Ok(())
+        })
+        .expect_err("accepted case without feedback must fail");
+    let display = format!("{err}");
+    assert!(
+        display.contains("missing feedback"),
+        "unexpected message: {display}"
+    );
+    assert!(
+        display.contains("run_targeted"),
+        "reproduce hint must name the targeted entry point: {display}"
+    );
+}
+
+#[test]
+fn run_targeted_invalid_feedback_is_reported() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let err = noprop::Runner::new(1, 8)
+            .run_targeted(|ctx| {
+                ctx.maximize(bad);
+                Ok(())
+            })
+            .expect_err("NaN / infinity feedback must fail");
+        let display = format!("{err}");
+        assert!(
+            display.contains("invalid feedback"),
+            "unexpected message: {display}"
+        );
+    }
+}
+
+#[test]
+fn maximize_is_noop_under_plain_run() {
+    noprop::Runner::new(1, 8)
+        .run(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            ctx.maximize((x as f64) / u32::MAX as f64);
+            Ok(())
+        })
+        .expect("maximize must be ignored by the plain runner");
+}
+
+#[test]
+fn run_targeted_reports_property_failure() {
+    let err = noprop::Runner::new(1, 32)
+        .run_targeted(|_ctx| {
+            panic!("deterministic failure");
+        })
+        .expect_err("panicking closure must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("deterministic failure"), "{display}");
+    assert!(display.contains("run_targeted"), "{display}");
+    assert_eq!(err.case_index(), 0);
+}
+
+#[test]
+fn run_targeted_counts_rejections() {
+    let mut runner = noprop::Runner::new(3, 16);
+    runner
+        .run_targeted(|ctx| {
+            if noprop::sample_bool(ctx) {
+                ctx.reject_case();
+            }
+            ctx.maximize(0.5);
+            Ok(())
+        })
+        .expect("rejections must be retried like the plain runner");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 16);
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
+fn run_targeted_with_span_based_generator_does_not_reject_everything() {
+    let mut runner = noprop::Runner::new(11, 64);
+    runner
+        .run_targeted(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..10);
+            ctx.maximize(x as f64 / 10.0);
+            Ok(())
+        })
+        .expect("span-based generators must work under targeted search");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+    assert!(
+        stats.rejected_iterations < 64,
+        "exploratory candidates must not all be discarded: rejected={}",
+        stats.rejected_iterations
+    );
+}
+
+#[test]
+fn run_targeted_with_choice_generator() {
+    let mut runner = noprop::Runner::new(5, 64);
+    runner
+        .run_targeted(|ctx| {
+            let idx = noprop::sample_choice(ctx, &[0usize, 1, 2, 3, 4]);
+            ctx.maximize(idx as f64 / 4.0);
+            Ok(())
+        })
+        .expect("choice-based generators must work under targeted search");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+    assert!(
+        stats.rejected_iterations < 64,
+        "choice candidates must not all be discarded: rejected={}",
+        stats.rejected_iterations
+    );
+}
+
+#[test]
+fn run_targeted_stops_after_too_many_rejections() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting property must hit the rejection cap");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(display.contains("run_targeted"), "{display}");
+    let stats = err.stats();
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
+fn run_targeted_too_many_rejections_reproduces_with_the_hint_budget() {
+    // The reproduce hint reuses the original iteration budget so the
+    // rerun hits the same rejection cap and exits the same way.
+    let seed = 0xBAD_CAFEu64;
+    let run = || {
+        noprop::Runner::new(seed, 16).run_targeted(|ctx| {
+            ctx.reject_case();
+        })
+    };
+    let err = run().expect_err("always-rejecting property must hit the rejection cap");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    let replayed = run().expect_err("same seed and budget must reproduce the failure");
+    assert_eq!(replayed.seed(), err.seed());
+    assert_eq!(replayed.case_index(), err.case_index());
+    assert_eq!(replayed.stats(), err.stats());
+}
+
+#[test]
+fn run_targeted_reproduces_same_candidate_sequence() {
+    use std::cell::Cell;
+    let collect = |runner: &mut noprop::Runner| {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        runner
+            .run_targeted(|ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.maximize(x as f64 / 1000.0);
+                Ok(())
+            })
+            .expect("targeted run");
+        observed.into_inner()
+    };
+    let a = collect(&mut noprop::Runner::new(7, 64));
+    let b = collect(&mut noprop::Runner::new(7, 64));
+    assert_eq!(
+        a, b,
+        "candidate sequences must be reproducible from the seed"
+    );
+}
+
+#[test]
+fn run_targeted_reports_err_closure_failure() {
+    let err = noprop::Runner::new(1, 32)
+        .run_targeted(|ctx| {
+            ctx.maximize(0.5);
+            Err("application error".into())
+        })
+        .expect_err("returned Err must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("application error"), "{display}");
+    assert!(display.contains("run_targeted"), "{display}");
+}
+
+#[test]
+fn run_targeted_debug_output_reports_missing_feedback() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            Ok(())
+        })
+        .expect_err("missing feedback must fail");
+    let debug = format!("{err:?}");
+    assert!(debug.contains("missing_feedback: true"), "{debug}");
+    assert!(debug.contains("run_targeted"), "{debug}");
+}
+
+#[test]
+fn run_targeted_missing_feedback_reports_progress() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            Ok(())
+        })
+        .expect_err("missing feedback must fail");
+    let stats = err.stats();
+    assert_eq!(stats.accepted_iterations, 0);
+    assert_eq!(stats.rejected_iterations, 0);
+    assert_eq!(
+        stats.total_samples, 1,
+        "one sample before the missing report"
+    );
+    assert_eq!(err.case_index(), stats.accepted_iterations);
+    assert!(
+        !err.generated().is_empty(),
+        "the failing case's generated trace must be recorded"
+    );
+}
+
+#[test]
+fn run_targeted_zero_iterations_does_not_invoke_closure() {
+    use std::cell::Cell;
+    let invoked = Cell::new(0usize);
+    noprop::Runner::new(1, 0)
+        .run_targeted(|ctx| {
+            invoked.set(invoked.get() + 1);
+            ctx.maximize(1.0);
+            Ok(())
+        })
+        .expect("zero iterations must succeed");
+    assert_eq!(invoked.get(), 0, "the closure must not be invoked");
+}
+
+#[test]
+fn run_targeted_reproduce_hint_reproduces_the_same_failure() {
+    // The failure condition (x >= 900, probability 0.1) must be found
+    // within the budget for the hint test to be meaningful; 512
+    // iterations leaves ample headroom even if the search constants
+    // are retuned. The hint must reuse this exact budget.
+    let seed = 0x5EED_1EAD_BEEF_C0DEu64;
+    let iterations = 512;
+    let run = || {
+        noprop::Runner::new(seed, iterations).run_targeted(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..1000);
+            ctx.maximize(x as f64 / 1000.0);
+            if x >= 900 {
+                panic!("boom at x = {x}");
+            }
+            Ok(())
+        })
+    };
+
+    let err = run().expect_err("a large x must fail the run");
+    let display = format!("{err}");
+    let hint = format!(
+        "reproduce with: noprop::Runner::new({:#018x}, {iterations}).run_targeted(|ctx| ...)",
+        err.seed(),
+    );
+    assert!(
+        display.contains(&hint),
+        "Display should contain the targeted reproduce hint {hint:?}, got:\n{display}"
+    );
+
+    // Using the hint's budget verbatim reproduces the same failure.
+    let replayed = run().expect_err("same seed and budget must reproduce the failure");
+    assert_eq!(replayed.seed(), err.seed());
+    assert_eq!(replayed.case_index(), err.case_index());
+}
+
+#[test]
+fn run_targeted_failure_beats_invalid_feedback() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            ctx.maximize(f64::NAN);
+            panic!("real failure");
+        })
+        .expect_err("property failure must win over invalid feedback");
+    let display = format!("{err}");
+    assert!(display.contains("real failure"), "{display}");
+    assert!(!display.contains("invalid feedback"), "{display}");
+}
+
+#[test]
+fn run_targeted_discards_score_of_rejected_cases() {
+    let err = noprop::Runner::new(3, 8)
+        .run_targeted(|ctx| {
+            ctx.maximize(1.0);
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting must hit the rejection cap, not missing feedback");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(!display.contains("missing feedback"), "{display}");
+}
+
+fn shared_property(ctx: &mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> {
+    let x = noprop::sample_usize_in(ctx, 0..1000);
+    ctx.maximize(x as f64 / 1000.0);
+    Ok(())
+}
+
+#[test]
+fn same_property_runs_under_both_policies() {
+    noprop::Runner::new(1, 16)
+        .run(shared_property)
+        .expect("uniform run must succeed");
+    noprop::Runner::new(1, 16)
+        .run_targeted(shared_property)
+        .expect("targeted run must succeed");
+}
+
+#[test]
+fn run_targeted_requires_feedback_after_rejected_case() {
+    // A rejected case does not satisfy the accepted-case feedback
+    // requirement: the next accepted case must still call maximize.
+    // The seed makes the first case reject (asserted below) and a
+    // later case reach the verdict without feedback, so the exit is
+    // MissingFeedback — not TooManyRejections and not a silent Ok.
+    let err = noprop::Runner::new(6, 8)
+        .run_targeted(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..2);
+            if x == 0 {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect_err("accepted case without maximize must end in MissingFeedback");
+    let display = format!("{err}");
+    assert!(display.contains("missing feedback"), "{display}");
+    assert!(
+        err.stats().rejected_iterations >= 1,
+        "the rejection path must be exercised before the accepted case: {:?}",
+        err.stats()
+    );
+}
+
+#[test]
+fn run_targeted_counts_exploratory_draw_cap_excess_as_rejection() {
+    // An exploratory case that draws past the recorded sequence
+    // exceeds the generated-draw cap and is rejected; the run
+    // continues and counts the rejection in the stats. The first
+    // (recording) case draws once with this seed — asserted below —
+    // so the recorded sequence stays one draw long; a later case
+    // whose mutated draw is nonzero asks for 4100 draws (beyond
+    // MAX_CHOICES_PER_CASE = 4096), of which only the first replays —
+    // the rest must be generated, blowing past the cap. reject_case
+    // is never called, so every counted rejection comes from the draw
+    // cap.
+    //
+    // The first-case draw and the mutation behavior are fixed by the
+    // seed and the search constants (MUTATION_DENOM, RANDOM_RESTART_
+    // DENOM); re-selecting the seed is expected when tuning them.
+    use std::cell::Cell;
+    let mut runner = noprop::Runner::new(282, 8);
+    let first_x: Cell<Option<u8>> = Cell::new(None);
+    let result = runner.run_targeted(|ctx| {
+        let x = noprop::sample_u8(ctx);
+        if first_x.get().is_none() {
+            first_x.set(Some(x));
+        }
+        ctx.maximize(x as f64 / u8::MAX as f64);
+        if x != 0 {
+            for _ in 0..4100 {
+                noprop::sample_u8(ctx);
+            }
+        }
+        Ok(())
+    });
+    assert!(
+        result.is_ok(),
+        "draw-cap rejections must not fail the run: {result:?}"
+    );
+    assert_eq!(
+        first_x.get(),
+        Some(0),
+        "the recording case must draw zero so the recorded sequence stays short"
+    );
+    assert!(
+        runner.stats().rejected_iterations >= 1,
+        "draw-cap excess must count toward rejected_iterations"
+    );
+}
+
+#[test]
+fn run_targeted_steers_candidates_by_score() {
+    // If the score were ignored (for example, a bug admitted every
+    // case with a constant score), the observed candidate stream would
+    // not depend on which end of the domain maximize rewards. It must:
+    // rewarding large x keeps the search in the high end, rewarding
+    // small x pins it to the low end, so the best observed candidate
+    // in the second half of the run differs between the two.
+    use std::cell::Cell;
+
+    fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 256)
+            .run_targeted(|ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.maximize(score_of(x));
+                Ok(())
+            })
+            .expect("targeted run must succeed");
+        observed.into_inner()
+    }
+
+    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
+
+    let reward_high = observe(6, |x| x as f64 / 1000.0);
+    let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
+
+    let high_max = second_half_max(&reward_high);
+    let low_max = second_half_max(&reward_low);
+    assert!(
+        high_max > low_max,
+        "the score must steer the search toward the rewarded end: \
+         rewarding high reached {high_max}, rewarding low reached {low_max}"
+    );
 }

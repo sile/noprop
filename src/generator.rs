@@ -162,7 +162,7 @@ use std::ops::{Bound, RangeBounds};
 use std::panic::Location;
 
 use crate::TestCaseContext;
-use crate::rng::AttemptVerdict;
+use crate::rng::{AttemptVerdict, ChoiceMeta};
 
 /// Read `N` bytes from `ctx` without recording. Used by every primitive
 /// so that composite generators (non-zero variants, `sample_char`,
@@ -292,6 +292,15 @@ where
 /// attempts is therefore `< 2⁻⁶⁴`.
 #[track_caller]
 fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
+    sample_below_with_meta(ctx, n, ChoiceMeta::Bounded { bound: n })
+}
+
+/// `sample_below` with an explicit [`ChoiceMeta`] for the draws it
+/// consumes. `sample_choice` uses this to tag its index draw as a
+/// `Choice` instead of a plain `Bounded` draw, so the metadata records
+/// the primitive that produced it rather than the shared core.
+#[track_caller]
+fn sample_below_with_meta(ctx: &mut TestCaseContext, n: u64, meta: ChoiceMeta) -> u64 {
     debug_assert!(n > 0, "sample_below: n must be non-zero");
     if n == 1 {
         return 0;
@@ -306,10 +315,12 @@ fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
     //     values, i.e. accept iff x < u64::MAX - r.
     let r = u64::MAX % n;
     if r == n - 1 {
+        ctx.set_next_choice_meta(meta);
         return u64::from_le_bytes(raw_bytes(ctx)) % n;
     }
     let bound = u64::MAX - r;
     sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
+        ctx.set_next_choice_meta(meta);
         let x = u64::from_le_bytes(raw_bytes(ctx));
         (x < bound).then_some(x % n)
     })
@@ -354,7 +365,11 @@ pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(
 ) -> T {
     assert!(!choices.is_empty(), "sample_choice: empty slice");
     let loc = Location::caller();
-    let idx = sample_below(ctx, choices.len() as u64) as usize;
+    let idx = sample_below_with_meta(
+        ctx,
+        choices.len() as u64,
+        ChoiceMeta::Choice { len: choices.len() },
+    ) as usize;
     let v = choices[idx].clone();
     ctx.record_generated(&v, loc);
     v
@@ -409,7 +424,8 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
     assert!(lo <= hi, "sample_usize_in: empty range");
     let v = if lo == 0 && hi == usize::MAX {
         // Full pointer-width range: a raw byte draw is already unbiased,
-        // and hi - lo + 1 would wrap.
+        // and hi - lo + 1 would wrap. This is a plain integer draw.
+        ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
         usize::from_le_bytes(raw_bytes(ctx))
     } else {
         // hi - lo cannot overflow because hi >= lo, and (hi - lo) + 1
@@ -607,6 +623,7 @@ pub fn sample_bool(ctx: &mut TestCaseContext) -> bool {
 #[track_caller]
 pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = raw_bytes::<1>(ctx)[0];
     ctx.record_generated(&v, loc);
     v
@@ -616,6 +633,7 @@ pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
 #[track_caller]
 pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u16::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -625,6 +643,7 @@ pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
 #[track_caller]
 pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u32::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -634,6 +653,7 @@ pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
 #[track_caller]
 pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u64::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -643,6 +663,7 @@ pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
 #[track_caller]
 pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u128::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -652,6 +673,7 @@ pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
 #[track_caller]
 pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = usize::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -661,6 +683,7 @@ pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
 #[track_caller]
 pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = raw_bytes::<1>(ctx)[0] as i8;
     ctx.record_generated(&v, loc);
     v
@@ -670,6 +693,7 @@ pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
 #[track_caller]
 pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i16::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -679,6 +703,7 @@ pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
 #[track_caller]
 pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i32::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -688,6 +713,7 @@ pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
 #[track_caller]
 pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i64::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -697,6 +723,7 @@ pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
 #[track_caller]
 pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i128::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -706,6 +733,7 @@ pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
 #[track_caller]
 pub fn sample_isize(ctx: &mut TestCaseContext) -> isize {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = isize::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v

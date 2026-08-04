@@ -15,6 +15,10 @@ An imperative property-based testing library for Rust.
 - Imperative API — properties are plain `Fn(&mut TestCaseContext) -> Result<(), Box<dyn Error>>` closures that use ordinary Rust control flow (`if` / `match` / `for`) instead of combinator DSLs
 - Automatic value trace — each `noprop::sample_*` call is recorded at its source location and surfaced on failure, so the failing input is visible without extra plumbing
 
+Targeted search (`Runner::run_targeted`) is available behind the same
+imperative API; its design is documented in
+[docs/targeted-search.md](https://github.com/sile/noprop/blob/main/docs/targeted-search.md).
+
 Example
 -------
 
