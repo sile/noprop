@@ -1010,3 +1010,54 @@ fn same_property_runs_under_both_policies() {
         .run_targeted(shared_property)
         .expect("targeted run must succeed");
 }
+
+#[test]
+fn run_targeted_requires_feedback_after_rejected_case() {
+    // A rejected case does not satisfy the accepted-case feedback
+    // requirement: the next accepted case must still call maximize.
+    // The seed makes the first case reject (without any maximize) and
+    // a later case reach the verdict without feedback, so the exit is
+    // MissingFeedback — not TooManyRejections and not a silent Ok.
+    let err = noprop::Runner::new(6, 8)
+        .run_targeted(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..2);
+            if x == 0 {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect_err("accepted case without maximize must end in MissingFeedback");
+    let display = format!("{err}");
+    assert!(display.contains("missing feedback"), "{display}");
+}
+
+#[test]
+fn run_targeted_counts_exploratory_draw_cap_excess_as_rejection() {
+    // An exploratory case that draws past the recorded sequence
+    // exceeds the generated-draw cap and is rejected; the run
+    // continues and counts the rejection in the stats. The first
+    // (recording) case draws once with this seed; a later case whose
+    // mutated draw is nonzero asks for 4100 draws, of which only the
+    // first replays — the rest must be generated, blowing past the
+    // cap. reject_case is never called, so every counted rejection
+    // comes from the draw cap.
+    let mut runner = noprop::Runner::new(282, 8);
+    let result = runner.run_targeted(|ctx| {
+        let x = noprop::sample_u8(ctx);
+        ctx.maximize(x as f64 / u8::MAX as f64);
+        if x != 0 {
+            for _ in 0..4100 {
+                noprop::sample_u8(ctx);
+            }
+        }
+        Ok(())
+    });
+    assert!(
+        result.is_ok(),
+        "draw-cap rejections must not fail the run: {result:?}"
+    );
+    assert!(
+        runner.stats().rejected_iterations >= 1,
+        "draw-cap excess must count toward rejected_iterations"
+    );
+}

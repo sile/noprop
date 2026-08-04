@@ -35,16 +35,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// captured from the user's closure along with the generated-value
 /// list, so returning this from a `#[test]` function prints a
 /// self-contained failure report through the standard test harness.
-/// Both formats also print a copy-pasteable
+/// Both formats also print a reproduce hint reusing the original
+/// iteration budget:
 ///
 /// ```text
 /// reproduce with: noprop::Runner::new(0x..., N)
 /// ```
 ///
-/// line reusing the original iteration budget (and naming
-/// `run_targeted` when the failure came from the targeted runner), so
-/// re-triggering the same failure does not require computing the
-/// re-run size by hand.
+/// The uniform hint is copy-pasteable as-is; when the failure came
+/// from the targeted runner the hint names `run_targeted` and leaves
+/// the closure body as a placeholder, so the original property closure
+/// must be substituted in before rerunning. Either way the re-run
+/// size does not need to be recomputed by hand.
 pub struct Error {
     seed: u64,
     case_index: usize,
@@ -220,10 +222,12 @@ impl Error {
 }
 
 impl Error {
-    /// The copy-pasteable reproduce command shared by
+    /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original iteration budget so reruns hit the same
-    /// rejection cap.
+    /// rejection cap. In targeted mode the closure body is a
+    /// placeholder: the caller substitutes the original property
+    /// closure.
     fn reproduce_command(&self) -> String {
         if self.targeted {
             format!(

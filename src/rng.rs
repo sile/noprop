@@ -606,11 +606,21 @@ impl TestCaseContext {
     /// Fill `dst` with random bytes. An empty slice consumes no RNG
     /// state and produces no [`ChoiceSequence`] entry.
     ///
-    /// This is the single entropy boundary of [`TestCaseContext`]. In `Recording`
-    /// mode each non-empty call is copied into the sequence in order;
-    /// in `Replay` mode bytes are read strictly from the recorded
-    /// sequence and structural mismatch aborts via a private
-    /// control-flow marker.
+    /// This is the single entropy boundary of [`TestCaseContext`]. In
+    /// `Recording` mode each non-empty call is copied into the sequence
+    /// in order. In `Replay` mode the behavior depends on the
+    /// exploratory flag:
+    ///
+    /// * strict replay (no exploratory flag) reads bytes from the
+    ///   recorded sequence; a request past the recording, or one with a
+    ///   different width, aborts via a private control-flow marker;
+    /// * exploratory replay serves a same-width request from the
+    ///   recording — regenerating the value when the primitive
+    ///   constraint changed at that position — and answers a request
+    ///   past the recording, or one with a different width, with a
+    ///   freshly generated draw. Generated draws count toward
+    ///   [`MAX_CHOICES_PER_CASE`]; a case exceeding the cap is rejected
+    ///   via the private control-flow marker.
     ///
     /// `pub(crate)` — see the [`TestCaseContext`] type-level docs for why.
     pub(crate) fn fill(&mut self, dst: &mut [u8]) {

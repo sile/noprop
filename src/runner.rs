@@ -972,3 +972,26 @@ fn mutation_rewrites_integer_draws_across_widths() {
     }
     assert_eq!(changed, 5, "every integer width must be rewritable");
 }
+
+#[test]
+fn mutation_rewrites_upper_bytes_of_16_byte_integer_draw() {
+    // Width 16 is written as two 8-byte halves; a mutation bug that
+    // only rewrote the low half would leave high values untouched.
+    let mut prng = XoshiroState::from_seed(1337);
+    let mut low_changed = false;
+    let mut high_changed = false;
+    for _ in 0..256 {
+        let mut seq = ChoiceSequence::default();
+        seq.push_draw(vec![0xAB; 16], ChoiceMeta::Integer);
+        let before = seq.draws()[0].clone();
+        mutate_sequence(&mut seq, &mut prng);
+        let after = &seq.draws()[0];
+        low_changed |= after[..8] != before[..8];
+        high_changed |= after[8..] != before[8..];
+        if low_changed && high_changed {
+            break;
+        }
+    }
+    assert!(low_changed, "low 8 bytes must be rewritable");
+    assert!(high_changed, "high 8 bytes must be rewritable");
+}
