@@ -14,10 +14,11 @@ const DEDUP_HEAD: usize = 8;
 /// buffer once the head is full.
 const DEDUP_TAIL: usize = 8;
 
-/// Maximum number of draws one case may consume during exploratory
-/// replay. Reaching the cap aborts the case as a rejection so a
-/// mutated candidate whose control flow keeps drawing cannot loop
-/// forever.
+/// Maximum number of draws one case may generate during exploratory
+/// replay. The first `MAX_CHOICES_PER_CASE` draws succeed; the next
+/// draw aborts the case as a rejection so a mutated candidate whose
+/// control flow keeps drawing cannot loop forever. Replayed recorded
+/// draws count toward the cap as well.
 const MAX_CHOICES_PER_CASE: usize = 4096;
 
 /// Seedable non-cryptographic PRNG used by all noprop generators.
@@ -79,7 +80,7 @@ pub struct TestCaseContext {
 /// and the future semantic methods are no-ops while it is active. The
 /// `Targeted` variant collects the maximum scalar reported via
 /// [`TestCaseContext::maximize`] during one case.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum FeedbackState {
     Disabled,
     Targeted { max_score: ScalarFeedback },
@@ -137,6 +138,9 @@ enum RandomSource {
         /// Draws consumed so far (recorded + generated), used to
         /// enforce the exploratory cap.
         consumed: usize,
+        /// Metadata to attach to the next generated draw (set by
+        /// bounded-domain primitives right before they draw).
+        pending_choice: Option<ChoiceMeta>,
     },
 }
 
@@ -509,6 +513,7 @@ impl TestCaseContext {
                 error: None,
                 explore: Some(XoshiroState::from_seed(prng_seed)),
                 consumed: 0,
+                pending_choice: None,
             },
             generated: Vec::new(),
             dedup: DedupState::default(),
@@ -519,11 +524,28 @@ impl TestCaseContext {
         }
     }
 
-    /// Recover the recorded choice sequence from a recording-mode
-    /// context, leaving an empty sequence behind.
+    /// Recover the recorded choice sequence from a recording-mode or
+    /// exploratory-replay context, leaving an empty sequence behind.
+    ///
+    /// For exploratory contexts, recorded draws the mutated control
+    /// flow never consumed (the "unconsumed suffix") are discarded so
+    /// stale values do not leak into the next generation. The span
+    /// list is left as an approximate lineage log — it is not consumed
+    /// anywhere today.
     pub(crate) fn take_sequence(&mut self) -> Option<ChoiceSequence> {
         match &mut self.source {
             RandomSource::Recording { sequence, .. } => Some(std::mem::take(sequence)),
+            RandomSource::Replay {
+                sequence,
+                next_draw,
+                ..
+            } => {
+                if *next_draw < sequence.draws.len() {
+                    sequence.draws.truncate(*next_draw);
+                    sequence.metas.truncate(*next_draw);
+                }
+                Some(std::mem::take(sequence))
+            }
             _ => None,
         }
     }
@@ -592,9 +614,61 @@ impl TestCaseContext {
                 error,
                 explore,
                 consumed,
+                pending_choice,
                 ..
             } => {
                 if error.is_none() {
+                    if *next_draw < sequence.draws.len() {
+                        let draw = &sequence.draws[*next_draw];
+                        if draw.len() == dst.len() {
+                            // Replay a recorded (possibly mutated) draw.
+                            dst.copy_from_slice(draw);
+                            *next_draw += 1;
+                            if explore.is_some() {
+                                // The primitive may have declared a
+                                // bounded domain for this draw; the
+                                // recorded metadata already covers it,
+                                // so drop the pending declaration
+                                // instead of leaking it into the next
+                                // generated draw.
+                                let _ = pending_choice.take();
+                                *consumed += 1;
+                            }
+                            return;
+                        }
+                        if explore.is_none() {
+                            *error = Some(ReplayError::DrawLengthMismatch {
+                                expected: draw.len(),
+                                actual: dst.len(),
+                            });
+                            std::panic::resume_unwind(Box::new(ReplayAbort));
+                        }
+                        // Exploratory: the mutated control flow asks
+                        // for a different width, so this recorded draw
+                        // is dead — replace it in place with a fresh
+                        // generated draw so the sequence stays bounded.
+                        if let Some(prng) = explore {
+                            *consumed += 1;
+                            if *consumed > MAX_CHOICES_PER_CASE {
+                                self.rejection = Some(RejectionState {
+                                    location: std::panic::Location::caller(),
+                                });
+                                std::panic::resume_unwind(Box::new(IterationRejected));
+                            }
+                            prng.fill(dst);
+                            let meta = pending_choice.take().unwrap_or(ChoiceMeta::Raw);
+                            sequence.draws[*next_draw] = dst.to_vec();
+                            sequence.metas[*next_draw] = meta;
+                            *next_draw += 1;
+                            return;
+                        }
+                    } else if explore.is_none() {
+                        *error = Some(ReplayError::SequenceExhausted {
+                            requested: dst.len(),
+                        });
+                        std::panic::resume_unwind(Box::new(ReplayAbort));
+                    }
+                    // Recorded draws exhausted: generate and append.
                     if let Some(prng) = explore {
                         *consumed += 1;
                         if *consumed > MAX_CHOICES_PER_CASE {
@@ -607,24 +681,14 @@ impl TestCaseContext {
                             std::panic::resume_unwind(Box::new(IterationRejected));
                         }
                         prng.fill(dst);
+                        // Record the generated draw (with the bounded
+                        // metadata the primitive declared, if any) so an
+                        // accepted candidate can re-enter the corpus and
+                        // its tail remains mutable.
+                        let meta = pending_choice.take().unwrap_or(ChoiceMeta::Raw);
+                        sequence.push_draw(dst.to_vec(), meta);
+                        *next_draw += 1;
                         return;
-                    }
-                    if *next_draw >= sequence.draws.len() {
-                        *error = Some(ReplayError::SequenceExhausted {
-                            requested: dst.len(),
-                        });
-                    } else {
-                        let draw = &sequence.draws[*next_draw];
-                        if draw.len() != dst.len() {
-                            *error = Some(ReplayError::DrawLengthMismatch {
-                                expected: draw.len(),
-                                actual: dst.len(),
-                            });
-                        } else {
-                            dst.copy_from_slice(draw);
-                            *next_draw += 1;
-                            return;
-                        }
                     }
                 }
                 std::panic::resume_unwind(Box::new(ReplayAbort));
@@ -662,8 +726,26 @@ impl TestCaseContext {
                 next_span,
                 current_parent,
                 error,
+                explore,
                 ..
             } => {
+                if explore.is_some() {
+                    // Exploratory mode: a mutated candidate's control
+                    // flow may legitimately diverge from the recorded
+                    // span structure, so record the new span instead of
+                    // validating it. The recorded structure is only a
+                    // seed for the next mutation.
+                    let idx = sequence.spans.len();
+                    let start_draw = sequence.draws.len();
+                    sequence.spans.push(AttemptSpan {
+                        parent: *current_parent,
+                        start_draw,
+                        end_draw: start_draw,
+                        verdict: AttemptVerdict::Pending,
+                    });
+                    *current_parent = Some(idx);
+                    return Some(idx);
+                }
                 if error.is_some() {
                     std::panic::resume_unwind(Box::new(ReplayAbort));
                 }
@@ -727,8 +809,20 @@ impl TestCaseContext {
                 next_draw,
                 current_parent,
                 error,
+                explore,
                 ..
             } => {
+                if explore.is_some() {
+                    // Exploratory mode: close the span recorded by
+                    // `begin_attempt` without validating it (see there).
+                    let idx = id.expect("Exploratory mode always yields an attempt id");
+                    let end_draw = sequence.draws.len();
+                    let span = &mut sequence.spans[idx];
+                    span.end_draw = end_draw;
+                    span.verdict = verdict;
+                    *current_parent = span.parent;
+                    return;
+                }
                 if error.is_some() {
                     std::panic::resume_unwind(Box::new(ReplayAbort));
                 }
@@ -876,7 +970,6 @@ impl TestCaseContext {
     /// A larger finite value means "closer to failure". Multiple calls
     /// within one case keep the maximum; a `NaN` / infinity report
     /// marks the whole case invalid.
-    #[track_caller]
     pub fn maximize(&mut self, score: f64) {
         if let FeedbackState::Targeted { max_score } = &mut self.feedback {
             let next = if score.is_finite() {
@@ -908,10 +1001,17 @@ impl TestCaseContext {
     }
 
     /// Declare the bounded domain of the next draw. Consumed by
-    /// [`fill`](Self::fill) in Recording mode; ignored otherwise.
+    /// [`fill`](Self::fill) in Recording mode and by the exploratory
+    /// generation path; ignored otherwise.
     pub(crate) fn set_next_choice_meta(&mut self, meta: ChoiceMeta) {
-        if let RandomSource::Recording { pending_choice, .. } = &mut self.source {
-            *pending_choice = Some(meta);
+        match &mut self.source {
+            RandomSource::Recording { pending_choice, .. } => {
+                *pending_choice = Some(meta);
+            }
+            RandomSource::Replay { pending_choice, .. } => {
+                *pending_choice = Some(meta);
+            }
+            RandomSource::Prng(_) => {}
         }
     }
 
@@ -946,25 +1046,11 @@ impl RecordingSession {
     where
         F: FnOnce(&mut TestCaseContext) -> T,
     {
-        let mut ctx = TestCaseContext {
-            source: RandomSource::Recording {
-                state: XoshiroState::from_seed(self.seed),
-                sequence: ChoiceSequence::default(),
-                current_parent: None,
-                pending_choice: None,
-            },
-            generated: Vec::new(),
-            dedup: DedupState::default(),
-            rejection: None,
-            inside_runner: false,
-            total_samples: 0,
-            feedback: FeedbackState::Disabled,
-        };
+        let mut ctx = TestCaseContext::recording(self.seed);
         let value = f(&mut ctx);
-        let sequence = match ctx.source {
-            RandomSource::Recording { sequence, .. } => sequence,
-            _ => unreachable!("RecordingSession constructs Recording variant"),
-        };
+        let sequence = ctx
+            .take_sequence()
+            .expect("recording mode always yields a sequence");
         (value, sequence)
     }
 }
@@ -1006,6 +1092,7 @@ impl ReplaySession {
                 error: None,
                 explore: None,
                 consumed: 0,
+                pending_choice: None,
             },
             generated: Vec::new(),
             dedup: DedupState::default(),
@@ -1074,7 +1161,8 @@ pub(crate) fn is_iteration_rejected(payload: &(dyn Any + Send)) -> bool {
     payload.is::<IterationRejected>()
 }
 
-pub(crate) fn is_replay_abort(payload: &(dyn Any + Send)) -> bool {
+#[cfg(test)]
+fn is_replay_abort(payload: &(dyn Any + Send)) -> bool {
     payload.is::<ReplayAbort>()
 }
 
@@ -1651,16 +1739,54 @@ mod targeted_tests {
     // === exploratory replay ===
 
     #[test]
-    fn exploring_generates_draws_beyond_recorded_sequence() {
+    fn exploring_replays_recorded_draws_then_generates() {
         let ((), seq) = RecordingSession::new(1).run(|ctx| {
             let mut buf = [0u8; 4];
             ctx.fill(&mut buf);
         });
-        assert_eq!(seq.draws().len(), 1);
+        let recorded = seq.draws()[0].clone();
+        assert_eq!(recorded.len(), 4);
         let mut ctx = TestCaseContext::exploring(seq, 42);
         let mut buf = [0u8; 4];
-        ctx.fill(&mut buf); // replayed from the recorded draw
-        ctx.fill(&mut buf); // generated from the explore PRNG
+        ctx.fill(&mut buf);
+        assert_eq!(
+            buf,
+            recorded.as_slice(),
+            "the first draw must replay the recorded bytes"
+        );
+        // Draws beyond the recorded sequence are generated from the
+        // explore PRNG and appended to the carried sequence.
+        ctx.fill(&mut buf);
+        let seq = ctx.take_sequence().expect("exploring must record draws");
+        assert_eq!(seq.draws().len(), 2, "the generated draw must be recorded");
+    }
+
+    #[test]
+    fn exploring_replays_mutated_draws() {
+        let ((), mut seq) = RecordingSession::new(1).run(|ctx| {
+            let mut buf = [0u8; 8];
+            ctx.fill(&mut buf);
+        });
+        seq.draws_mut()[0][..8].copy_from_slice(&7u64.to_le_bytes());
+        let mut ctx = TestCaseContext::exploring(seq, 42);
+        let mut buf = [0u8; 8];
+        ctx.fill(&mut buf);
+        assert_eq!(
+            u64::from_le_bytes(buf),
+            7,
+            "a mutated draw must be replayed with its new value"
+        );
+    }
+
+    #[test]
+    fn take_sequence_works_in_exploring_mode() {
+        let mut ctx = TestCaseContext::exploring(ChoiceSequence::default(), 1);
+        let mut buf = [0u8; 4];
+        ctx.fill(&mut buf);
+        let seq = ctx
+            .take_sequence()
+            .expect("exploring must yield a sequence");
+        assert_eq!(seq.draws().len(), 1);
     }
 
     #[test]
@@ -1678,5 +1804,53 @@ mod targeted_tests {
             ctx.take_rejection().is_some(),
             "the cap abort must be recorded as a rejection"
         );
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use crate::rng::{ChoiceMeta, RecordingSession, TestCaseContext};
+
+    #[test]
+    fn exploring_consumes_pending_meta_on_replay() {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let mut buf = [0u8; 8];
+            ctx.fill(&mut buf);
+        });
+        let mut ctx = TestCaseContext::exploring(seq, 42);
+        let mut buf = [0u8; 8];
+        // Mimic a primitive: declare a bounded domain, then draw
+        // (replayed from the record). The declaration must not leak
+        // into the next generated draw.
+        ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 100 });
+        ctx.fill(&mut buf);
+        ctx.fill(&mut buf);
+        let seq = ctx.take_sequence().expect("sequence");
+        assert!(
+            matches!(seq.metas()[1], ChoiceMeta::Raw),
+            "stale meta must not leak into a generated draw: {:?}",
+            seq.metas()[1]
+        );
+    }
+
+    #[test]
+    fn exploring_replaces_dead_draws_in_place() {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let mut buf = [0u8; 4];
+            ctx.fill(&mut buf);
+        });
+        let mut ctx = TestCaseContext::exploring(seq, 42);
+        let mut buf = [0u8; 8];
+        // The mutated control flow asks for a different width than the
+        // recorded draw: the dead draw is replaced in place, keeping
+        // the sequence bounded.
+        ctx.fill(&mut buf);
+        let seq = ctx.take_sequence().expect("sequence");
+        assert_eq!(
+            seq.draws().len(),
+            1,
+            "dead draw must be replaced, not appended"
+        );
+        assert_eq!(seq.draws()[0].len(), 8);
     }
 }

@@ -1,4 +1,5 @@
-//! Error and result types for [`Runner::run`](crate::Runner::run).
+//! Error and result types for [`Runner::run`](crate::Runner::run) and
+//! [`Runner::run_targeted`](crate::Runner::run_targeted).
 
 use std::panic::Location;
 

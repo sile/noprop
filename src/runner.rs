@@ -4,11 +4,14 @@ use std::panic::AssertUnwindSafe;
 
 use crate::rng::{
     ChoiceMeta, ChoiceSequence, FeedbackState, ScalarFeedback, XoshiroState, is_iteration_rejected,
-    is_replay_abort,
 };
 use crate::{Error, Result, TestCaseContext};
 
 /// Maximum number of candidates kept in the targeted corpus (top-k).
+///
+/// All four search constants (`CORPUS_SIZE`, `MUTATION_DENOM`,
+/// `RANDOM_RESTART_DENOM`, `LOW_SCORE_DENOM`) are initial guesses;
+/// their tuning is decided by the 0010 benchmark once it lands.
 const CORPUS_SIZE: usize = 64;
 
 /// Denominator of the per-draw mutation probability: one in
@@ -20,23 +23,24 @@ const MUTATION_DENOM: u64 = 4;
 /// mutated from the corpus.
 const RANDOM_RESTART_DENOM: u64 = 8;
 
-/// Denominator of the low-score selection probability: one in
-/// `LOW_SCORE_DENOM` corpus picks target the lowest-scored entry to
-/// keep an alternative search path alive.
+/// Denominator of the low-score pick probability: one in
+/// `LOW_SCORE_DENOM` corpus picks target the single lowest-scored
+/// entry, keeping an alternative search path alive.
 const LOW_SCORE_DENOM: u64 = 4;
 
-/// Observability data from a [`Runner::run`](Runner::run) invocation.
+/// Observability data from a [`Runner::run`](Runner::run) or
+/// [`Runner::run_targeted`](Runner::run_targeted) invocation.
 ///
-/// Read from a [`Runner`] after [`run`](Runner::run) returns via
+/// Read from a [`Runner`] after the run returns via
 /// [`Runner::stats`](Runner::stats), and also embedded in [`Error`] on
 /// failure so the caller can see how far the run progressed before it
-/// failed. All three counters are cumulative over the whole `run` call
+/// failed. All three counters are cumulative over the whole run
 /// (across every case, accepted or rejected).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
     /// Number of iterations whose closure completed without calling
     /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case). On
-    /// a successful `Runner::run`, this equals
+    /// a successful run, this equals
     /// `iterations`. On failure, it is
     /// the number of iterations that passed before the failing one
     /// (equivalent to [`Error::case_index`](Error::case_index)).
@@ -45,7 +49,9 @@ pub struct Stats {
     /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case), including
     /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
     /// helpers (they discard via `reject_case` internally, so the two
-    /// origins share this single counter).
+    /// origins share this single counter), and — under
+    /// [`Runner::run_targeted`](Runner::run_targeted) — the
+    /// exploratory-replay draw cap discards.
     pub rejected_iterations: usize,
     /// Total number of top-level `sample_*` invocations across every
     /// case that ran. Counted per call to the primitive generator
@@ -143,7 +149,8 @@ pub struct Runner {
     stats: Stats,
 }
 
-/// Global rejection limit for a single [`Runner::run`] invocation.
+/// Global rejection limit for a single [`Runner::run`](Runner::run) or
+/// [`Runner::run_targeted`](Runner::run_targeted) invocation.
 ///
 /// Total rejected iterations (across all iteration indices) are capped
 /// so that a generator which always calls
@@ -227,10 +234,11 @@ impl Runner {
         let mut total_samples: usize = 0;
 
         while accepted < self.iterations {
+            // Each iteration gets a fresh context (recording or
+            // exploratory), so there is no per-case state to clear.
             let mut ctx = search.next_context();
             ctx.set_inside_runner();
             ctx.enable_targeted();
-            ctx.clear_generated();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
             let rejection = ctx.take_rejection();
             total_samples += ctx.total_samples();
@@ -239,19 +247,13 @@ impl Runner {
                 let _ = outcome;
                 rejected += 1;
                 if rejected > rejection_cap {
-                    self.stats = Stats {
-                        accepted_iterations: accepted,
-                        rejected_iterations: rejected,
-                        total_samples,
-                    };
-                    let generated = ctx.take_generated();
-                    return Err(Error::from_too_many_rejections_targeted(
-                        self.seed,
+                    return Err(too_many_rejections(
+                        self,
+                        &mut ctx,
                         accepted,
                         rejected,
-                        state.location,
-                        generated,
-                        self.stats,
+                        total_samples,
+                        Some(state.location),
                     ));
                 }
                 continue;
@@ -265,25 +267,23 @@ impl Runner {
                         FeedbackState::Targeted { max_score } => match max_score {
                             ScalarFeedback::Valid(score) => score,
                             ScalarFeedback::Missing => {
-                                self.stats = Stats {
-                                    accepted_iterations: accepted,
-                                    rejected_iterations: rejected,
+                                return Err(feedback_exit(
+                                    self,
+                                    &mut ctx,
+                                    accepted,
+                                    rejected,
                                     total_samples,
-                                };
-                                let generated = ctx.take_generated();
-                                return Err(Error::from_missing_feedback(
-                                    self.seed, accepted, generated, self.stats,
+                                    FeedbackExitKind::Missing,
                                 ));
                             }
                             ScalarFeedback::Invalid => {
-                                self.stats = Stats {
-                                    accepted_iterations: accepted,
-                                    rejected_iterations: rejected,
+                                return Err(feedback_exit(
+                                    self,
+                                    &mut ctx,
+                                    accepted,
+                                    rejected,
                                     total_samples,
-                                };
-                                let generated = ctx.take_generated();
-                                return Err(Error::from_invalid_feedback(
-                                    self.seed, accepted, generated, self.stats,
+                                    FeedbackExitKind::Invalid,
                                 ));
                             }
                         },
@@ -291,6 +291,8 @@ impl Runner {
                             unreachable!("run_targeted enables targeted mode before each case")
                         }
                     };
+                    // The carried choice sequence (recorded or
+                    // exploratory) becomes the next mutation seed.
                     if let Some(sequence) = ctx.take_sequence() {
                         search.corpus.admit(sequence, score);
                     }
@@ -299,49 +301,21 @@ impl Runner {
                 }
                 Ok(Err(err)) => format!("{err}"),
                 Err(panic) => {
+                    // Defensive: an IterationRejected marker without a
+                    // stored rejection state shouldn't happen because
+                    // `reject_case` (and the exploratory draw cap)
+                    // always set the state before resuming unwind. Keep
+                    // the same guard as `run`.
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
-                            self.stats = Stats {
-                                accepted_iterations: accepted,
-                                rejected_iterations: rejected,
-                                total_samples,
-                            };
-                            let generated = ctx.take_generated();
-                            let unknown_location = std::panic::Location::caller();
-                            return Err(Error::from_too_many_rejections_targeted(
-                                self.seed,
+                            return Err(too_many_rejections(
+                                self,
+                                &mut ctx,
                                 accepted,
                                 rejected,
-                                unknown_location,
-                                generated,
-                                self.stats,
-                            ));
-                        }
-                        continue;
-                    }
-                    if is_replay_abort(&*panic) {
-                        // A mutated candidate whose control flow diverged
-                        // from the recorded structure is not a property
-                        // failure: discard it and move on, counting it
-                        // against the rejection budget so the run stays
-                        // finite.
-                        rejected += 1;
-                        if rejected > rejection_cap {
-                            self.stats = Stats {
-                                accepted_iterations: accepted,
-                                rejected_iterations: rejected,
                                 total_samples,
-                            };
-                            let generated = ctx.take_generated();
-                            let unknown_location = std::panic::Location::caller();
-                            return Err(Error::from_too_many_rejections_targeted(
-                                self.seed,
-                                accepted,
-                                rejected,
-                                unknown_location,
-                                generated,
-                                self.stats,
+                                None,
                             ));
                         }
                         continue;
@@ -517,8 +491,73 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+/// Which feedback validation failed, for [`feedback_exit`].
+enum FeedbackExitKind {
+    Missing,
+    Invalid,
+}
+
+/// Record run stats and build the missing / invalid feedback exit error.
+fn feedback_exit(
+    runner: &mut Runner,
+    ctx: &mut TestCaseContext,
+    accepted: usize,
+    rejected: usize,
+    total_samples: usize,
+    kind: FeedbackExitKind,
+) -> Error {
+    runner.stats = Stats {
+        accepted_iterations: accepted,
+        rejected_iterations: rejected,
+        total_samples,
+    };
+    let generated = ctx.take_generated();
+    match kind {
+        FeedbackExitKind::Missing => {
+            Error::from_missing_feedback(runner.seed, accepted, generated, runner.stats)
+        }
+        FeedbackExitKind::Invalid => {
+            Error::from_invalid_feedback(runner.seed, accepted, generated, runner.stats)
+        }
+    }
+}
+
+/// Record run stats and build the targeted too-many-rejections exit
+/// error. `location` is `None` when the last discard has no rejection
+/// call site (a stray marker); in that case the helper's own location
+/// — a fixed position in the runner module — is reported.
+fn too_many_rejections(
+    runner: &mut Runner,
+    ctx: &mut TestCaseContext,
+    accepted: usize,
+    rejected: usize,
+    total_samples: usize,
+    location: Option<&'static std::panic::Location<'static>>,
+) -> Error {
+    runner.stats = Stats {
+        accepted_iterations: accepted,
+        rejected_iterations: rejected,
+        total_samples,
+    };
+    let generated = ctx.take_generated();
+    let location = location.unwrap_or_else(|| std::panic::Location::caller());
+    Error::from_too_many_rejections_targeted(
+        runner.seed,
+        accepted,
+        rejected,
+        location,
+        generated,
+        runner.stats,
+    )
+}
+
 /// One candidate in the targeted corpus: the recorded choice sequence
 /// of an accepted case and its scalar score.
+///
+/// For exploratory candidates the sequence's spans are a lineage log of
+/// the execution that produced it, not a faithful record of a single
+/// deterministic run — mutation may change the control flow between
+/// generations. Current consumers (mutation) ignore spans entirely.
 struct CorpusEntry {
     sequence: ChoiceSequence,
     score: f64,
@@ -546,6 +585,17 @@ impl Corpus {
         self.entries.is_empty()
     }
 
+    /// Index of the lowest-scored entry, first among ties.
+    fn min_index(&self) -> usize {
+        let mut min_idx = 0;
+        for (i, entry) in self.entries.iter().enumerate().skip(1) {
+            if entry.score < self.entries[min_idx].score {
+                min_idx = i;
+            }
+        }
+        min_idx
+    }
+
     fn admit(&mut self, sequence: ChoiceSequence, score: f64) -> bool {
         if self.entries.len() < CORPUS_SIZE {
             self.entries.push(CorpusEntry { sequence, score });
@@ -553,12 +603,7 @@ impl Corpus {
         }
         // Replace the lowest-scored entry (first among ties) if the
         // new score beats it.
-        let mut min_idx = 0;
-        for (i, entry) in self.entries.iter().enumerate().skip(1) {
-            if entry.score < self.entries[min_idx].score {
-                min_idx = i;
-            }
-        }
+        let min_idx = self.min_index();
         if score > self.entries[min_idx].score {
             self.entries[min_idx] = CorpusEntry { sequence, score };
             return true;
@@ -567,13 +612,7 @@ impl Corpus {
     }
 
     fn lowest(&self) -> &CorpusEntry {
-        let mut min_idx = 0;
-        for (i, entry) in self.entries.iter().enumerate().skip(1) {
-            if entry.score < self.entries[min_idx].score {
-                min_idx = i;
-            }
-        }
-        &self.entries[min_idx]
+        &self.entries[self.min_index()]
     }
 }
 
@@ -593,7 +632,6 @@ impl TargetedSearch {
             prng: XoshiroState::from_seed(seed),
         }
     }
-
     /// Build the context for the next candidate.
     ///
     /// - While the corpus is empty, or with probability
@@ -603,6 +641,10 @@ impl TargetedSearch {
     ///   `1 / LOW_SCORE_DENOM` the lowest-scored one), its draws are
     ///   mutated within their recorded constraints, and the result is
     ///   explored (replay + generated tail draws).
+    ///
+    /// The search PRNG is consumed in this fixed order per candidate:
+    /// restart roll, explore seed (when exploring), corpus pick,
+    /// mutation rolls — keeping the run reproducible from the seed.
     fn next_context(&mut self) -> TestCaseContext {
         let restart = self.corpus.is_empty() || self.prng.sample_below(RANDOM_RESTART_DENOM) == 0;
         if restart {
@@ -646,7 +688,16 @@ fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
             ChoiceMeta::Choice { len } => *len as u64,
             ChoiceMeta::Raw => continue,
         };
-        if draw.len() < 8 || bound <= 1 {
+        if draw.len() < 8 {
+            // Bounded/Choice draws are always eight bytes (the
+            // rejection-sampling core draws a u64); anything shorter
+            // cannot be rewritten in place.
+            continue;
+        }
+        // bound <= 1 never occurs (sample_below returns early for
+        // n == 1 without drawing), kept as a defensive guard against a
+        // future primitive that records a singleton domain.
+        if bound <= 1 {
             continue;
         }
         let new_value = prng.sample_below(bound);
@@ -692,11 +743,16 @@ mod tests {
     }
 
     #[test]
-    fn corpus_keeps_incumbent_on_tie() {
+    fn corpus_keeps_incumbent_on_tie_when_full() {
         let mut corpus = Corpus::new();
-        corpus.admit(ChoiceSequence::default(), 1.0);
-        corpus.admit(ChoiceSequence::default(), 1.0);
-        assert_eq!(corpus.entries.len(), 2, "tie must keep the incumbent");
+        for i in 0..CORPUS_SIZE {
+            corpus.admit(ChoiceSequence::default(), i as f64);
+        }
+        // A new score tied with the lowest-scored entry must not
+        // replace the incumbent (first arrival wins).
+        assert!(!corpus.admit(ChoiceSequence::default(), 0.0));
+        let scores: Vec<f64> = corpus.entries.iter().map(|e| e.score).collect();
+        assert!(scores.contains(&0.0), "incumbent must survive: {scores:?}");
     }
 
     #[test]
@@ -746,4 +802,44 @@ mod tests {
             assert!(idx < 4, "mutated choice index {idx} escaped its domain");
         }
     }
+}
+
+// === TargetedSearch wiring ===
+
+#[test]
+fn targeted_search_evolves_corpus_entries() {
+    let mut search = TargetedSearch::new(42);
+    let mut seq = ChoiceSequence::default();
+    seq.push_draw(
+        7u64.to_le_bytes().to_vec(),
+        ChoiceMeta::Bounded { bound: 10 },
+    );
+    search.corpus.admit(seq, 1.0);
+    // With a one-eighth restart probability, most picks are
+    // exploratory: they replay the admitted draw, possibly mutated
+    // within its bounded domain. Recording (fresh) candidates draw
+    // unconstrained random bytes instead. Deterministic per seed.
+    let mut in_domain = 0;
+    let mut unmutated_replays = 0;
+    for _ in 0..16 {
+        let mut ctx = search.next_context();
+        let mut buf = [0u8; 8];
+        ctx.fill(&mut buf);
+        let x = u64::from_le_bytes(buf);
+        let _ = ctx.take_sequence();
+        if x < 10 {
+            in_domain += 1;
+        }
+        if x == 7 {
+            unmutated_replays += 1;
+        }
+    }
+    assert!(
+        in_domain >= 8,
+        "most candidates must replay an in-domain draw: {in_domain}"
+    );
+    assert!(
+        unmutated_replays >= 4,
+        "unmutated replays must dominate: {unmutated_replays}"
+    );
 }

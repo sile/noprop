@@ -815,3 +815,80 @@ fn run_targeted_counts_rejections() {
     assert_eq!(stats.accepted_iterations, 16);
     assert!(stats.rejected_iterations > 0);
 }
+
+#[test]
+fn run_targeted_with_span_based_generator_does_not_reject_everything() {
+    let mut runner = noprop::Runner::new(11, 64);
+    runner
+        .run_targeted(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..10);
+            ctx.maximize(x as f64 / 10.0);
+            Ok(())
+        })
+        .expect("span-based generators must work under targeted search");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+    assert!(
+        stats.rejected_iterations < 64,
+        "exploratory candidates must not all be discarded: rejected={}",
+        stats.rejected_iterations
+    );
+}
+
+#[test]
+fn run_targeted_with_choice_generator() {
+    let mut runner = noprop::Runner::new(5, 64);
+    runner
+        .run_targeted(|ctx| {
+            let idx = noprop::sample_choice(ctx, &[0usize, 1, 2, 3, 4]);
+            ctx.maximize(idx as f64 / 4.0);
+            Ok(())
+        })
+        .expect("choice-based generators must work under targeted search");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+    assert!(
+        stats.rejected_iterations < 64,
+        "choice candidates must not all be discarded: rejected={}",
+        stats.rejected_iterations
+    );
+}
+
+#[test]
+fn run_targeted_stops_after_too_many_rejections() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting property must hit the rejection cap");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(display.contains("run_targeted"), "{display}");
+    let stats = err.stats();
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
+fn run_targeted_reproduces_same_candidate_sequence() {
+    use std::cell::Cell;
+    let collect = |runner: &mut noprop::Runner| {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        runner
+            .run_targeted(|ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.maximize(x as f64 / 1000.0);
+                Ok(())
+            })
+            .expect("targeted run");
+        observed.into_inner()
+    };
+    let a = collect(&mut noprop::Runner::new(7, 64));
+    let b = collect(&mut noprop::Runner::new(7, 64));
+    assert_eq!(
+        a, b,
+        "candidate sequences must be reproducible from the seed"
+    );
+}
