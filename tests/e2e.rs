@@ -1061,3 +1061,42 @@ fn run_targeted_counts_exploratory_draw_cap_excess_as_rejection() {
         "draw-cap excess must count toward rejected_iterations"
     );
 }
+
+#[test]
+fn run_targeted_steers_candidates_by_score() {
+    // If the score were ignored (for example, a bug admitted every
+    // case with a constant score), the observed candidate stream would
+    // not depend on which end of the domain maximize rewards. It must:
+    // rewarding large x keeps the search in the high end, rewarding
+    // small x pins it to the low end, so the best observed candidate
+    // in the second half of the run differs between the two.
+    use std::cell::Cell;
+
+    fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 256)
+            .run_targeted(|ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.maximize(score_of(x));
+                Ok(())
+            })
+            .expect("targeted run must succeed");
+        observed.into_inner()
+    }
+
+    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
+
+    let reward_high = observe(6, |x| x as f64 / 1000.0);
+    let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
+
+    let high_max = second_half_max(&reward_high);
+    let low_max = second_half_max(&reward_low);
+    assert!(
+        high_max > low_max,
+        "the score must steer the search toward the rewarded end: \
+         rewarding high reached {high_max}, rewarding low reached {low_max}"
+    );
+}
