@@ -852,6 +852,25 @@ fn run_targeted_stops_after_too_many_rejections() {
 }
 
 #[test]
+fn run_targeted_too_many_rejections_reproduces_with_the_hint_budget() {
+    // The reproduce hint reuses the original iteration budget so the
+    // rerun hits the same rejection cap and exits the same way.
+    let seed = 0xBAD_CAFEu64;
+    let run = || {
+        noprop::Runner::new(seed, 16).run_targeted(|ctx| {
+            ctx.reject_case();
+        })
+    };
+    let err = run().expect_err("always-rejecting property must hit the rejection cap");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    let replayed = run().expect_err("same seed and budget must reproduce the failure");
+    assert_eq!(replayed.seed(), err.seed());
+    assert_eq!(replayed.case_index(), err.case_index());
+    assert_eq!(replayed.stats(), err.stats());
+}
+
+#[test]
 fn run_targeted_reproduces_same_candidate_sequence() {
     use std::cell::Cell;
     let collect = |runner: &mut noprop::Runner| {
@@ -940,9 +959,14 @@ fn run_targeted_zero_iterations_does_not_invoke_closure() {
 
 #[test]
 fn run_targeted_reproduce_hint_reproduces_the_same_failure() {
+    // The failure condition (x >= 900, probability 0.1) must be found
+    // within the budget for the hint test to be meaningful; 512
+    // iterations leaves ample headroom even if the search constants
+    // are retuned. The hint must reuse this exact budget.
     let seed = 0x5EED_1EAD_BEEF_C0DEu64;
+    let iterations = 512;
     let run = || {
-        noprop::Runner::new(seed, 128).run_targeted(|ctx| {
+        noprop::Runner::new(seed, iterations).run_targeted(|ctx| {
             let x = noprop::sample_usize_in(ctx, 0..1000);
             ctx.maximize(x as f64 / 1000.0);
             if x >= 900 {
@@ -955,7 +979,7 @@ fn run_targeted_reproduce_hint_reproduces_the_same_failure() {
     let err = run().expect_err("a large x must fail the run");
     let display = format!("{err}");
     let hint = format!(
-        "reproduce with: noprop::Runner::new({:#018x}, 128).run_targeted(|ctx| ...)",
+        "reproduce with: noprop::Runner::new({:#018x}, {iterations}).run_targeted(|ctx| ...)",
         err.seed(),
     );
     assert!(
@@ -1015,8 +1039,8 @@ fn same_property_runs_under_both_policies() {
 fn run_targeted_requires_feedback_after_rejected_case() {
     // A rejected case does not satisfy the accepted-case feedback
     // requirement: the next accepted case must still call maximize.
-    // The seed makes the first case reject (without any maximize) and
-    // a later case reach the verdict without feedback, so the exit is
+    // The seed makes the first case reject (asserted below) and a
+    // later case reach the verdict without feedback, so the exit is
     // MissingFeedback — not TooManyRejections and not a silent Ok.
     let err = noprop::Runner::new(6, 8)
         .run_targeted(|ctx| {
@@ -1029,6 +1053,11 @@ fn run_targeted_requires_feedback_after_rejected_case() {
         .expect_err("accepted case without maximize must end in MissingFeedback");
     let display = format!("{err}");
     assert!(display.contains("missing feedback"), "{display}");
+    assert!(
+        err.stats().rejected_iterations >= 1,
+        "the rejection path must be exercised before the accepted case: {:?}",
+        err.stats()
+    );
 }
 
 #[test]
@@ -1036,14 +1065,25 @@ fn run_targeted_counts_exploratory_draw_cap_excess_as_rejection() {
     // An exploratory case that draws past the recorded sequence
     // exceeds the generated-draw cap and is rejected; the run
     // continues and counts the rejection in the stats. The first
-    // (recording) case draws once with this seed; a later case whose
-    // mutated draw is nonzero asks for 4100 draws, of which only the
-    // first replays — the rest must be generated, blowing past the
-    // cap. reject_case is never called, so every counted rejection
-    // comes from the draw cap.
+    // (recording) case draws once with this seed — asserted below —
+    // so the recorded sequence stays one draw long; a later case
+    // whose mutated draw is nonzero asks for 4100 draws (beyond
+    // MAX_CHOICES_PER_CASE = 4096), of which only the first replays —
+    // the rest must be generated, blowing past the cap. reject_case
+    // is never called, so every counted rejection comes from the draw
+    // cap.
+    //
+    // The first-case draw and the mutation behavior are fixed by the
+    // seed and the search constants (MUTATION_DENOM, RANDOM_RESTART_
+    // DENOM); re-selecting the seed is expected when tuning them.
+    use std::cell::Cell;
     let mut runner = noprop::Runner::new(282, 8);
+    let first_x: Cell<Option<u8>> = Cell::new(None);
     let result = runner.run_targeted(|ctx| {
         let x = noprop::sample_u8(ctx);
+        if first_x.get().is_none() {
+            first_x.set(Some(x));
+        }
         ctx.maximize(x as f64 / u8::MAX as f64);
         if x != 0 {
             for _ in 0..4100 {
@@ -1055,6 +1095,11 @@ fn run_targeted_counts_exploratory_draw_cap_excess_as_rejection() {
     assert!(
         result.is_ok(),
         "draw-cap rejections must not fail the run: {result:?}"
+    );
+    assert_eq!(
+        first_x.get(),
+        Some(0),
+        "the recording case must draw zero so the recorded sequence stays short"
     );
     assert!(
         runner.stats().rejected_iterations >= 1,
