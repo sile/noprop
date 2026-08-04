@@ -224,6 +224,10 @@ impl Runner {
     /// `Runner::iterations` budget counting only accepted cases) match
     /// [`run`](Runner::run).
     ///
+    /// The search mechanics (recording, corpus, mutation, exploratory
+    /// replay) are described in the
+    /// [targeted search design](crate::docs::targeted_search).
+    ///
     /// # Example
     ///
     /// ```
@@ -341,11 +345,7 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            self.stats = Stats {
-                accepted_iterations: accepted,
-                rejected_iterations: rejected,
-                total_samples,
-            };
+            record_stats(self, accepted, rejected, total_samples);
             let generated = ctx.take_generated();
             return Err(Error::from_panic(
                 self.seed,
@@ -357,11 +357,7 @@ impl Runner {
                 true,
             ));
         }
-        self.stats = Stats {
-            accepted_iterations: accepted,
-            rejected_iterations: rejected,
-            total_samples,
-        };
+        record_stats(self, accepted, rejected, total_samples);
         Ok(())
     }
 
@@ -426,11 +422,7 @@ impl Runner {
                 let _ = outcome;
                 rejected += 1;
                 if rejected > rejection_cap {
-                    self.stats = Stats {
-                        accepted_iterations: accepted,
-                        rejected_iterations: rejected,
-                        total_samples: ctx.total_samples(),
-                    };
+                    record_stats(self, accepted, rejected, ctx.total_samples());
                     let generated = ctx.take_generated();
                     return Err(Error::from_too_many_rejections(
                         self.seed,
@@ -462,11 +454,7 @@ impl Runner {
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
-                            self.stats = Stats {
-                                accepted_iterations: accepted,
-                                rejected_iterations: rejected,
-                                total_samples: ctx.total_samples(),
-                            };
+                            record_stats(self, accepted, rejected, ctx.total_samples());
                             let generated = ctx.take_generated();
                             let unknown_location = std::panic::Location::caller();
                             return Err(Error::from_too_many_rejections(
@@ -485,11 +473,7 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            self.stats = Stats {
-                accepted_iterations: accepted,
-                rejected_iterations: rejected,
-                total_samples: ctx.total_samples(),
-            };
+            record_stats(self, accepted, rejected, ctx.total_samples());
             let generated = ctx.take_generated();
             return Err(Error::from_panic(
                 self.seed,
@@ -501,11 +485,7 @@ impl Runner {
                 false,
             ));
         }
-        self.stats = Stats {
-            accepted_iterations: accepted,
-            rejected_iterations: rejected,
-            total_samples: ctx.total_samples(),
-        };
+        record_stats(self, accepted, rejected, ctx.total_samples());
         Ok(())
     }
 }
@@ -525,6 +505,17 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+/// Record the run progress counters on the runner. Every exit path
+/// (success, property failure, rejection cap, feedback failure)
+/// reports the same counters.
+fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_samples: usize) {
+    runner.stats = Stats {
+        accepted_iterations: accepted,
+        rejected_iterations: rejected,
+        total_samples,
+    };
+}
+
 /// Which feedback validation failed, for [`feedback_exit`].
 #[derive(Debug, Clone, Copy)]
 enum FeedbackExitKind {
@@ -541,11 +532,7 @@ fn feedback_exit(
     total_samples: usize,
     kind: FeedbackExitKind,
 ) -> Error {
-    runner.stats = Stats {
-        accepted_iterations: accepted,
-        rejected_iterations: rejected,
-        total_samples,
-    };
+    record_stats(runner, accepted, rejected, total_samples);
     let generated = ctx.take_generated();
     match kind {
         FeedbackExitKind::Missing => Error::from_missing_feedback(
@@ -575,11 +562,7 @@ fn too_many_rejections(
     total_samples: usize,
     location: &'static std::panic::Location<'static>,
 ) -> Error {
-    runner.stats = Stats {
-        accepted_iterations: accepted,
-        rejected_iterations: rejected,
-        total_samples,
-    };
+    record_stats(runner, accepted, rejected, total_samples);
     let generated = ctx.take_generated();
     Error::from_too_many_rejections(
         runner.seed,
@@ -596,10 +579,10 @@ fn too_many_rejections(
 /// One candidate in the targeted corpus: the recorded choice sequence
 /// of an accepted case and its scalar score.
 ///
-/// For exploratory candidates the sequence's spans are a lineage log of
-/// the execution that produced it, not a faithful record of a single
-/// deterministic run — mutation may change the control flow between
-/// generations. Current consumers (mutation) ignore spans entirely.
+/// The sequence carries whatever the accepted case recorded: recorded
+/// cases keep their attempt spans, exploratory cases have none
+/// (exploration records no spans). Mutation reads only the draws and
+/// their metadata, never the spans.
 struct CorpusEntry {
     sequence: ChoiceSequence,
     score: f64,
@@ -916,7 +899,10 @@ fn targeted_search_evolves_corpus_entries() {
     // exploratory: they replay the admitted draw under the same
     // declared constraint (possibly mutated, always in domain).
     // Recording (fresh) candidates draw unconstrained random bytes
-    // instead. Deterministic per seed.
+    // instead. Deterministic per seed. The observed in-domain count
+    // scales with the restart probability (RANDOM_RESTART_DENOM), so
+    // re-selecting the seed is expected when the search constants are
+    // tuned.
     let mut in_domain = 0;
     for _ in 0..16 {
         let mut ctx = search.next_context();

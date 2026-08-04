@@ -29,22 +29,16 @@ record the mutated case's draws and score
           ────────► repeat
 ```
 
+Every accepted case — recorded or exploratory — re-enters the corpus
+through the admit step; the diagram elides it after the first round.
+A "candidate" is a corpus entry that was picked and mutated for the
+next case.
+
 `Runner::run_targeted(closure)` is the entry point. The closure receives
 the same `&mut TestCaseContext` as `Runner::run`, so the same property
-runs under both policies:
-
-```rust
-use noprop::Runner;
-
-let mut runner = Runner::new(0xDEAD_BEEF, 16);
-runner
-    .run_targeted(|ctx| {
-        let x = noprop::sample_u32(ctx);
-        ctx.maximize((x as f64) / u32::MAX as f64);
-        Ok(())
-    })
-    .expect("targeted run must succeed");
-```
+runs under both policies. See the
+[`run_targeted`](crate::Runner::run_targeted) documentation for a
+runnable example.
 
 ## Scope
 
@@ -57,14 +51,14 @@ Targeted search owns:
 
 It does not own:
 
-- semantic coverage or feature-based novelty search (planned in a later
-  issue)
+- semantic coverage or feature-based novelty search (planned)
 - a general-purpose optimizer that returns an arbitrary objective's
   maximum
 - shrink and failure-case minimization
 - public sampler traits or pluggable search policies
-- shared case-loop logic between `run` and `run_targeted` (the shared
-  structure is deferred until the corpus-guided implementation lands)
+- shared case-loop logic between `run` and `run_targeted` (the two
+  loops are kept separate for now; sharing them is deferred until the
+  search policies stabilize)
 
 ## Feedback Protocol
 
@@ -93,9 +87,9 @@ closed.
 
 Draws are stored as raw bytes. The recorded value is the generator
 output, not a normalized domain value: the property re-applies its own
-constraint (for example `sample_below(ctx, n)` reduces the recorded
-value with `% n`), so a stored value stays meaningful under any
-constraint the mutated control flow imposes on that position.
+constraint — for example the reduction inside
+`sample_usize_in(ctx, 0..n)` — so a stored value stays meaningful under
+any constraint the mutated control flow imposes on that position.
 
 Constraint metadata is one of:
 
@@ -125,7 +119,8 @@ Four rules cover every divergence:
 3. **A request past the recording.** The draw is generated and appended
    to the sequence, extending it for future generations. Generated
    draws count toward a per-case cap; a case that exceeds the cap is
-   rejected and charged to the rejection budget, so an unbounded loop
+   rejected and charged to the rejection budget — the run-wide
+   rejection cap shared with `reject_case` — so an unbounded loop
    opened by mutation still terminates.
 4. **An unconsumed suffix.** Draws the mutated control flow never read
    are discarded at the case boundary, so stale values do not leak into
@@ -140,11 +135,13 @@ problem specific to imperative PBT: a declarative setup has no control
 flow to diverge, but imperative properties need the invariant spelled
 out.
 
-Attempt spans are validated in strict replay and are neither validated
-nor recorded during exploration. A mutated candidate's span structure
-may legitimately differ from the recording, and nothing consumes
-exploratory spans, so the recorded structure is treated purely as a
-mutation seed.
+Attempt spans are validated in strict replay — a faithful replay mode
+that aborts on structural mismatch, used to check a recording's
+fidelity — and are neither validated nor recorded during exploration.
+The targeted runner always explores: a mutated candidate's span
+structure may legitimately differ from the recording, and nothing
+consumes exploratory spans, so the recorded structure is treated
+purely as a mutation seed.
 
 ## Corpus and Mutation
 
@@ -194,7 +191,7 @@ closure.
   `examples/targeted_demo.rs` for a measured comparison.
 - The search constants (corpus size, pick and mutation odds, restart
   odds, draw cap) are initial guesses. Tuning them against synthetic
-  targets is deferred to the benchmark issue.
+  targets is deferred until benchmark data exists.
 - Targeted search cannot create inputs outside the generator's support;
   generator bias and search policy effectiveness are kept separate when
   interpreting results.

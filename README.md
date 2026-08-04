@@ -17,7 +17,7 @@ An imperative property-based testing library for Rust.
 
 Targeted search (`Runner::run_targeted`) is available behind the same
 imperative API; its design is documented in
-[docs/targeted-search.md](docs/targeted-search.md).
+[docs/targeted-search.md](https://github.com/sile/noprop/blob/main/docs/targeted-search.md).
 
 Example
 -------
