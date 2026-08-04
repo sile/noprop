@@ -273,11 +273,12 @@ impl ChoiceSequence {
 
 /// Bounded-domain metadata for one draw.
 ///
-/// `Raw` marks a draw with no mutation constraint (raw bytes, string
-/// payload, etc.). The variants carry enough information for
-/// constraint-aware mutation: a `Bounded` draw may only be rewritten to
-/// another value in `[0, bound)`, a `Choice` draw to another index in
-/// `[0, len)`.
+/// The variants carry enough information for constraint-aware
+/// mutation: a `Bounded` draw may only be rewritten to another value
+/// in `[0, bound)`, a `Choice` draw to another index in `[0, len)`, an
+/// `Integer` draw (plain `sample_u*` / `sample_i*`) to any value of its
+/// width. `Raw` marks a draw with no mutation constraint (raw bytes,
+/// string payload, floats, …), which is regenerated as a whole.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ChoiceMeta {
     /// Drawn uniformly from `[0, bound)` via the rejection-sampling
@@ -286,6 +287,9 @@ pub(crate) enum ChoiceMeta {
     /// Drawn as an index into a candidate slice of length `len`
     /// (`sample_choice`).
     Choice { len: usize },
+    /// A plain integer draw (`sample_u*` / `sample_i*`) over its full
+    /// width. Mutation may rewrite it to any value of the same width.
+    Integer,
     /// No bounded domain (raw bytes, string payload, …).
     Raw,
 }
@@ -1729,7 +1733,7 @@ mod targeted_tests {
     // === choice metadata recording ===
 
     #[test]
-    fn recording_tags_bounded_and_choice_draws() {
+    fn recording_tags_bounded_choice_and_integer_draws() {
         let ((), seq) = RecordingSession::new(1).run(|ctx| {
             let _ = crate::sample_usize_in(ctx, 0..10);
             let _ = crate::sample_choice(ctx, &[1, 2, 3, 4]);
@@ -1738,7 +1742,7 @@ mod targeted_tests {
         let metas = seq.metas();
         assert!(matches!(metas[0], ChoiceMeta::Bounded { bound: 10 }));
         assert!(matches!(metas[1], ChoiceMeta::Choice { len: 4 }));
-        assert!(matches!(metas[2], ChoiceMeta::Raw));
+        assert!(matches!(metas[2], ChoiceMeta::Integer));
     }
 
     // === exploratory replay ===

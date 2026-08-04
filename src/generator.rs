@@ -622,6 +622,7 @@ pub fn sample_bool(ctx: &mut TestCaseContext) -> bool {
 #[track_caller]
 pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = raw_bytes::<1>(ctx)[0];
     ctx.record_generated(&v, loc);
     v
@@ -631,6 +632,7 @@ pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
 #[track_caller]
 pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u16::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -640,6 +642,7 @@ pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
 #[track_caller]
 pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u32::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -649,6 +652,7 @@ pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
 #[track_caller]
 pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u64::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -658,6 +662,7 @@ pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
 #[track_caller]
 pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u128::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -667,6 +672,7 @@ pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
 #[track_caller]
 pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = usize::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -676,6 +682,7 @@ pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
 #[track_caller]
 pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = raw_bytes::<1>(ctx)[0] as i8;
     ctx.record_generated(&v, loc);
     v
@@ -685,6 +692,7 @@ pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
 #[track_caller]
 pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i16::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -694,6 +702,7 @@ pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
 #[track_caller]
 pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i32::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -703,6 +712,7 @@ pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
 #[track_caller]
 pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i64::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -712,6 +722,7 @@ pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
 #[track_caller]
 pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i128::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -721,6 +732,7 @@ pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
 #[track_caller]
 pub fn sample_isize(ctx: &mut TestCaseContext) -> isize {
     let loc = Location::caller();
+    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = isize::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v

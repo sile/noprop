@@ -757,6 +757,23 @@ fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
                 let new_value = prng.sample_below(*len as u64);
                 draw[..8].copy_from_slice(&new_value.to_le_bytes());
             }
+            ChoiceMeta::Integer => {
+                // Plain integer draw: rewrite to any value of the same
+                // width (the full domain is valid).
+                match draw.len() {
+                    1 => draw.copy_from_slice(&[prng.next_u64() as u8]),
+                    2 => draw.copy_from_slice(&(prng.next_u64() as u16).to_le_bytes()),
+                    4 => draw.copy_from_slice(&(prng.next_u64() as u32).to_le_bytes()),
+                    8 => draw.copy_from_slice(&prng.next_u64().to_le_bytes()),
+                    16 => {
+                        let lo = prng.next_u64();
+                        let hi = prng.next_u64();
+                        draw[..8].copy_from_slice(&lo.to_le_bytes());
+                        draw[8..].copy_from_slice(&hi.to_le_bytes());
+                    }
+                    _ => prng.fill(draw),
+                }
+            }
             ChoiceMeta::Raw => {
                 // Constraint-free draw: regenerate the whole draw
                 // rather than byte-mutating it.
@@ -913,4 +930,20 @@ fn targeted_search_evolves_corpus_entries() {
         unmutated_replays >= 4,
         "unmutated replays must dominate: {unmutated_replays}"
     );
+}
+
+#[test]
+fn mutation_rewrites_integer_draws() {
+    let mut prng = XoshiroState::from_seed(77);
+    let mut changed = false;
+    for _ in 0..100 {
+        let mut seq = ChoiceSequence::default();
+        seq.push_draw(5u64.to_le_bytes().to_vec(), ChoiceMeta::Integer);
+        mutate_sequence(&mut seq, &mut prng);
+        let x = u64::from_le_bytes(seq.draws()[0][..8].try_into().unwrap());
+        if x != 5 {
+            changed = true;
+        }
+    }
+    assert!(changed, "integer draws must be rewritten to another value");
 }
