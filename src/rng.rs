@@ -264,8 +264,8 @@ impl ChoiceSequence {
         &mut self.draws
     }
 
-    /// Split borrow of draws and their metadata, so mutation can walk
-    /// both without allocating a copy.
+    /// Split borrow of draws (mutable) and their metadata (shared), so
+    /// mutation can walk both at once.
     pub(crate) fn draws_and_metas(&mut self) -> (&mut [Vec<u8>], &[ChoiceMeta]) {
         (&mut self.draws, &self.metas)
     }
@@ -1048,10 +1048,8 @@ impl TestCaseContext {
     /// generation path; ignored otherwise.
     pub(crate) fn set_next_choice_meta(&mut self, meta: ChoiceMeta) {
         match &mut self.source {
-            RandomSource::Recording { pending_choice, .. } => {
-                *pending_choice = Some(meta);
-            }
-            RandomSource::Replay { pending_choice, .. } => {
+            RandomSource::Recording { pending_choice, .. }
+            | RandomSource::Replay { pending_choice, .. } => {
                 *pending_choice = Some(meta);
             }
             RandomSource::Prng(_) => {}

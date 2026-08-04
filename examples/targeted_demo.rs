@@ -39,11 +39,7 @@ fn case_b(ctx: &mut TestCaseContext) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn mean(xs: &[usize]) -> f64 {
-    if xs.is_empty() {
-        f64::NAN
-    } else {
-        xs.iter().sum::<usize>() as f64 / xs.len() as f64
-    }
+    xs.iter().sum::<usize>() as f64 / xs.len() as f64
 }
 
 fn compare(

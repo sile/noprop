@@ -42,11 +42,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// reproduce with: noprop::Runner::new(0x..., N)
 /// ```
 ///
-/// The uniform hint is copy-pasteable as-is; when the failure came
-/// from the targeted runner the hint names `run_targeted` and leaves
-/// the closure body as a placeholder, so the original property closure
-/// must be substituted in before rerunning. Either way the re-run
-/// size does not need to be recomputed by hand.
+/// The hint reuses the original iteration budget and names the failing
+/// entry point: `run`'s hint prints the bare constructor, while the
+/// targeted hint appends `run_targeted(|ctx| ...)` with the closure
+/// body left as a placeholder. In both cases the original property
+/// closure must be supplied before rerunning; the re-run size never
+/// needs to be recomputed by hand.
 pub struct Error {
     seed: u64,
     case_index: usize,

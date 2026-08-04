@@ -284,23 +284,23 @@ impl Runner {
                         FeedbackState::Targeted { max_score } => match max_score {
                             ScalarFeedback::Valid(score) => score,
                             ScalarFeedback::Missing => {
-                                return Err(feedback_exit(
-                                    self,
-                                    &mut ctx,
+                                record_stats(self, accepted, rejected, total_samples);
+                                return Err(Error::from_missing_feedback(
+                                    self.seed,
                                     accepted,
-                                    rejected,
-                                    total_samples,
-                                    FeedbackExitKind::Missing,
+                                    self.iterations,
+                                    ctx.take_generated(),
+                                    self.stats,
                                 ));
                             }
                             ScalarFeedback::Invalid => {
-                                return Err(feedback_exit(
-                                    self,
-                                    &mut ctx,
+                                record_stats(self, accepted, rejected, total_samples);
+                                return Err(Error::from_invalid_feedback(
+                                    self.seed,
                                     accepted,
-                                    rejected,
-                                    total_samples,
-                                    FeedbackExitKind::Invalid,
+                                    self.iterations,
+                                    ctx.take_generated(),
+                                    self.stats,
                                 ));
                             }
                         },
@@ -514,42 +514,6 @@ fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_sam
         rejected_iterations: rejected,
         total_samples,
     };
-}
-
-/// Which feedback validation failed, for [`feedback_exit`].
-#[derive(Debug, Clone, Copy)]
-enum FeedbackExitKind {
-    Missing,
-    Invalid,
-}
-
-/// Record run stats and build the missing / invalid feedback exit error.
-fn feedback_exit(
-    runner: &mut Runner,
-    ctx: &mut TestCaseContext,
-    accepted: usize,
-    rejected: usize,
-    total_samples: usize,
-    kind: FeedbackExitKind,
-) -> Error {
-    record_stats(runner, accepted, rejected, total_samples);
-    let generated = ctx.take_generated();
-    match kind {
-        FeedbackExitKind::Missing => Error::from_missing_feedback(
-            runner.seed,
-            accepted,
-            runner.iterations,
-            generated,
-            runner.stats,
-        ),
-        FeedbackExitKind::Invalid => Error::from_invalid_feedback(
-            runner.seed,
-            accepted,
-            runner.iterations,
-            generated,
-            runner.stats,
-        ),
-    }
 }
 
 /// Record run stats and build the targeted too-many-rejections exit

@@ -90,6 +90,8 @@ output, not a normalized domain value: the property re-applies its own
 constraint — for example the reduction inside
 `sample_usize_in(ctx, 0..n)` — so a stored value stays meaningful under
 any constraint the mutated control flow imposes on that position.
+Mutation preserves the raw representation: a bounded draw is rewritten
+to a fresh value inside its domain, never to a normalized encoding.
 
 Constraint metadata is one of:
 
@@ -118,10 +120,12 @@ Four rules cover every divergence:
    sequence bounded.
 3. **A request past the recording.** The draw is generated and appended
    to the sequence, extending it for future generations. Generated
-   draws count toward a per-case cap; a case that exceeds the cap is
-   rejected and charged to the rejection budget — the run-wide
-   rejection cap shared with `reject_case` — so an unbounded loop
-   opened by mutation still terminates.
+   draws — rule 2's replacements included, rule 1's regenerations not,
+   since the recorded length bounds them — count toward a per-case
+   cap; a case that exceeds the cap is rejected and charged to the
+   rejection budget — the run-wide rejection cap shared with
+   `reject_case` — so an unbounded loop opened by mutation still
+   terminates.
 4. **An unconsumed suffix.** Draws the mutated control flow never read
    are discarded at the case boundary, so stale values do not leak into
    the next generation.
