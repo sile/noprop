@@ -1228,6 +1228,71 @@ fn run_corpus_guided_reports_property_failure() {
 }
 
 #[test]
+fn run_corpus_guided_candidate_index_is_one_based() {
+    // The candidate index counts every attempt (accepted, rejected,
+    // and the failing case itself) and is one-based, unlike the
+    // zero-based accepted-iteration `case_index`.
+    let attempts = std::cell::Cell::new(0usize);
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            attempts.set(attempts.get() + 1);
+            ctx.event("e");
+            panic!("fail on first attempt");
+        })
+        .expect_err("first attempt must fail");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("candidate_index: 1"),
+        "the first attempt must be candidate 1: {debug}"
+    );
+    assert!(debug.contains("case_index: 0"), "{debug}");
+    assert_eq!(attempts.get(), 1);
+}
+
+#[test]
+fn run_corpus_guided_candidate_index_counts_rejected_attempts() {
+    // A rejected attempt still advances the candidate index, so the
+    // failing second attempt is candidate 2 while `case_index` stays 0
+    // (no accepted iteration ran).
+    let attempts = std::cell::Cell::new(0usize);
+    let err = noprop::Runner::new(7, 8)
+        .run_corpus_guided(|ctx| {
+            let n = attempts.get();
+            attempts.set(n + 1);
+            ctx.event("e");
+            if n == 0 {
+                ctx.reject_case();
+            }
+            panic!("fail on second attempt");
+        })
+        .expect_err("second attempt must fail");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("candidate_index: 2"),
+        "the rejected attempt must count toward the candidate index: {debug}"
+    );
+    assert!(debug.contains("case_index: 0"), "{debug}");
+    assert_eq!(err.stats().rejected_iterations, 1);
+}
+
+#[test]
+fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            ctx.event("before-error");
+            Err("corpus error".into())
+        })
+        .expect_err("returned Err must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("corpus error"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(display.contains("Semantic features:"), "{display}");
+    assert!(display.contains("event(\"before-error\")"), "{display}");
+    assert_eq!(err.case_index(), 0);
+    assert!(format!("{err:?}").contains("candidate_index: 1"), "{err:?}");
+}
+
+#[test]
 fn run_corpus_guided_counts_rejections() {
     let mut runner = noprop::Runner::new(3, 16);
     runner
@@ -1255,6 +1320,39 @@ fn run_corpus_guided_stops_after_too_many_rejections() {
     let display = format!("{err}");
     assert!(display.contains("too many rejections"), "{display}");
     assert!(display.contains("run_corpus_guided"), "{display}");
+}
+
+#[test]
+fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
+    // The rejection-cap failure must carry the semantic features of
+    // the last rejected case and its candidate index (every attempt
+    // was rejected, so the index equals the rejected count). This
+    // guards against the report silently dropping to "candidate_index:
+    // 0" on this path.
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            ctx.event("always-reject");
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting must hit the rejection cap");
+    let debug = format!("{err:?}");
+    assert!(debug.contains("too_many_rejections"), "{debug}");
+    assert!(
+        debug.contains("event(\"always-reject\")"),
+        "the last rejected case's features must be reported: {debug}"
+    );
+    // All attempts were rejected, so the candidate index of the last
+    // rejected attempt equals the rejected count. Avoid hard-coding
+    // the cap formula (it is deliberately crate-private).
+    assert!(
+        debug.contains(&format!(
+            "candidate_index: {}",
+            err.stats().rejected_iterations
+        )),
+        "candidate_index must equal the rejected count: {debug}"
+    );
+    let display = format!("{err}");
+    assert!(display.contains("Semantic features:"), "{display}");
 }
 
 #[test]
@@ -1322,6 +1420,74 @@ fn run_corpus_guided_is_reproducible_from_seed() {
     }
 
     assert_eq!(run(seed), run(seed));
+}
+
+#[test]
+fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
+    // The plain reproducibility test never rejects, so the
+    // rejected-queue pick path (and the PRNG rolls it consumes) stays
+    // unexercised. This property rejects a fraction of candidates so
+    // the full candidate stream — including the rejected-queue branch
+    // of `next_context` — must reproduce from the seed.
+    use std::cell::Cell;
+
+    fn run(seed: u64) -> Vec<u32> {
+        let observed: Cell<Vec<u32>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 64)
+            .run_corpus_guided(|ctx| {
+                let x = noprop::sample_u32(ctx);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                if x % 2 == 0 {
+                    ctx.event("even");
+                }
+                if x % 4 == 0 {
+                    ctx.reject_case();
+                }
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    let seed = 0xC0FFEE;
+    let a = run(seed);
+    let b = run(seed);
+    assert_eq!(a, b, "rejected candidates must reproduce from the seed");
+    assert!(
+        a.iter().any(|x| x % 4 == 0),
+        "the rejected path must actually run: {a:?}"
+    );
+}
+
+#[test]
+fn run_corpus_guided_stats_count_rejected_attempt_samples() {
+    // `total_samples` must include samples produced by rejected
+    // attempts (they consumed generator budget), and
+    // `rejected_iterations` must count every `reject_case`.
+    use std::cell::Cell;
+
+    let attempts = Cell::new(0usize);
+    let mut runner = noprop::Runner::new(1, 4);
+    runner
+        .run_corpus_guided(|ctx| {
+            attempts.set(attempts.get() + 1);
+            ctx.event("e");
+            let _ = noprop::sample_u32(ctx);
+            if attempts.get() == 1 {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("run must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 4);
+    assert_eq!(stats.rejected_iterations, 1);
+    assert_eq!(
+        stats.total_samples, 5,
+        "1 rejected + 4 accepted attempts, one sample each"
+    );
 }
 
 #[test]

@@ -451,18 +451,12 @@ impl Runner {
             candidate_index += 1;
 
             if let Some(state) = rejection {
-                // A rejected case may still register novel features and
-                // enter the rejected queue as scaffolding toward sparse
-                // preconditions.
-                let feedback = ctx.take_feedback();
-                if let FeedbackState::SemanticCoverage(mut cov) = feedback {
-                    let features = cov.take_features();
-                    if let Some(sequence) = ctx.take_sequence() {
-                        search.corpus.admit_rejected(sequence, features);
-                    }
-                }
                 rejected += 1;
                 if rejected > rejection_cap {
+                    // Cap exceeded: report before consuming the
+                    // feedback, so the error can carry the last
+                    // rejected case's semantic features and candidate
+                    // index (drained inside `too_many_rejections`).
                     return Err(too_many_rejections(
                         self,
                         &mut ctx,
@@ -472,6 +466,16 @@ impl Runner {
                         state.location,
                         SearchPolicy::CorpusGuided,
                     ));
+                }
+                // A rejected case may still register novel features and
+                // enter the rejected queue as scaffolding toward sparse
+                // preconditions.
+                let feedback = ctx.take_feedback();
+                if let FeedbackState::SemanticCoverage(mut cov) = feedback {
+                    let features = cov.take_features();
+                    if let Some(sequence) = ctx.take_sequence() {
+                        search.corpus.admit_rejected(sequence, features);
+                    }
                 }
                 continue;
             }
@@ -540,6 +544,9 @@ impl Runner {
         record_stats(self, accepted, rejected, total_samples);
         Ok(())
     }
+
+    /// Invoke `f(&mut ctx)` up to `iterations` times against a shared
+    /// [`TestCaseContext`] seeded with `seed`.
     ///
     /// Each invocation is one property "iteration". A returned `Ok(())`
     /// counts as a pass; a returned `Err` or a panic (via `assert!`,
@@ -694,6 +701,10 @@ fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_sam
 }
 
 /// Record run stats and build the too-many-rejections exit error.
+///
+/// For corpus-guided runs, the error additionally carries the semantic
+/// features of the last rejected case and its candidate index (the
+/// ordinal of the attempt that exceeded the cap: `accepted + rejected`).
 fn too_many_rejections(
     runner: &mut Runner,
     ctx: &mut TestCaseContext,
@@ -705,7 +716,7 @@ fn too_many_rejections(
 ) -> Error {
     record_stats(runner, accepted, rejected, total_samples);
     let generated = ctx.take_generated();
-    Error::from_too_many_rejections(
+    let err = Error::from_too_many_rejections(
         runner.seed,
         accepted,
         runner.iterations,
@@ -714,7 +725,15 @@ fn too_many_rejections(
         generated,
         runner.stats,
         policy,
-    )
+    );
+    if policy == SearchPolicy::CorpusGuided {
+        let features = match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
+            _ => Vec::new(),
+        };
+        return err.with_semantic(features, accepted + rejected);
+    }
+    err
 }
 
 /// One candidate in the targeted corpus: the recorded choice sequence

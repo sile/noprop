@@ -29,6 +29,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `case_index()`, so the same seed and iteration budget reproduce the
 /// same exit.
 ///
+/// A corpus-guided failure report (`run_corpus_guided`) additionally
+/// carries the semantic features the failing case reported and a
+/// one-based candidate index. The candidate index counts every attempt
+/// — accepted, rejected, and the failing case itself — so it relates
+/// to the zero-based `case_index()` (accepted iterations only) as
+/// `candidate_index = case_index + 1 + rejections before the failure`.
+/// For `TooManyRejections`, the candidate index is the ordinal of the
+/// last rejected attempt (`accepted + rejected`) and the semantic
+/// features are those of that last rejected case.
+///
 /// `generated()` returns the sequence of values every primitive
 /// generator produced during the failing case, together with each call
 /// site's source location. For `TooManyRejections`, `generated()`
