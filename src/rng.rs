@@ -14,11 +14,12 @@ const DEDUP_HEAD: usize = 8;
 /// buffer once the head is full.
 const DEDUP_TAIL: usize = 8;
 
-/// Maximum number of draws one case may generate during exploratory
-/// replay. The first `MAX_CHOICES_PER_CASE` draws succeed; the next
-/// draw aborts the case as a rejection so a mutated candidate whose
-/// control flow keeps drawing cannot loop forever. Replayed recorded
-/// draws count toward the cap as well.
+/// Maximum number of draws one case may *generate* during exploratory
+/// replay. The first `MAX_CHOICES_PER_CASE` generated draws succeed;
+/// the next generated draw aborts the case as a rejection so a mutated
+/// candidate whose control flow keeps drawing cannot loop forever.
+/// Replayed recorded draws are bounded by the recorded length and do
+/// not count toward the cap.
 const MAX_CHOICES_PER_CASE: usize = 4096;
 
 /// Seedable non-cryptographic PRNG used by all noprop generators.
@@ -31,11 +32,13 @@ const MAX_CHOICES_PER_CASE: usize = 4096;
 /// must always be provided by the caller. This makes every property test
 /// exactly reproducible from its seed.
 ///
-/// The only public methods are [`TestCaseContext::new`] and [`TestCaseContext::reject_case`];
-/// all byte/word production happens through the `noprop::sample_*` free
-/// functions, which record the generated values into an internal trace
-/// surfaced on failure. Raw PRNG state access is deliberately hidden so
-/// users cannot accidentally bypass that trace.
+/// The public methods are [`TestCaseContext::new`],
+/// [`TestCaseContext::reject_case`], and — in targeted mode —
+/// [`TestCaseContext::maximize`]; all byte/word production happens
+/// through the `noprop::sample_*` free functions, which record the
+/// generated values into an internal trace surfaced on failure. Raw
+/// PRNG state access is deliberately hidden so users cannot
+/// accidentally bypass that trace.
 ///
 /// # Examples
 ///
@@ -110,7 +113,8 @@ pub(crate) enum ScalarFeedback {
 ///   control-flow marker to abort the generator immediately. In
 ///   exploratory mode (`explore` is `Some`), draws beyond the recorded
 ///   sequence are generated from the carried PRNG instead of aborting,
-///   and the total draw count is capped by [`MAX_CHOICES_PER_CASE`].
+///   and the generated draw count is capped by
+///   [`MAX_CHOICES_PER_CASE`].
 enum RandomSource {
     Prng(XoshiroState),
     Recording {
@@ -133,10 +137,12 @@ enum RandomSource {
         error: Option<ReplayError>,
         /// `Some` when running exploratory replay: draws beyond the
         /// recorded sequence are generated from this PRNG instead of
-        /// aborting, and the total draw count is capped.
+        /// aborting, capped at [`MAX_CHOICES_PER_CASE`] generated
+        /// draws.
         explore: Option<XoshiroState>,
-        /// Draws consumed so far (recorded + generated), used to
-        /// enforce the exploratory cap.
+        /// Generated draws so far in this exploratory case, used to
+        /// enforce the [`MAX_CHOICES_PER_CASE`] cap. Replayed recorded
+        /// draws are bounded by the recorded length and do not count.
         consumed: usize,
         /// Metadata to attach to the next generated draw (set by
         /// bounded-domain primitives right before they draw).
@@ -179,7 +185,7 @@ impl XoshiroState {
         result
     }
 
-    fn fill(&mut self, dst: &mut [u8]) {
+    pub(crate) fn fill(&mut self, dst: &mut [u8]) {
         let mut i = 0;
         while i + 8 <= dst.len() {
             let bytes = self.next_u64().to_le_bytes();
@@ -264,7 +270,7 @@ impl ChoiceSequence {
 /// constraint-aware mutation: a `Bounded` draw may only be rewritten to
 /// another value in `[0, bound)`, a `Choice` draw to another index in
 /// `[0, len)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ChoiceMeta {
     /// Drawn uniformly from `[0, bound)` via the rejection-sampling
     /// core (`sample_below`).
@@ -529,9 +535,10 @@ impl TestCaseContext {
     ///
     /// For exploratory contexts, recorded draws the mutated control
     /// flow never consumed (the "unconsumed suffix") are discarded so
-    /// stale values do not leak into the next generation. The span
-    /// list is left as an approximate lineage log — it is not consumed
-    /// anywhere today.
+    /// stale values do not leak into the next generation. Spans are
+    /// dropped entirely: the recorded structure is only a mutation
+    /// seed, and a truncated span list would dangle (a span's parent
+    /// may have been cut). Nothing consumes exploratory spans today.
     pub(crate) fn take_sequence(&mut self) -> Option<ChoiceSequence> {
         match &mut self.source {
             RandomSource::Recording { sequence, .. } => Some(std::mem::take(sequence)),
@@ -544,6 +551,7 @@ impl TestCaseContext {
                     sequence.draws.truncate(*next_draw);
                     sequence.metas.truncate(*next_draw);
                 }
+                sequence.spans.clear();
                 Some(std::mem::take(sequence))
             }
             _ => None,
@@ -573,7 +581,7 @@ impl TestCaseContext {
         if !self.inside_runner {
             panic!(
                 "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run \
-                 property closure. Constructing an TestCaseContext directly via TestCaseContext::new does not \
+                 property closure. Constructing a TestCaseContext directly via TestCaseContext::new does not \
                  create a Runner boundary."
             );
         }
@@ -625,14 +633,16 @@ impl TestCaseContext {
                             dst.copy_from_slice(draw);
                             *next_draw += 1;
                             if explore.is_some() {
-                                // The primitive may have declared a
-                                // bounded domain for this draw; the
-                                // recorded metadata already covers it,
-                                // so drop the pending declaration
-                                // instead of leaking it into the next
-                                // generated draw.
-                                let _ = pending_choice.take();
-                                *consumed += 1;
+                                // The primitive may declare a new
+                                // bounded domain for this draw (the
+                                // mutated control flow can call a
+                                // different primitive at the same
+                                // width); adopt it so mutation keeps
+                                // the right constraint. Otherwise keep
+                                // the recorded metadata.
+                                if let Some(meta) = pending_choice.take() {
+                                    sequence.metas[*next_draw - 1] = meta;
+                                }
                             }
                             return;
                         }
@@ -732,19 +742,10 @@ impl TestCaseContext {
                 if explore.is_some() {
                     // Exploratory mode: a mutated candidate's control
                     // flow may legitimately diverge from the recorded
-                    // span structure, so record the new span instead of
-                    // validating it. The recorded structure is only a
-                    // seed for the next mutation.
-                    let idx = sequence.spans.len();
-                    let start_draw = sequence.draws.len();
-                    sequence.spans.push(AttemptSpan {
-                        parent: *current_parent,
-                        start_draw,
-                        end_draw: start_draw,
-                        verdict: AttemptVerdict::Pending,
-                    });
-                    *current_parent = Some(idx);
-                    return Some(idx);
+                    // span structure. Spans are not recorded here — the
+                    // recorded structure is only a seed for the next
+                    // mutation, and nothing consumes exploratory spans.
+                    return None;
                 }
                 if error.is_some() {
                     std::panic::resume_unwind(Box::new(ReplayAbort));
@@ -813,14 +814,9 @@ impl TestCaseContext {
                 ..
             } => {
                 if explore.is_some() {
-                    // Exploratory mode: close the span recorded by
-                    // `begin_attempt` without validating it (see there).
-                    let idx = id.expect("Exploratory mode always yields an attempt id");
-                    let end_draw = sequence.draws.len();
-                    let span = &mut sequence.spans[idx];
-                    span.end_draw = end_draw;
-                    span.verdict = verdict;
-                    *current_parent = span.parent;
+                    // Exploratory mode: `begin_attempt` returned
+                    // `None`, so there is nothing to close.
+                    let _ = (next_draw, current_parent, id, verdict);
                     return;
                 }
                 if error.is_some() {
@@ -969,7 +965,9 @@ impl TestCaseContext {
     ///
     /// A larger finite value means "closer to failure". Multiple calls
     /// within one case keep the maximum; a `NaN` / infinity report
-    /// marks the whole case invalid.
+    /// marks the whole case invalid. Rejected cases (via
+    /// [`TestCaseContext::reject_case`]) discard their score — they do
+    /// not need to call `maximize`.
     pub fn maximize(&mut self, score: f64) {
         if let FeedbackState::Targeted { max_score } = &mut self.feedback {
             let next = if score.is_finite() {
@@ -1671,7 +1669,6 @@ mod tests {
 #[cfg(test)]
 mod targeted_tests {
     use super::*;
-    use crate::rng::{FeedbackState, ScalarFeedback, TestCaseContext};
 
     // === maximize / feedback state ===
 
@@ -1812,20 +1809,28 @@ mod regression_tests {
     use crate::rng::{ChoiceMeta, RecordingSession, TestCaseContext};
 
     #[test]
-    fn exploring_consumes_pending_meta_on_replay() {
+    fn exploring_adopts_new_meta_on_replay() {
         let ((), seq) = RecordingSession::new(1).run(|ctx| {
             let mut buf = [0u8; 8];
             ctx.fill(&mut buf);
         });
         let mut ctx = TestCaseContext::exploring(seq, 42);
         let mut buf = [0u8; 8];
-        // Mimic a primitive: declare a bounded domain, then draw
-        // (replayed from the record). The declaration must not leak
-        // into the next generated draw.
+        // Mimic a primitive whose constraint changed at the same draw
+        // position (mutated control flow): declare the new domain, then
+        // draw (replayed). The recorded metadata must be replaced by
+        // the new declaration...
         ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 100 });
         ctx.fill(&mut buf);
+        // ...and the declaration must not leak into the next generated
+        // draw, which stays Raw.
         ctx.fill(&mut buf);
         let seq = ctx.take_sequence().expect("sequence");
+        assert!(
+            matches!(seq.metas()[0], ChoiceMeta::Bounded { bound: 100 }),
+            "replayed draw must adopt the new declared domain: {:?}",
+            seq.metas()[0]
+        );
         assert!(
             matches!(seq.metas()[1], ChoiceMeta::Raw),
             "stale meta must not leak into a generated draw: {:?}",
@@ -1852,5 +1857,51 @@ mod regression_tests {
             "dead draw must be replaced, not appended"
         );
         assert_eq!(seq.draws()[0].len(), 8);
+    }
+
+    #[test]
+    fn exploring_replays_long_records_without_hitting_cap() {
+        // The cap limits *generated* draws only; replayed recorded
+        // draws are bounded by the recorded length.
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            for _ in 0..5000 {
+                let mut buf = [0u8; 4];
+                ctx.fill(&mut buf);
+            }
+        });
+        let mut ctx = TestCaseContext::exploring(seq, 42);
+        let mut buf = [0u8; 4];
+        for _ in 0..5000 {
+            ctx.fill(&mut buf);
+        }
+        // A generated draw after a long replay must still succeed.
+        ctx.fill(&mut buf);
+        let seq = ctx.take_sequence().expect("sequence");
+        assert_eq!(seq.draws().len(), 5001);
+    }
+}
+
+#[cfg(test)]
+mod suffix_tests {
+    use crate::rng::{RecordingSession, TestCaseContext};
+
+    #[test]
+    fn take_sequence_discards_unconsumed_suffix() {
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let mut a = [0u8; 4];
+            ctx.fill(&mut a);
+            let mut b = [0u8; 4];
+            ctx.fill(&mut b);
+            let mut c = [0u8; 4];
+            ctx.fill(&mut c);
+        });
+        assert_eq!(seq.draws().len(), 3);
+        let mut ctx = TestCaseContext::exploring(seq, 42);
+        // Only the first recorded draw is consumed; the rest is the
+        // unconsumed suffix and must be discarded on take.
+        let mut buf = [0u8; 4];
+        ctx.fill(&mut buf);
+        let seq = ctx.take_sequence().expect("sequence");
+        assert_eq!(seq.draws().len(), 1, "unconsumed suffix must be discarded");
     }
 }

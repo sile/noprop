@@ -11,7 +11,7 @@ use crate::{Error, Result, TestCaseContext};
 ///
 /// All four search constants (`CORPUS_SIZE`, `MUTATION_DENOM`,
 /// `RANDOM_RESTART_DENOM`, `LOW_SCORE_DENOM`) are initial guesses;
-/// their tuning is decided by the 0010 benchmark once it lands.
+/// their tuning is deferred until benchmark data exists.
 const CORPUS_SIZE: usize = 64;
 
 /// Denominator of the per-draw mutation probability: one in
@@ -222,6 +222,19 @@ impl Runner {
     /// The rejection semantics (global rejection cap, `Stats`, and the
     /// `Runner::iterations` budget counting only accepted cases) match
     /// [`run`](Runner::run).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
+    /// runner
+    ///     .run_targeted(|ctx| {
+    ///         let x = noprop::sample_u32(ctx);
+    ///         ctx.maximize((x as f64) / u32::MAX as f64);
+    ///         Ok(())
+    ///     })
+    ///     .unwrap();
+    /// ```
     pub fn run_targeted<F>(&mut self, f: F) -> Result<()>
     where
         F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
@@ -253,7 +266,7 @@ impl Runner {
                         accepted,
                         rejected,
                         total_samples,
-                        Some(state.location),
+                        state.location,
                     ));
                 }
                 continue;
@@ -293,9 +306,13 @@ impl Runner {
                     };
                     // The carried choice sequence (recorded or
                     // exploratory) becomes the next mutation seed.
-                    if let Some(sequence) = ctx.take_sequence() {
-                        search.corpus.admit(sequence, score);
-                    }
+                    // `run_targeted` always constructs recording or
+                    // exploring contexts, so a sequence is always
+                    // recoverable.
+                    let sequence = ctx
+                        .take_sequence()
+                        .expect("run_targeted contexts are always recording or exploring");
+                    search.corpus.admit(sequence, score);
                     accepted += 1;
                     continue;
                 }
@@ -305,7 +322,8 @@ impl Runner {
                     // stored rejection state shouldn't happen because
                     // `reject_case` (and the exploratory draw cap)
                     // always set the state before resuming unwind. Keep
-                    // the same guard as `run`.
+                    // the same guard as `run` so both entry points
+                    // treat a stray marker identically.
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
@@ -315,7 +333,7 @@ impl Runner {
                                 accepted,
                                 rejected,
                                 total_samples,
-                                None,
+                                std::panic::Location::caller(),
                             ));
                         }
                         continue;
@@ -329,8 +347,14 @@ impl Runner {
                 total_samples,
             };
             let generated = ctx.take_generated();
-            return Err(Error::from_panic_targeted(
-                self.seed, accepted, message, generated, self.stats,
+            return Err(Error::from_panic(
+                self.seed,
+                accepted,
+                self.iterations,
+                message,
+                generated,
+                self.stats,
+                true,
             ));
         }
         self.stats = Stats {
@@ -411,10 +435,12 @@ impl Runner {
                     return Err(Error::from_too_many_rejections(
                         self.seed,
                         accepted,
+                        self.iterations,
                         rejected,
                         state.location,
                         generated,
                         self.stats,
+                        false,
                     ));
                 }
                 continue;
@@ -446,10 +472,12 @@ impl Runner {
                             return Err(Error::from_too_many_rejections(
                                 self.seed,
                                 accepted,
+                                self.iterations,
                                 rejected,
                                 unknown_location,
                                 generated,
                                 self.stats,
+                                false,
                             ));
                         }
                         continue;
@@ -464,7 +492,13 @@ impl Runner {
             };
             let generated = ctx.take_generated();
             return Err(Error::from_panic(
-                self.seed, accepted, message, generated, self.stats,
+                self.seed,
+                accepted,
+                self.iterations,
+                message,
+                generated,
+                self.stats,
+                false,
             ));
         }
         self.stats = Stats {
@@ -513,26 +547,32 @@ fn feedback_exit(
     };
     let generated = ctx.take_generated();
     match kind {
-        FeedbackExitKind::Missing => {
-            Error::from_missing_feedback(runner.seed, accepted, generated, runner.stats)
-        }
-        FeedbackExitKind::Invalid => {
-            Error::from_invalid_feedback(runner.seed, accepted, generated, runner.stats)
-        }
+        FeedbackExitKind::Missing => Error::from_missing_feedback(
+            runner.seed,
+            accepted,
+            runner.iterations,
+            generated,
+            runner.stats,
+        ),
+        FeedbackExitKind::Invalid => Error::from_invalid_feedback(
+            runner.seed,
+            accepted,
+            runner.iterations,
+            generated,
+            runner.stats,
+        ),
     }
 }
 
 /// Record run stats and build the targeted too-many-rejections exit
-/// error. `location` is `None` when the last discard has no rejection
-/// call site (a stray marker); in that case the helper's own location
-/// — a fixed position in the runner module — is reported.
+/// error.
 fn too_many_rejections(
     runner: &mut Runner,
     ctx: &mut TestCaseContext,
     accepted: usize,
     rejected: usize,
     total_samples: usize,
-    location: Option<&'static std::panic::Location<'static>>,
+    location: &'static std::panic::Location<'static>,
 ) -> Error {
     runner.stats = Stats {
         accepted_iterations: accepted,
@@ -540,14 +580,15 @@ fn too_many_rejections(
         total_samples,
     };
     let generated = ctx.take_generated();
-    let location = location.unwrap_or_else(|| std::panic::Location::caller());
-    Error::from_too_many_rejections_targeted(
+    Error::from_too_many_rejections(
         runner.seed,
         accepted,
+        runner.iterations,
         rejected,
         location,
         generated,
         runner.stats,
+        true,
     )
 }
 
@@ -642,9 +683,12 @@ impl TargetedSearch {
     ///   mutated within their recorded constraints, and the result is
     ///   explored (replay + generated tail draws).
     ///
-    /// The search PRNG is consumed in this fixed order per candidate:
-    /// restart roll, explore seed (when exploring), corpus pick,
-    /// mutation rolls — keeping the run reproducible from the seed.
+    /// The search PRNG is consumed per candidate in this fixed order:
+    /// the restart roll first (skipped while the corpus is empty),
+    /// then — for exploratory candidates — the explore seed, the
+    /// corpus pick (a low-score roll and, when it misses, an index
+    /// roll), and finally the mutation rolls. This fixed order keeps
+    /// the run reproducible from the seed.
     fn next_context(&mut self) -> TestCaseContext {
         let restart = self.corpus.is_empty() || self.prng.sample_below(RANDOM_RESTART_DENOM) == 0;
         if restart {
@@ -670,45 +714,61 @@ impl TargetedSearch {
     }
 }
 
-/// Rewrite a candidate's draws within their recorded constraints.
+/// Rewrite a candidate's draws for the next generation.
 ///
-/// Each non-`Raw` draw is rewritten with probability
-/// `1 / MUTATION_DENOM` to a fresh value inside its bounded domain;
-/// `Raw` draws (bytes, string payload, …) are never byte-mutated. The
-/// draw count and the nested attempt-span structure are preserved, so
-/// the mutated sequence still replays structurally.
+/// Each draw is rewritten with probability `1 / MUTATION_DENOM`:
+/// bounded-domain draws (Bounded / Choice) get a fresh value inside
+/// their recorded constraint, while constraint-free draws (Raw: raw
+/// bytes, string payload, …) are regenerated as a whole — never
+/// byte-mutated in place. The draw count and the recorded attempt-span
+/// structure are preserved, so the mutated sequence still replays
+/// structurally.
 fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
     let metas: Vec<ChoiceMeta> = sequence.metas().to_vec();
     for (draw, meta) in sequence.draws_mut().iter_mut().zip(metas.iter()) {
         if prng.sample_below(MUTATION_DENOM) != 0 {
             continue;
         }
-        let bound = match meta {
-            ChoiceMeta::Bounded { bound } => *bound,
-            ChoiceMeta::Choice { len } => *len as u64,
-            ChoiceMeta::Raw => continue,
-        };
-        if draw.len() < 8 {
-            // Bounded/Choice draws are always eight bytes (the
-            // rejection-sampling core draws a u64); anything shorter
-            // cannot be rewritten in place.
-            continue;
+        match meta {
+            ChoiceMeta::Bounded { bound } => {
+                if draw.len() < 8 {
+                    // Bounded/Choice draws are always eight bytes (the
+                    // rejection-sampling core draws a u64); anything
+                    // shorter cannot be rewritten in place.
+                    continue;
+                }
+                // bound <= 1 never occurs (sample_below returns early
+                // for n == 1 without drawing), kept as a defensive
+                // guard against a future primitive that records a
+                // singleton domain.
+                if *bound <= 1 {
+                    continue;
+                }
+                let new_value = prng.sample_below(*bound);
+                draw[..8].copy_from_slice(&new_value.to_le_bytes());
+            }
+            ChoiceMeta::Choice { len } => {
+                if draw.len() < 8 {
+                    continue;
+                }
+                if *len <= 1 {
+                    continue;
+                }
+                let new_value = prng.sample_below(*len as u64);
+                draw[..8].copy_from_slice(&new_value.to_le_bytes());
+            }
+            ChoiceMeta::Raw => {
+                // Constraint-free draw: regenerate the whole draw
+                // rather than byte-mutating it.
+                prng.fill(draw);
+            }
         }
-        // bound <= 1 never occurs (sample_below returns early for
-        // n == 1 without drawing), kept as a defensive guard against a
-        // future primitive that records a singleton domain.
-        if bound <= 1 {
-            continue;
-        }
-        let new_value = prng.sample_below(bound);
-        draw[..8].copy_from_slice(&new_value.to_le_bytes());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::ChoiceMeta;
 
     // === Corpus admission ===
 
@@ -773,22 +833,33 @@ mod tests {
     #[test]
     fn mutation_stays_within_bounded_domain() {
         let mut prng = XoshiroState::from_seed(1234);
+        let mut mutated = false;
+        let mut raw_regenerated = false;
+        let original_raw = vec![0xAB; 8];
         for _ in 0..100 {
             let mut seq = ChoiceSequence::default();
             seq.push_draw(
                 7u64.to_le_bytes().to_vec(),
                 ChoiceMeta::Bounded { bound: 10 },
             );
-            seq.push_draw(vec![0xAB; 8], ChoiceMeta::Raw);
+            // Raw draw: regenerated as a whole when mutated (never
+            // byte-mutated in place).
+            seq.push_draw(original_raw.clone(), ChoiceMeta::Raw);
             mutate_sequence(&mut seq, &mut prng);
             let x = u64::from_le_bytes(seq.draws()[0][..8].try_into().unwrap());
             assert!(x < 10, "mutated bounded draw {x} escaped its domain");
-            assert_eq!(
-                seq.draws()[1],
-                vec![0xAB; 8],
-                "raw draw must not be mutated"
-            );
+            if x != 7 {
+                mutated = true;
+            }
+            if seq.draws()[1] != original_raw {
+                raw_regenerated = true;
+            }
         }
+        assert!(mutated, "mutation must have occurred at least once");
+        assert!(
+            raw_regenerated,
+            "raw draw regeneration must have occurred at least once"
+        );
     }
 
     #[test]

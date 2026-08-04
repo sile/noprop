@@ -9,12 +9,14 @@ use crate::runner::Stats;
 /// Result alias used across noprop's public API.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Failure information from a [`Runner::run`](crate::Runner::run) invocation.
+/// Failure information from a [`Runner::run`](crate::Runner::run) or
+/// [`Runner::run_targeted`](crate::Runner::run_targeted) invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
-/// reproducible from `seed()` and `case_index()`: rerunning
-/// `noprop::Runner::new(err.seed(), err.case_index() + 1)` will hit
-/// the same failure again.
+/// reproducible: rerunning `noprop::Runner::new(err.seed(), N)` with
+/// the `N` printed by the reproduce hint will hit the same failure
+/// again. The hint reuses the original iteration budget so the rerun
+/// also hits the same rejection cap.
 ///
 /// A `TooManyRejections` failure — raised when
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
@@ -39,12 +41,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// reproduce with: noprop::Runner::new(0x..., N)
 /// ```
 ///
-/// line where `iterations = case_index + 1`, so re-triggering the
-/// same failure does not require the user to compute the minimum
+/// line reusing the original iteration budget (and naming
+/// `run_targeted` when the failure came from the targeted runner), so
+/// re-triggering the same failure does not require computing the
 /// re-run size by hand.
 pub struct Error {
     seed: u64,
     case_index: usize,
+    /// The iteration budget the failing run was given. The reproduce
+    /// hint reuses it so reruns hit the same rejection cap (a
+    /// `case_index + 1` hint would shrink the cap and turn the failure
+    /// into `TooManyRejections`).
+    iterations: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
     stats: Stats,
@@ -80,88 +88,59 @@ impl Error {
     pub(crate) fn from_panic(
         seed: u64,
         case_index: usize,
+        iterations: usize,
         message: String,
         generated: Vec<GeneratedValue>,
         stats: Stats,
+        targeted: bool,
     ) -> Self {
         Self::new(
             seed,
             case_index,
+            iterations,
             ErrorKind::Panic { message },
             generated,
             stats,
-            false,
+            targeted,
         )
     }
 
-    pub(crate) fn from_panic_targeted(
-        seed: u64,
-        case_index: usize,
-        message: String,
-        generated: Vec<GeneratedValue>,
-        stats: Stats,
-    ) -> Self {
-        Self::new(
-            seed,
-            case_index,
-            ErrorKind::Panic { message },
-            generated,
-            stats,
-            true,
-        )
-    }
-
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn from_too_many_rejections(
         seed: u64,
         case_index: usize,
+        iterations: usize,
         rejected_iterations: usize,
         last_reject_location: &'static Location<'static>,
         generated: Vec<GeneratedValue>,
         stats: Stats,
+        targeted: bool,
     ) -> Self {
         Self::new(
             seed,
             case_index,
+            iterations,
             ErrorKind::TooManyRejections {
                 rejected_iterations,
                 last_reject_location,
             },
             generated,
             stats,
-            false,
-        )
-    }
-
-    pub(crate) fn from_too_many_rejections_targeted(
-        seed: u64,
-        case_index: usize,
-        rejected_iterations: usize,
-        last_reject_location: &'static Location<'static>,
-        generated: Vec<GeneratedValue>,
-        stats: Stats,
-    ) -> Self {
-        Self::new(
-            seed,
-            case_index,
-            ErrorKind::TooManyRejections {
-                rejected_iterations,
-                last_reject_location,
-            },
-            generated,
-            stats,
-            true,
+            targeted,
         )
     }
 
     pub(crate) fn from_missing_feedback(
         seed: u64,
         case_index: usize,
+        iterations: usize,
         generated: Vec<GeneratedValue>,
         stats: Stats,
     ) -> Self {
         Self::new(
             seed,
             case_index,
+            iterations,
             ErrorKind::MissingFeedback,
             generated,
             stats,
@@ -172,12 +151,14 @@ impl Error {
     pub(crate) fn from_invalid_feedback(
         seed: u64,
         case_index: usize,
+        iterations: usize,
         generated: Vec<GeneratedValue>,
         stats: Stats,
     ) -> Self {
         Self::new(
             seed,
             case_index,
+            iterations,
             ErrorKind::InvalidFeedback,
             generated,
             stats,
@@ -188,6 +169,7 @@ impl Error {
     fn new(
         seed: u64,
         case_index: usize,
+        iterations: usize,
         kind: ErrorKind,
         generated: Vec<GeneratedValue>,
         stats: Stats,
@@ -196,6 +178,7 @@ impl Error {
         Self {
             seed,
             case_index,
+            iterations,
             kind,
             generated,
             stats,
@@ -214,7 +197,9 @@ impl Error {
     /// index of the failing iteration. For `TooManyRejections`, this
     /// is the count of accepted iterations that ran before the runner
     /// gave up (i.e. the index of the iteration that could not be
-    /// accepted).
+    /// accepted). For `MissingFeedback` / `InvalidFeedback`, this is
+    /// the index of the accepted case whose feedback failed
+    /// validation.
     pub fn case_index(&self) -> usize {
         self.case_index
     }
@@ -234,12 +219,22 @@ impl Error {
 }
 
 impl Error {
-    /// Number of `iterations` the caller needs to reproduce this
-    /// failure — always `case_index() + 1`. Split out so both
-    /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display)
-    /// share the same computation and format.
-    fn reproduce_iterations(&self) -> usize {
-        self.case_index + 1
+    /// The copy-pasteable reproduce command shared by
+    /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
+    /// Reuses the original iteration budget so reruns hit the same
+    /// rejection cap.
+    fn reproduce_command(&self) -> String {
+        if self.targeted {
+            format!(
+                "noprop::Runner::new({:#018x}, {}).run_targeted(|ctx| ...)",
+                self.seed, self.iterations
+            )
+        } else {
+            format!(
+                "noprop::Runner::new({:#018x}, {})",
+                self.seed, self.iterations
+            )
+        }
     }
 }
 
@@ -270,21 +265,7 @@ impl std::fmt::Debug for Error {
                 writeln!(f, "    invalid_feedback: true,")?;
             }
         }
-        if self.targeted {
-            writeln!(
-                f,
-                "    reproduce: noprop::Runner::new({:#018x}, {}).run_targeted(|ctx| ...),",
-                self.seed,
-                self.reproduce_iterations(),
-            )?;
-        } else {
-            writeln!(
-                f,
-                "    reproduce: noprop::Runner::new({:#018x}, {}),",
-                self.seed,
-                self.reproduce_iterations(),
-            )?;
-        }
+        writeln!(f, "    reproduce: {},", self.reproduce_command())?;
         writeln!(
             f,
             "    stats: {{ accepted: {}, rejected: {}, total_samples: {} }},",
@@ -346,21 +327,7 @@ impl std::fmt::Display for Error {
                 )?;
             }
         }
-        if self.targeted {
-            writeln!(
-                f,
-                "reproduce with: noprop::Runner::new({:#018x}, {}).run_targeted(|ctx| ...)",
-                self.seed,
-                self.reproduce_iterations(),
-            )?;
-        } else {
-            writeln!(
-                f,
-                "reproduce with: noprop::Runner::new({:#018x}, {})",
-                self.seed,
-                self.reproduce_iterations(),
-            )?;
-        }
+        writeln!(f, "reproduce with: {}", self.reproduce_command())?;
         writeln!(
             f,
             "stats: accepted={}, rejected={}, total_samples={}",

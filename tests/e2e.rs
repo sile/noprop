@@ -561,7 +561,9 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
     assert_eq!(err.case_index(), 3);
 
     let display = format!("{err}");
-    let expected_iterations = err.case_index() + 1;
+    // The hint reuses the original iteration budget so the rerun hits
+    // the same rejection cap (a `case_index + 1` hint would shrink it).
+    let expected_iterations = 128;
     let hint = format!(
         "reproduce with: noprop::Runner::new({:#018x}, {expected_iterations})",
         err.seed(),
@@ -720,25 +722,6 @@ fn run_targeted_succeeds_when_feedback_is_reported() {
 }
 
 #[test]
-fn run_targeted_is_deterministic_for_same_seed() {
-    let mut a = noprop::Runner::new(7, 64);
-    a.run_targeted(|ctx| {
-        let x = noprop::sample_u32(ctx);
-        ctx.maximize((x as f64) / u32::MAX as f64);
-        Ok(())
-    })
-    .expect("first targeted run");
-    let mut b = noprop::Runner::new(7, 64);
-    b.run_targeted(|ctx| {
-        let x = noprop::sample_u32(ctx);
-        ctx.maximize((x as f64) / u32::MAX as f64);
-        Ok(())
-    })
-    .expect("second targeted run");
-    assert_eq!(a.stats(), b.stats());
-}
-
-#[test]
 fn run_targeted_missing_feedback_is_reported() {
     let err = noprop::Runner::new(1, 8)
         .run_targeted(|ctx| {
@@ -891,4 +874,109 @@ fn run_targeted_reproduces_same_candidate_sequence() {
         a, b,
         "candidate sequences must be reproducible from the seed"
     );
+}
+
+#[test]
+fn run_targeted_reports_err_closure_failure() {
+    let err = noprop::Runner::new(1, 32)
+        .run_targeted(|ctx| {
+            ctx.maximize(0.5);
+            Err("application error".into())
+        })
+        .expect_err("returned Err must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("application error"), "{display}");
+    assert!(display.contains("run_targeted"), "{display}");
+}
+
+#[test]
+fn run_targeted_zero_iterations_returns_ok() {
+    let mut runner = noprop::Runner::new(1, 0);
+    runner
+        .run_targeted(|ctx| {
+            ctx.maximize(1.0);
+            Ok(())
+        })
+        .expect("zero iterations must succeed without invoking the closure");
+    assert_eq!(runner.stats().accepted_iterations, 0);
+}
+
+#[test]
+fn run_targeted_debug_output_reports_missing_feedback() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            Ok(())
+        })
+        .expect_err("missing feedback must fail");
+    let debug = format!("{err:?}");
+    assert!(debug.contains("missing_feedback: true"), "{debug}");
+    assert!(debug.contains("run_targeted"), "{debug}");
+}
+
+#[test]
+fn run_targeted_missing_feedback_reports_progress() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            Ok(())
+        })
+        .expect_err("missing feedback must fail");
+    let stats = err.stats();
+    assert_eq!(stats.accepted_iterations, 0);
+    assert_eq!(stats.rejected_iterations, 0);
+    assert_eq!(
+        stats.total_samples, 1,
+        "one sample before the missing report"
+    );
+    assert_eq!(err.case_index(), stats.accepted_iterations);
+    assert!(
+        !err.generated().is_empty(),
+        "the failing case's generated trace must be recorded"
+    );
+}
+
+#[test]
+fn run_targeted_zero_iterations_does_not_invoke_closure() {
+    use std::cell::Cell;
+    let invoked = Cell::new(0usize);
+    noprop::Runner::new(1, 0)
+        .run_targeted(|ctx| {
+            invoked.set(invoked.get() + 1);
+            ctx.maximize(1.0);
+            Ok(())
+        })
+        .expect("zero iterations must succeed");
+    assert_eq!(invoked.get(), 0, "the closure must not be invoked");
+}
+
+#[test]
+fn run_targeted_reproduce_hint_reproduces_the_same_failure() {
+    let seed = 0x5EED_1EAD_BEEF_C0DEu64;
+    let run = || {
+        noprop::Runner::new(seed, 128).run_targeted(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..1000);
+            ctx.maximize(x as f64 / 1000.0);
+            if x >= 900 {
+                panic!("boom at x = {x}");
+            }
+            Ok(())
+        })
+    };
+
+    let err = run().expect_err("a large x must fail the run");
+    let display = format!("{err}");
+    let hint = format!(
+        "reproduce with: noprop::Runner::new({:#018x}, 128).run_targeted(|ctx| ...)",
+        err.seed(),
+    );
+    assert!(
+        display.contains(&hint),
+        "Display should contain the targeted reproduce hint {hint:?}, got:\n{display}"
+    );
+
+    // Using the hint's budget verbatim reproduces the same failure.
+    let replayed = run().expect_err("same seed and budget must reproduce the failure");
+    assert_eq!(replayed.seed(), err.seed());
+    assert_eq!(replayed.case_index(), err.case_index());
 }
