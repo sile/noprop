@@ -262,7 +262,10 @@ impl Error {
     /// is a placeholder: the caller substitutes the original property
     /// closure.
     fn reproduce_command(&self) -> String {
-        let base = format!("noprop::Runner::new({:#018x}, {})", self.seed, self.iterations);
+        let base = format!(
+            "noprop::Runner::new({:#018x}, {})",
+            self.seed, self.iterations
+        );
         match self.policy {
             SearchPolicy::Uniform => base,
             SearchPolicy::Targeted => format!("{base}.run_targeted(|ctx| ...)"),

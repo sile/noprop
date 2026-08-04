@@ -1999,6 +1999,151 @@ mod targeted_tests {
         assert!(matches!(ctx.feedback, FeedbackState::Disabled));
     }
 
+    // === semantic features (corpus-guided mode) ===
+
+    #[test]
+    fn semantic_methods_are_noop_when_disabled() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.event("e");
+        ctx.bucket("b", 7);
+        ctx.transition("t", 0, 1);
+        ctx.maximize(1.0);
+        assert!(matches!(ctx.take_feedback(), FeedbackState::Disabled));
+    }
+
+    #[test]
+    fn corpus_guided_collects_event_bucket_and_transition() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.event("snapshot-install");
+        ctx.bucket("queue-length", 3);
+        ctx.transition("raft-role", 0, 1);
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                let reprs: Vec<String> = cov.features().iter().map(|f| f.display_repr()).collect();
+                assert_eq!(
+                    reprs,
+                    [
+                        "event(\"snapshot-install\")",
+                        "bucket(\"queue-length\", 3)",
+                        "transition(\"raft-role\", 0, 1)",
+                    ]
+                );
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_saturates_into_hit_count_buckets() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.event("visit");
+        ctx.event("visit");
+        ctx.event("visit");
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                let reprs: Vec<String> = cov.features().iter().map(|f| f.display_repr()).collect();
+                // 3 occurrences saturate into the 2-3 bucket; the
+                // earlier 1-occurrence feature is replaced, not kept.
+                assert_eq!(reprs, ["event(\"visit\")"]);
+                assert!(matches!(
+                    cov.features()[0].kind,
+                    FeatureKind::Event(EventBucket::TwoThree)
+                ));
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_bucket_boundaries() {
+        assert_eq!(event_bucket(1), EventBucket::One);
+        assert_eq!(event_bucket(2), EventBucket::TwoThree);
+        assert_eq!(event_bucket(3), EventBucket::TwoThree);
+        assert_eq!(event_bucket(4), EventBucket::FourSeven);
+        assert_eq!(event_bucket(7), EventBucket::FourSeven);
+        assert_eq!(event_bucket(8), EventBucket::EightPlus);
+        assert_eq!(event_bucket(100), EventBucket::EightPlus);
+    }
+
+    #[test]
+    fn duplicate_bucket_and_transition_features_deduplicate() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.bucket("q", 3);
+        ctx.bucket("q", 3);
+        ctx.transition("r", 0, 1);
+        ctx.transition("r", 0, 1);
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.features().len(), 2);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn per_case_feature_cap_discards_excess() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        for i in 0..(MAX_FEATURES_PER_CASE + 10) {
+            ctx.bucket("b", i as u64);
+        }
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.features().len(), MAX_FEATURES_PER_CASE);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corpus_guided_priority_keeps_maximum_within_case() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.maximize(1.0);
+        ctx.maximize(3.0);
+        ctx.maximize(2.0);
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.priority(), Some(3.0));
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corpus_guided_priority_tolerates_missing_and_invalid() {
+        let mut missing = TestCaseContext::new(1);
+        missing.enable_corpus_guided();
+        match missing.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.priority(), None);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+
+        let mut invalid = TestCaseContext::new(1);
+        invalid.enable_corpus_guided();
+        invalid.maximize(f64::NAN);
+        match invalid.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.priority(), None);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn take_feedback_resets_corpus_guided_to_disabled() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.event("e");
+        let _ = ctx.take_feedback();
+        assert!(matches!(ctx.feedback, FeedbackState::Disabled));
+    }
+
     // === choice metadata recording ===
 
     #[test]

@@ -1145,3 +1145,206 @@ fn run_targeted_steers_candidates_by_score() {
          rewarding high reached {high_max}, rewarding low reached {low_max}"
     );
 }
+
+// === Corpus-guided PBT (Runner::run_corpus_guided / event / bucket / transition) ===
+
+#[test]
+fn run_corpus_guided_succeeds_with_features() {
+    let mut runner = noprop::Runner::new(42, 64);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            if x % 4 == 0 {
+                ctx.event("multiple-of-four");
+            }
+            Ok(())
+        })
+        .expect("corpus-guided run with semantic feedback must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+}
+
+#[test]
+fn run_corpus_guided_without_features_succeeds() {
+    // Corpus-guided mode does not require feedback: a property that
+    // never reports a feature just yields no interesting cases.
+    noprop::Runner::new(1, 8)
+        .run_corpus_guided(|_ctx| Ok(()))
+        .expect("a property without semantic feedback must not fail");
+}
+
+#[test]
+fn run_corpus_guided_without_priority_succeeds() {
+    // maximize is optional in corpus-guided mode; missing feedback is
+    // not an error (unlike targeted mode).
+    noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            ctx.event("e");
+            Ok(())
+        })
+        .expect("a case without maximize must not fail corpus-guided mode");
+}
+
+#[test]
+fn run_corpus_guided_invalid_priority_is_tolerated() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        noprop::Runner::new(1, 8)
+            .run_corpus_guided(|ctx| {
+                ctx.maximize(bad);
+                Ok(())
+            })
+            .expect("NaN / infinity priority must not fail corpus-guided mode");
+    }
+}
+
+#[test]
+fn semantic_methods_are_noop_under_plain_run() {
+    noprop::Runner::new(1, 8)
+        .run(|ctx| {
+            ctx.event("e");
+            ctx.bucket("b", 1);
+            ctx.transition("t", 0, 1);
+            ctx.maximize(1.0);
+            Ok(())
+        })
+        .expect("semantic methods must be ignored by the plain runner");
+}
+
+#[test]
+fn run_corpus_guided_reports_property_failure() {
+    let err = noprop::Runner::new(1, 32)
+        .run_corpus_guided(|ctx| {
+            ctx.event("before-failure");
+            panic!("deterministic failure");
+        })
+        .expect_err("panicking closure must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("deterministic failure"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(display.contains("Semantic features:"), "{display}");
+    assert!(display.contains("event(\"before-failure\")"), "{display}");
+    assert_eq!(err.case_index(), 0);
+}
+
+#[test]
+fn run_corpus_guided_counts_rejections() {
+    let mut runner = noprop::Runner::new(3, 16);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            if x % 2 == 0 {
+                ctx.reject_case();
+            }
+            ctx.event("accepted");
+            Ok(())
+        })
+        .expect("rejections must be retried like the plain runner");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 16);
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
+fn run_corpus_guided_stops_after_too_many_rejections() {
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting property must hit the rejection cap");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
+}
+
+#[test]
+fn run_corpus_guided_is_reproducible_from_seed() {
+    let seed = 0xABCD_EF01_2345_6789;
+
+    fn run(seed: u64) -> Vec<u32> {
+        let observed = std::cell::Cell::new(Vec::new());
+        noprop::Runner::new(seed, 64)
+            .run_corpus_guided(|ctx| {
+                let x = noprop::sample_u32(ctx);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                if x % 2 == 0 {
+                    ctx.event("even");
+                }
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    assert_eq!(run(seed), run(seed));
+}
+
+#[test]
+fn run_corpus_guided_steers_candidates_by_novel_features() {
+    // The search must reproduce the interesting input region: a
+    // property that reports a feature only when x is large keeps
+    // exploring inputs that reach that feature, so the best observed
+    // candidate in the second half of the run is high.
+    use std::cell::Cell;
+
+    let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+    noprop::Runner::new(7, 256)
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..1000);
+            let mut v = observed.take();
+            v.push(x);
+            observed.set(v);
+            if x > 900 {
+                ctx.event("high");
+            }
+            Ok(())
+        })
+        .expect("corpus-guided run must succeed");
+    let xs = observed.into_inner();
+    let second_half_max = xs[128..].iter().max().copied().unwrap_or(0);
+    assert!(
+        second_half_max > 900,
+        "the corpus must steer the search toward the feature region: \
+         second-half max reached {second_half_max}"
+    );
+}
+
+#[test]
+fn run_corpus_guided_steers_candidates_by_priority() {
+    // With scalar priority enabled, a case that reports no novel
+    // feature can still be admitted by outscoring its feature group, so
+    // rewarding large x must keep the search in the high end just like
+    // targeted mode.
+    use std::cell::Cell;
+
+    fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 256)
+            .run_corpus_guided(|ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.event("covered");
+                ctx.maximize(score_of(x));
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
+
+    let reward_high = observe(6, |x| x as f64 / 1000.0);
+    let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
+
+    let high_max = second_half_max(&reward_high);
+    let low_max = second_half_max(&reward_low);
+    assert!(
+        high_max > low_max,
+        "the priority must steer the search toward the rewarded end: \
+         rewarding high reached {high_max}, rewarding low reached {low_max}"
+    );
+}

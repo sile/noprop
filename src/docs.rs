@@ -8,3 +8,8 @@
 /// replay, corpus, and mutation.
 #[doc = include_str!("../docs/targeted-search.md")]
 pub mod targeted_search {}
+
+/// Design of the corpus-guided search policy: semantic features, the
+/// feature registry, corpus admission and eviction, and scheduling.
+#[doc = include_str!("../docs/corpus-guided-search.md")]
+pub mod corpus_guided_search {}

@@ -285,6 +285,7 @@ impl Runner {
                         rejected,
                         total_samples,
                         state.location,
+                        SearchPolicy::Targeted,
                     ));
                 }
                 continue;
@@ -355,6 +356,7 @@ impl Runner {
                                 rejected,
                                 total_samples,
                                 std::panic::Location::caller(),
+                                SearchPolicy::Targeted,
                             ));
                         }
                         continue;
@@ -468,6 +470,7 @@ impl Runner {
                         rejected,
                         total_samples,
                         state.location,
+                        SearchPolicy::CorpusGuided,
                     ));
                 }
                 continue;
@@ -508,6 +511,7 @@ impl Runner {
                                 rejected,
                                 total_samples,
                                 std::panic::Location::caller(),
+                                SearchPolicy::CorpusGuided,
                             ));
                         }
                         continue;
@@ -689,8 +693,7 @@ fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_sam
     };
 }
 
-/// Record run stats and build the targeted too-many-rejections exit
-/// error.
+/// Record run stats and build the too-many-rejections exit error.
 fn too_many_rejections(
     runner: &mut Runner,
     ctx: &mut TestCaseContext,
@@ -698,6 +701,7 @@ fn too_many_rejections(
     rejected: usize,
     total_samples: usize,
     location: &'static std::panic::Location<'static>,
+    policy: SearchPolicy,
 ) -> Error {
     record_stats(runner, accepted, rejected, total_samples);
     let generated = ctx.take_generated();
@@ -709,7 +713,7 @@ fn too_many_rejections(
         location,
         generated,
         runner.stats,
-        SearchPolicy::Targeted,
+        policy,
     )
 }
 
@@ -836,7 +840,8 @@ impl TargetedSearch {
 }
 
 /// One candidate in the semantic corpus: the recorded choice sequence
-/// of an interesting case and the features it newly registered.
+/// of an interesting case, the features it newly registered, and the
+/// feature group it belongs to.
 ///
 /// The sequence carries whatever the accepted case recorded: recorded
 /// cases keep their attempt spans, exploratory cases have none
@@ -846,8 +851,14 @@ struct SemanticEntry {
     sequence: ChoiceSequence,
     /// The features this case newly registered in the global
     /// observation set. Empty when the case was admitted by
-    /// scalar-priority replacement rather than by novelty.
-    features: Vec<Feature>,
+    /// scalar-priority replacement rather than by novelty. The count
+    /// is the eviction criterion (fewest novel features evicted
+    /// first).
+    novel: Vec<Feature>,
+    /// The features the case reported, including already-observed
+    /// ones. Kept so a priority-replaced entry stays a member of its
+    /// feature group and can be outscored again.
+    group: Vec<Feature>,
     /// Optional scalar priority of the case (`None` when `maximize`
     /// was never called or reported an invalid value).
     score: Option<f64>,
@@ -932,7 +943,8 @@ impl SemanticCorpus {
         if !registered.is_empty() {
             self.accepted.push(SemanticEntry {
                 sequence,
-                features: registered,
+                novel: registered,
+                group: case_features,
                 score,
             });
             self.evict_if_over_capacity();
@@ -940,18 +952,18 @@ impl SemanticCorpus {
         }
         // No novel feature: admit by scalar-priority replacement within
         // an overlapping feature group, if the score beats the group's
-        // lowest-scored entry.
-        if let Some(score) = score {
-            if let Some(victim) = self.group_lowest(&case_features) {
-                let incumbent = self.accepted[victim].score;
-                if Self::score_beats(Some(score), incumbent) {
-                    self.accepted[victim] = SemanticEntry {
-                        sequence,
-                        features: Vec::new(),
-                        score: Some(score),
-                    };
-                    return true;
-                }
+        // lowest-scored entry. The replacement keeps the case's group
+        // membership so it can be outscored again.
+        if let (Some(score), Some(victim)) = (score, self.group_lowest(&case_features)) {
+            let incumbent = self.accepted[victim].score;
+            if Self::score_beats(Some(score), incumbent) {
+                self.accepted[victim] = SemanticEntry {
+                    sequence,
+                    novel: Vec::new(),
+                    group: case_features,
+                    score: Some(score),
+                };
+                return true;
             }
         }
         false
@@ -967,7 +979,8 @@ impl SemanticCorpus {
         }
         self.rejected.push(SemanticEntry {
             sequence,
-            features: registered,
+            novel: registered,
+            group: case_features,
             score: None,
         });
         self.evict_if_over_capacity();
@@ -980,7 +993,7 @@ impl SemanticCorpus {
     fn group_lowest(&self, case_features: &[Feature]) -> Option<usize> {
         let mut best: Option<usize> = None;
         for (i, entry) in self.accepted.iter().enumerate() {
-            if !entry.features.iter().any(|f| case_features.contains(f)) {
+            if !entry.group.iter().any(|f| case_features.contains(f)) {
                 continue;
             }
             match best {
@@ -1023,30 +1036,22 @@ impl SemanticCorpus {
     /// (missing counts as lowest); remaining ties keep the earlier
     /// arrival.
     fn weakest_overall(&self) -> usize {
-        let mut min = 0;
         let mut weakest: Option<(&SemanticEntry, usize)> = None;
-        for (i, entry) in self
-            .accepted
-            .iter()
-            .chain(self.rejected.iter())
-            .enumerate()
-        {
+        for (i, entry) in self.accepted.iter().chain(self.rejected.iter()).enumerate() {
             match weakest {
                 None => weakest = Some((entry, i)),
                 Some((incumbent, _)) => {
-                    let weaker = if entry.features.len() != incumbent.features.len() {
-                        entry.features.len() < incumbent.features.len()
+                    let weaker = if entry.novel.len() != incumbent.novel.len() {
+                        entry.novel.len() < incumbent.novel.len()
                     } else {
                         Self::score_beats(incumbent.score, entry.score)
                     };
                     if weaker {
                         weakest = Some((entry, i));
-                        min = i;
                     }
                 }
             }
         }
-        let _ = min;
         weakest.expect("corpus is non-empty while evicting").1
     }
 
@@ -1265,6 +1270,135 @@ mod tests {
             "a score below the lowest must be rejected"
         );
         assert_eq!(corpus.entries.len(), CORPUS_SIZE);
+    }
+
+    // === SemanticCorpus admission / eviction ===
+
+    fn event_feature(label: &'static str) -> Feature {
+        Feature {
+            label,
+            kind: crate::rng::FeatureKind::Event(crate::rng::EventBucket::One),
+        }
+    }
+
+    fn bucket_feature(label: &'static str, value: u64) -> Feature {
+        Feature {
+            label,
+            kind: crate::rng::FeatureKind::Bucket { value },
+        }
+    }
+
+    #[test]
+    fn semantic_corpus_admits_novel_features() {
+        let mut corpus = SemanticCorpus::new();
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("a")], None),
+            "a case with a novel feature must be admitted"
+        );
+        assert!(
+            !corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("a")], None),
+            "a case with only known features must not be admitted without priority"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+    }
+
+    #[test]
+    fn semantic_corpus_admits_by_priority_within_group() {
+        let mut corpus = SemanticCorpus::new();
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("a")],
+            Some(1.0),
+        );
+        assert!(
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(2.0)
+            ),
+            "a higher score in the same group must replace the group's lowest"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+        assert_eq!(corpus.accepted[0].score, Some(2.0));
+
+        assert!(
+            !corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(1.5)
+            ),
+            "a score below the group's best must not be admitted"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+    }
+
+    #[test]
+    fn semantic_corpus_rejected_queue_holds_novel_cases() {
+        let mut corpus = SemanticCorpus::new();
+        assert!(
+            corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("r")]),
+            "a rejected case with a novel feature must enter the rejected queue"
+        );
+        assert!(
+            !corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("r")]),
+            "a rejected case with only known features must not be kept"
+        );
+        assert_eq!(corpus.rejected.len(), 1);
+        assert_eq!(corpus.observed.len(), 1);
+    }
+
+    #[test]
+    fn semantic_corpus_evicts_fewest_features_first() {
+        let mut corpus = SemanticCorpus::new();
+        // Fill the corpus with distinct single-feature entries, then a
+        // two-feature entry on top.
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("single", i as u64)],
+                Some(i as f64),
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("two-a"), event_feature("two-b")],
+            Some(1000.0),
+        );
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        // The two-feature entry survives; a single-feature entry was
+        // evicted. The evicted one is the lowest-scored single-feature
+        // entry (score 0.0).
+        assert!(
+            corpus.accepted.iter().any(|e| e.score == Some(1000.0)),
+            "the feature-richest entry must survive eviction"
+        );
+        assert!(
+            !corpus.accepted.iter().any(|e| e.score == Some(0.0)),
+            "the weakest single-feature entry must be evicted"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_evicts_across_both_queues() {
+        let mut corpus = SemanticCorpus::new();
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("accepted", i as u64)],
+                Some(i as f64),
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("rejected")]);
+        // The combined size is capped: the rejected entry (fewest
+        // novel features, tied with the accepted single-feature
+        // entries, then lowest score) was evicted.
+        assert_eq!(corpus.accepted.len() + corpus.rejected.len(), CORPUS_SIZE);
+        assert!(
+            corpus.rejected.is_empty(),
+            "the rejected entry must be the weakest across both queues"
+        );
     }
 
     // === mutate_sequence ===
