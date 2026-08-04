@@ -67,11 +67,21 @@ pub struct Error {
     /// The runner entry point that produced this failure. Switches the
     /// reproduce hint.
     policy: SearchPolicy,
-    /// Semantic features the failing case reported (corpus-guided runs
-    /// only; empty otherwise).
-    semantic_features: Vec<Feature>,
-    /// The zero-based index of the failing candidate across accepted
-    /// and rejected cases (corpus-guided runs only).
+    /// Semantic details of the failing case (corpus-guided runs only;
+    /// `None` otherwise).
+    semantic: Option<Box<SemanticFailureReport>>,
+}
+
+/// Semantic details carried by a corpus-guided failure report.
+///
+/// Boxed so `Error` stays small: the fields are only populated on the
+/// corpus-guided failure path, and the uniform / targeted entry points
+/// never touch them.
+struct SemanticFailureReport {
+    /// Semantic features the failing case reported.
+    features: Vec<Feature>,
+    /// The one-based index of the failing candidate across accepted
+    /// and rejected cases (the failing case itself included).
     candidate_index: usize,
 }
 
@@ -133,8 +143,10 @@ impl Error {
     /// corpus-guided case. Used only by
     /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
     pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
-        self.semantic_features = features;
-        self.candidate_index = candidate_index;
+        self.semantic = Some(Box::new(SemanticFailureReport {
+            features,
+            candidate_index,
+        }));
         self
     }
 
@@ -216,8 +228,7 @@ impl Error {
             generated,
             stats,
             policy,
-            semantic_features: Vec::new(),
-            candidate_index: 0,
+            semantic: None,
         }
     }
 
@@ -279,8 +290,8 @@ impl std::fmt::Debug for Error {
         writeln!(f, "Error {{")?;
         writeln!(f, "    seed: {:#018x},", self.seed)?;
         writeln!(f, "    case_index: {},", self.case_index)?;
-        if self.policy == SearchPolicy::CorpusGuided {
-            writeln!(f, "    candidate_index: {},", self.candidate_index)?;
+        if let Some(report) = &self.semantic {
+            writeln!(f, "    candidate_index: {},", report.candidate_index)?;
         }
         writeln!(f, "    policy: {:?},", self.policy)?;
         match &self.kind {
@@ -322,9 +333,11 @@ impl std::fmt::Debug for Error {
             }
             writeln!(f, "    ],")?;
         }
-        if !self.semantic_features.is_empty() {
+        if let Some(report) = &self.semantic
+            && !report.features.is_empty()
+        {
             writeln!(f, "    semantic_features: [")?;
-            for feature in &self.semantic_features {
+            for feature in &report.features {
                 writeln!(f, "        {},", feature.display_repr())?;
             }
             writeln!(f, "    ],")?;
@@ -388,9 +401,11 @@ impl std::fmt::Display for Error {
                 writeln!(f, "  {entry:?}")?;
             }
         }
-        if !self.semantic_features.is_empty() {
+        if let Some(report) = &self.semantic
+            && !report.features.is_empty()
+        {
             writeln!(f, "Semantic features:")?;
-            for feature in &self.semantic_features {
+            for feature in &report.features {
                 writeln!(f, "  {}", feature.display_repr())?;
             }
         }

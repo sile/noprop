@@ -1012,7 +1012,8 @@ impl SemanticCorpus {
 
     /// Index of the lowest-scored accepted entry that shares at least
     /// one feature with `case_features`, or `None` when no group member
-    /// exists. Missing scores count as the lowest.
+    /// exists. Missing scores count as the lowest; ties keep the
+    /// earlier arrival.
     fn group_lowest(&self, case_features: &[Feature]) -> Option<usize> {
         let mut best: Option<usize> = None;
         for (i, entry) in self.accepted.iter().enumerate() {
@@ -1022,7 +1023,7 @@ impl SemanticCorpus {
             match best {
                 None => best = Some(i),
                 Some(b) => {
-                    if Self::score_beats(entry.score, self.accepted[b].score) {
+                    if Self::score_beats(self.accepted[b].score, entry.score) {
                         best = Some(i);
                     }
                 }
@@ -1383,9 +1384,72 @@ mod tests {
                 vec![event_feature("a")],
                 Some(1.5)
             ),
-            "a score below the group's best must not be admitted"
+            "a score below the group's current entry must not be admitted"
         );
         assert_eq!(corpus.accepted.len(), 1);
+    }
+
+    #[test]
+    fn semantic_corpus_group_lowest_replaces_lowest_not_highest() {
+        // Regression guard for the priority-replacement victim
+        // selection: the victim must be the group's lowest-scored
+        // member, not its highest. With members {1.0, 3.0}, a new
+        // score of 2.0 must replace the 1.0 member; the argmax bug
+        // would reject it (2.0 does not beat 3.0).
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        let a = event_feature("a");
+        let b = event_feature("b");
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], Some(1.0)));
+        // "a"+"b" reports novel "b", so it is pushed (not a
+        // replacement) and its group is the full case feature set.
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone(), b], Some(3.0)));
+        assert_eq!(corpus.accepted.len(), 2);
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], Some(2.0)),
+            "a mid-score case must replace the group's lowest-scored member"
+        );
+        assert_eq!(corpus.accepted.len(), 2);
+        assert_eq!(
+            corpus.accepted[0].score,
+            Some(2.0),
+            "the lowest-scored member (1.0) must have been replaced: {:?}",
+            corpus.accepted.iter().map(|e| e.score).collect::<Vec<_>>()
+        );
+        assert_eq!(corpus.accepted[1].score, Some(3.0));
+        assert_eq!(corpus.accepted[0].group, vec![a]);
+    }
+
+    #[test]
+    fn semantic_corpus_missing_score_is_group_lowest() {
+        // "Missing scores count as the lowest" must hold for the
+        // replacement victim too: a finite score replaces a missing
+        // member even when a higher-scored member shares the group.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        let a = event_feature("a");
+        let b = event_feature("b");
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], None));
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone(), b], Some(3.0)));
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], Some(1.0)),
+            "a finite score must replace the missing-scored group member"
+        );
+        assert_eq!(corpus.accepted.len(), 2);
+        assert_eq!(corpus.accepted[0].score, Some(1.0));
+        assert_eq!(corpus.accepted[1].score, Some(3.0));
+        assert!(corpus.accepted.iter().all(|e| e.score.is_some()));
+    }
+
+    #[test]
+    fn score_beats_missing_counts_as_lowest() {
+        assert!(SemanticCorpus::score_beats(Some(1.0), None));
+        assert!(!SemanticCorpus::score_beats(None, Some(1.0)));
+        assert!(!SemanticCorpus::score_beats(None, None));
+        assert!(SemanticCorpus::score_beats(Some(2.0), Some(1.0)));
+        assert!(!SemanticCorpus::score_beats(Some(1.0), Some(2.0)));
+        assert!(
+            !SemanticCorpus::score_beats(Some(1.0), Some(1.0)),
+            "a tie must not beat the incumbent"
+        );
     }
 
     #[test]
