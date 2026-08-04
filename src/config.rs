@@ -24,12 +24,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     /// The variable was set but its contents were not valid UTF-8.
-    InvalidUnicode { var: String },
+    InvalidUnicode {
+        /// Name of the environment variable that was set.
+        var: String,
+    },
     /// The variable was set to a value that could not be parsed as the
     /// expected numeric type.
     InvalidValue {
+        /// Name of the environment variable that was set.
         var: String,
+        /// The raw contents of the variable.
         raw: String,
+        /// The standard-library parse error message.
         message: String,
     },
 }

@@ -1,5 +1,6 @@
 //! Imperative property-based testing library with no dependencies, no macros, no unsafe, and no implicit I/O.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod config;
 mod error;
