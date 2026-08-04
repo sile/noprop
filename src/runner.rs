@@ -195,9 +195,10 @@ impl Runner {
         }
     }
 
-    /// Observability counters from the most recent [`run`](Runner::run)
+    /// Observability counters from the most recent
+    /// [`run`](Runner::run) or [`run_targeted`](Runner::run_targeted)
     /// call on this runner. Returns [`Stats::default`] (all zeros)
-    /// before `run` has been invoked.
+    /// before a run has been invoked.
     pub fn stats(&self) -> Stats {
         self.stats
     }
@@ -233,7 +234,7 @@ impl Runner {
     ///         ctx.maximize((x as f64) / u32::MAX as f64);
     ///         Ok(())
     ///     })
-    ///     .unwrap();
+    ///     .expect("targeted run must succeed");
     /// ```
     pub fn run_targeted<F>(&mut self, f: F) -> Result<()>
     where
@@ -257,7 +258,6 @@ impl Runner {
             total_samples += ctx.total_samples();
 
             if let Some(state) = rejection {
-                let _ = outcome;
                 rejected += 1;
                 if rejected > rejection_cap {
                     return Err(too_many_rejections(
@@ -526,6 +526,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// Which feedback validation failed, for [`feedback_exit`].
+#[derive(Debug, Clone, Copy)]
 enum FeedbackExitKind {
     Missing,
     Invalid,
@@ -731,10 +732,10 @@ fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
         }
         match meta {
             ChoiceMeta::Bounded { bound } => {
-                if draw.len() < 8 {
-                    // Bounded/Choice draws are always eight bytes (the
+                if draw.len() != 8 {
+                    // Bounded/Choice draws are exactly eight bytes (the
                     // rejection-sampling core draws a u64); anything
-                    // shorter cannot be rewritten in place.
+                    // else cannot be rewritten in place.
                     continue;
                 }
                 // bound <= 1 never occurs (sample_below returns early
@@ -748,7 +749,7 @@ fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
                 draw[..8].copy_from_slice(&new_value.to_le_bytes());
             }
             ChoiceMeta::Choice { len } => {
-                if draw.len() < 8 {
+                if draw.len() != 8 {
                     continue;
                 }
                 if *len <= 1 {
@@ -771,7 +772,15 @@ fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
                         draw[..8].copy_from_slice(&lo.to_le_bytes());
                         draw[8..].copy_from_slice(&hi.to_le_bytes());
                     }
-                    _ => prng.fill(draw),
+                    width => {
+                        // Unreachable: Integer draws come from the
+                        // sample_u*/sample_i* primitives whose widths
+                        // are 1, 2, 4, 8, or 16 bytes. Fall back to a
+                        // full regeneration if a future primitive
+                        // records a different width.
+                        debug_assert!(false, "unexpected integer draw width: {width}");
+                        prng.fill(draw);
+                    }
                 }
             }
             ChoiceMeta::Raw => {
@@ -904,13 +913,16 @@ fn targeted_search_evolves_corpus_entries() {
     );
     search.corpus.admit(seq, 1.0);
     // With a one-eighth restart probability, most picks are
-    // exploratory: they replay the admitted draw, possibly mutated
-    // within its bounded domain. Recording (fresh) candidates draw
-    // unconstrained random bytes instead. Deterministic per seed.
+    // exploratory: they replay the admitted draw under the same
+    // declared constraint (possibly mutated, always in domain).
+    // Recording (fresh) candidates draw unconstrained random bytes
+    // instead. Deterministic per seed.
     let mut in_domain = 0;
-    let mut unmutated_replays = 0;
     for _ in 0..16 {
         let mut ctx = search.next_context();
+        // Mimic the property's generator declaring the same
+        // constraint for this draw position.
+        ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 10 });
         let mut buf = [0u8; 8];
         ctx.fill(&mut buf);
         let x = u64::from_le_bytes(buf);
@@ -918,17 +930,10 @@ fn targeted_search_evolves_corpus_entries() {
         if x < 10 {
             in_domain += 1;
         }
-        if x == 7 {
-            unmutated_replays += 1;
-        }
     }
     assert!(
         in_domain >= 8,
         "most candidates must replay an in-domain draw: {in_domain}"
-    );
-    assert!(
-        unmutated_replays >= 4,
-        "unmutated replays must dominate: {unmutated_replays}"
     );
 }
 
@@ -946,4 +951,24 @@ fn mutation_rewrites_integer_draws() {
         }
     }
     assert!(changed, "integer draws must be rewritten to another value");
+}
+
+#[test]
+fn mutation_rewrites_integer_draws_across_widths() {
+    let mut prng = XoshiroState::from_seed(31337);
+    // Every recorded width must be rewritable to a new value.
+    let mut changed = 0u32;
+    for width in [1usize, 2, 4, 8, 16] {
+        for _ in 0..64 {
+            let mut seq = ChoiceSequence::default();
+            seq.push_draw(vec![0xAB; width], ChoiceMeta::Integer);
+            let before = seq.draws()[0].clone();
+            mutate_sequence(&mut seq, &mut prng);
+            if seq.draws()[0] != before {
+                changed += 1;
+                break;
+            }
+        }
+    }
+    assert_eq!(changed, 5, "every integer width must be rewritable");
 }

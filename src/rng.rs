@@ -279,7 +279,7 @@ impl ChoiceSequence {
 /// `Integer` draw (plain `sample_u*` / `sample_i*`) to any value of its
 /// width. `Raw` marks a draw with no mutation constraint (raw bytes,
 /// string payload, floats, …), which is regenerated as a whole.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChoiceMeta {
     /// Drawn uniformly from `[0, bound)` via the rejection-sampling
     /// core (`sample_below`).
@@ -571,7 +571,8 @@ impl TestCaseContext {
     }
 
     /// Reject the current iteration and unwind out of the property
-    /// closure. Only valid inside [`Runner::run`](crate::Runner::run);
+    /// closure. Only valid inside [`Runner::run`](crate::Runner::run) or
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted);
     /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
@@ -592,8 +593,8 @@ impl TestCaseContext {
     pub fn reject_case(&mut self) -> ! {
         if !self.inside_runner {
             panic!(
-                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run \
-                 property closure. Constructing a TestCaseContext directly via TestCaseContext::new does not \
+                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run or \
+                 Runner::run_targeted property closure. Constructing a TestCaseContext directly via TestCaseContext::new does not \
                  create a Runner boundary."
             );
         }
@@ -639,28 +640,35 @@ impl TestCaseContext {
             } => {
                 if error.is_none() {
                     if *next_draw < sequence.draws.len() {
-                        let draw = &sequence.draws[*next_draw];
-                        if draw.len() == dst.len() {
-                            // Replay a recorded (possibly mutated) draw.
-                            dst.copy_from_slice(draw);
-                            *next_draw += 1;
+                        let draw_len = sequence.draws[*next_draw].len();
+                        if draw_len == dst.len() {
                             if explore.is_some() {
-                                // The primitive may declare a new
-                                // bounded domain for this draw (the
-                                // mutated control flow can call a
-                                // different primitive at the same
-                                // width); adopt it so mutation keeps
-                                // the right constraint. Otherwise keep
-                                // the recorded metadata.
-                                if let Some(meta) = pending_choice.take() {
-                                    sequence.metas[*next_draw - 1] = meta;
+                                // The mutated control flow may read
+                                // this draw position under a different
+                                // constraint (a different primitive or
+                                // bound at the same width), or drop the
+                                // constraint entirely (a metadata-free
+                                // primitive). Per the exploratory
+                                // replay rule, regenerate the value at
+                                // a changed constraint before replaying
+                                // it, so the executed value always
+                                // matches the stored value.
+                                let meta = pending_choice.take().unwrap_or(ChoiceMeta::Raw);
+                                let idx = *next_draw;
+                                if sequence.metas[idx] != meta {
+                                    if let Some(prng) = explore {
+                                        prng.fill(&mut sequence.draws[idx]);
+                                    }
+                                    sequence.metas[idx] = meta;
                                 }
                             }
+                            dst.copy_from_slice(&sequence.draws[*next_draw]);
+                            *next_draw += 1;
                             return;
                         }
                         if explore.is_none() {
                             *error = Some(ReplayError::DrawLengthMismatch {
-                                expected: draw.len(),
+                                expected: draw_len,
                                 actual: dst.len(),
                             });
                             std::panic::resume_unwind(Box::new(ReplayAbort));
@@ -828,7 +836,6 @@ impl TestCaseContext {
                 if explore.is_some() {
                     // Exploratory mode: `begin_attempt` returned
                     // `None`, so there is nothing to close.
-                    let _ = (next_draw, current_parent, id, verdict);
                     return;
                 }
                 if error.is_some() {
@@ -863,7 +870,8 @@ impl TestCaseContext {
 
     /// Consume and return any pending rejection state saved by
     /// [`TestCaseContext::reject_case`]. Called by
-    /// [`Runner::run`](crate::Runner::run) after each case boundary so
+    /// [`Runner::run`](crate::Runner::run) and
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted) after each case boundary so
     /// a set state wins over the closure's own `Ok` / `Err` / non-marker
     /// panic outcome.
     pub(crate) fn take_rejection(&mut self) -> Option<RejectionState> {
@@ -961,7 +969,8 @@ impl TestCaseContext {
 
     /// Enable the Runner-only guard on
     /// [`TestCaseContext::reject_case`]. Called by
-    /// [`Runner::run`](crate::Runner::run) immediately after
+    /// [`Runner::run`](crate::Runner::run) or
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted) immediately after
     /// constructing its `TestCaseContext`.
     pub(crate) fn set_inside_runner(&mut self) {
         self.inside_runner = true;
@@ -1027,7 +1036,8 @@ impl TestCaseContext {
 
     /// Total number of top-level `sample_*` invocations observed on this
     /// context across every case that has run so far. Consumed by
-    /// [`Runner::run`](crate::Runner::run) when it builds
+    /// [`Runner::run`](crate::Runner::run) and
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted) when they build
     /// [`Stats`](crate::Stats).
     pub(crate) fn total_samples(&self) -> usize {
         self.total_samples
@@ -1826,12 +1836,13 @@ mod regression_tests {
             let mut buf = [0u8; 8];
             ctx.fill(&mut buf);
         });
+        let recorded_value = seq.draws()[0].clone();
         let mut ctx = TestCaseContext::exploring(seq, 42);
         let mut buf = [0u8; 8];
         // Mimic a primitive whose constraint changed at the same draw
         // position (mutated control flow): declare the new domain, then
         // draw (replayed). The recorded metadata must be replaced by
-        // the new declaration...
+        // the new declaration and the value regenerated...
         ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 100 });
         ctx.fill(&mut buf);
         // ...and the declaration must not leak into the next generated
@@ -1842,6 +1853,11 @@ mod regression_tests {
             matches!(seq.metas()[0], ChoiceMeta::Bounded { bound: 100 }),
             "replayed draw must adopt the new declared domain: {:?}",
             seq.metas()[0]
+        );
+        assert_ne!(
+            seq.draws()[0],
+            recorded_value,
+            "the value at a changed constraint must be regenerated"
         );
         assert!(
             matches!(seq.metas()[1], ChoiceMeta::Raw),

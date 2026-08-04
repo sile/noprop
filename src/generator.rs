@@ -424,7 +424,8 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
     assert!(lo <= hi, "sample_usize_in: empty range");
     let v = if lo == 0 && hi == usize::MAX {
         // Full pointer-width range: a raw byte draw is already unbiased,
-        // and hi - lo + 1 would wrap.
+        // and hi - lo + 1 would wrap. This is a plain integer draw.
+        ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
         usize::from_le_bytes(raw_bytes(ctx))
     } else {
         // hi - lo cannot overflow because hi >= lo, and (hi - lo) + 1

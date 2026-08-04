@@ -199,7 +199,8 @@ impl Error {
     /// gave up (i.e. the index of the iteration that could not be
     /// accepted). For `MissingFeedback` / `InvalidFeedback`, this is
     /// the index of the accepted case whose feedback failed
-    /// validation.
+    /// validation. That case completed without rejection but is not
+    /// counted in `Stats::accepted_iterations`.
     pub fn case_index(&self) -> usize {
         self.case_index
     }

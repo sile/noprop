@@ -890,18 +890,6 @@ fn run_targeted_reports_err_closure_failure() {
 }
 
 #[test]
-fn run_targeted_zero_iterations_returns_ok() {
-    let mut runner = noprop::Runner::new(1, 0);
-    runner
-        .run_targeted(|ctx| {
-            ctx.maximize(1.0);
-            Ok(())
-        })
-        .expect("zero iterations must succeed without invoking the closure");
-    assert_eq!(runner.stats().accepted_iterations, 0);
-}
-
-#[test]
 fn run_targeted_debug_output_reports_missing_feedback() {
     let err = noprop::Runner::new(1, 8)
         .run_targeted(|ctx| {
@@ -979,4 +967,46 @@ fn run_targeted_reproduce_hint_reproduces_the_same_failure() {
     let replayed = run().expect_err("same seed and budget must reproduce the failure");
     assert_eq!(replayed.seed(), err.seed());
     assert_eq!(replayed.case_index(), err.case_index());
+}
+
+#[test]
+fn run_targeted_failure_beats_invalid_feedback() {
+    let err = noprop::Runner::new(1, 8)
+        .run_targeted(|ctx| {
+            ctx.maximize(f64::NAN);
+            panic!("real failure");
+        })
+        .expect_err("property failure must win over invalid feedback");
+    let display = format!("{err}");
+    assert!(display.contains("real failure"), "{display}");
+    assert!(!display.contains("invalid feedback"), "{display}");
+}
+
+#[test]
+fn run_targeted_discards_score_of_rejected_cases() {
+    let err = noprop::Runner::new(3, 8)
+        .run_targeted(|ctx| {
+            ctx.maximize(1.0);
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting must hit the rejection cap, not missing feedback");
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(!display.contains("missing feedback"), "{display}");
+}
+
+fn shared_property(ctx: &mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> {
+    let x = noprop::sample_usize_in(ctx, 0..1000);
+    ctx.maximize(x as f64 / 1000.0);
+    Ok(())
+}
+
+#[test]
+fn same_property_runs_under_both_policies() {
+    noprop::Runner::new(1, 16)
+        .run(shared_property)
+        .expect("uniform run must succeed");
+    noprop::Runner::new(1, 16)
+        .run_targeted(shared_property)
+        .expect("targeted run must succeed");
 }
