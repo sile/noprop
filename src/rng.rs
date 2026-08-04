@@ -202,8 +202,13 @@ impl XoshiroState {
     /// Uniform value in `[0, n)` using rejection sampling directly on
     /// the PRNG stream. Mirrors `sample_below` but operates on the
     /// carried state instead of a `TestCaseContext`.
+    ///
+    /// Unlike the generator-side sampler there is no attempt cap: the
+    /// loop is expected to terminate within two attempts on average
+    /// (the acceptance region covers at least half of the range), and
+    /// `n > 0` is guaranteed by callers.
     pub(crate) fn sample_below(&mut self, n: u64) -> u64 {
-        debug_assert!(n > 0, "sample_below: n must be non-zero");
+        assert!(n > 0, "sample_below: n must be non-zero");
         if n == 1 {
             return 0;
         }
@@ -478,6 +483,23 @@ struct DedupState {
     elided: usize,
 }
 
+/// Charge one generated draw against the per-case exploratory cap.
+///
+/// Both generation paths of [`TestCaseContext::fill`] (dead-draw
+/// replacement and append past the recording) share this accounting:
+/// returns `false` when the cap is exceeded, with the case marked as a
+/// rejection so the caller unwinds it.
+fn within_generated_draw_cap(consumed: &mut usize, rejection: &mut Option<RejectionState>) -> bool {
+    *consumed += 1;
+    if *consumed > MAX_CHOICES_PER_CASE {
+        *rejection = Some(RejectionState {
+            location: std::panic::Location::caller(),
+        });
+        return false;
+    }
+    true
+}
+
 impl TestCaseContext {
     /// Create a new [`TestCaseContext`] from a 64-bit seed.
     ///
@@ -688,11 +710,7 @@ impl TestCaseContext {
                         // is dead — replace it in place with a fresh
                         // generated draw so the sequence stays bounded.
                         if let Some(prng) = explore {
-                            *consumed += 1;
-                            if *consumed > MAX_CHOICES_PER_CASE {
-                                self.rejection = Some(RejectionState {
-                                    location: std::panic::Location::caller(),
-                                });
+                            if !within_generated_draw_cap(consumed, &mut self.rejection) {
                                 std::panic::resume_unwind(Box::new(IterationRejected));
                             }
                             prng.fill(dst);
@@ -710,14 +728,10 @@ impl TestCaseContext {
                     }
                     // Recorded draws exhausted: generate and append.
                     if let Some(prng) = explore {
-                        *consumed += 1;
-                        if *consumed > MAX_CHOICES_PER_CASE {
+                        if !within_generated_draw_cap(consumed, &mut self.rejection) {
                             // The mutated candidate keeps drawing past
                             // the cap: abort the case as a rejection so
                             // the run still terminates.
-                            self.rejection = Some(RejectionState {
-                                location: std::panic::Location::caller(),
-                            });
                             std::panic::resume_unwind(Box::new(IterationRejected));
                         }
                         prng.fill(dst);
@@ -1734,6 +1748,20 @@ mod targeted_tests {
     }
 
     #[test]
+    fn invalid_report_survives_later_valid_scores() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_targeted();
+        ctx.maximize(f64::NAN);
+        ctx.maximize(5.0);
+        match ctx.take_feedback() {
+            FeedbackState::Targeted { max_score } => {
+                assert_eq!(max_score, ScalarFeedback::Invalid);
+            }
+            other => panic!("expected targeted feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn maximize_is_noop_when_disabled() {
         let mut ctx = TestCaseContext::new(1);
         ctx.maximize(f64::NAN);
@@ -1822,6 +1850,31 @@ mod targeted_tests {
     fn exploring_aborts_at_choice_cap() {
         let mut ctx = TestCaseContext::exploring(ChoiceSequence::default(), 1);
         let mut buf = [0u8; 4];
+        for _ in 0..MAX_CHOICES_PER_CASE {
+            ctx.fill(&mut buf);
+        }
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            ctx.fill(&mut buf);
+        }));
+        assert!(outcome.is_err(), "drawing past the cap must unwind");
+        assert!(
+            ctx.take_rejection().is_some(),
+            "the cap abort must be recorded as a rejection"
+        );
+    }
+
+    #[test]
+    fn exploring_aborts_at_cap_when_replacing_dead_draws() {
+        // The width-mismatch replacement path shares the generated-
+        // draw cap with the append path: repeatedly drawing a
+        // different width than the recording must also reject at the
+        // cap.
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let mut buf = [0u8; 4];
+            ctx.fill(&mut buf);
+        });
+        let mut ctx = TestCaseContext::exploring(seq, 1);
+        let mut buf = [0u8; 8];
         for _ in 0..MAX_CHOICES_PER_CASE {
             ctx.fill(&mut buf);
         }
