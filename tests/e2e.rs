@@ -1168,9 +1168,28 @@ fn run_corpus_guided_succeeds_with_features() {
 fn run_corpus_guided_without_features_succeeds() {
     // Corpus-guided mode does not require feedback: a property that
     // never reports a feature just yields no interesting cases.
-    noprop::Runner::new(1, 8)
+    let mut runner = noprop::Runner::new(1, 8);
+    runner
         .run_corpus_guided(|_ctx| Ok(()))
         .expect("a property without semantic feedback must not fail");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 8);
+    assert_eq!(stats.rejected_iterations, 0);
+}
+
+#[test]
+fn run_corpus_guided_zero_iterations_does_not_invoke_closure() {
+    let invoked = std::cell::Cell::new(0usize);
+    let mut runner = noprop::Runner::new(1, 0);
+    runner
+        .run_corpus_guided(|ctx| {
+            invoked.set(invoked.get() + 1);
+            ctx.event("e");
+            Ok(())
+        })
+        .expect("zero iterations must succeed");
+    assert_eq!(invoked.get(), 0, "the closure must not be invoked");
+    assert_eq!(runner.stats(), noprop::Stats::default());
 }
 
 #[test]

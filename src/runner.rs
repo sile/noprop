@@ -1472,6 +1472,58 @@ mod tests {
     }
 
     #[test]
+    fn semantic_corpus_register_stops_at_global_cap() {
+        // The global feature registry must stop growing at
+        // MAX_GLOBAL_FEATURES: a novel feature reported after the cap
+        // never makes a case interesting, so a high-cardinality
+        // property cannot grow memory without bound.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..MAX_GLOBAL_FEATURES {
+            assert!(corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("f", i as u64)],
+                Some(1.0),
+            ));
+        }
+        assert_eq!(corpus.observed.len(), MAX_GLOBAL_FEATURES);
+        assert!(
+            !corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("f", MAX_GLOBAL_FEATURES as u64)],
+                Some(1.0),
+            ),
+            "a novel feature after the cap must not be admitted"
+        );
+        assert_eq!(corpus.observed.len(), MAX_GLOBAL_FEATURES);
+        assert_eq!(
+            corpus.accepted.len(),
+            CORPUS_SIZE,
+            "the corpus itself stays bounded by eviction"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_register_partially_registers_at_cap_boundary() {
+        // At the cap boundary, only the features that fit are
+        // registered: the case is admitted with the truncated novel
+        // set, and the overflow feature is not registered.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        let prefix: Vec<Feature> = (0..MAX_GLOBAL_FEATURES - 1)
+            .map(|i| bucket_feature("g", i as u64))
+            .collect();
+        assert_eq!(corpus.register(&prefix).len(), MAX_GLOBAL_FEATURES - 1);
+        let fits = bucket_feature("g", (MAX_GLOBAL_FEATURES - 1) as u64);
+        let overflows = bucket_feature("g", MAX_GLOBAL_FEATURES as u64);
+        assert!(corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![fits.clone(), overflows],
+            None,
+        ));
+        assert_eq!(corpus.accepted[0].novel, vec![fits]);
+        assert_eq!(corpus.observed.len(), MAX_GLOBAL_FEATURES);
+    }
+
+    #[test]
     fn semantic_corpus_rejected_queue_holds_novel_cases() {
         let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
         assert!(
