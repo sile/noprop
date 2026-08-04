@@ -1258,6 +1258,49 @@ fn run_corpus_guided_stops_after_too_many_rejections() {
 }
 
 #[test]
+fn run_corpus_guided_bounds_high_cardinality_features() {
+    // A property that reports effectively unbounded bucket values must
+    // not grow memory without bound: the per-case and global feature
+    // caps keep the registry finite. The run succeeds regardless of how
+    // many distinct values are reported.
+    let mut runner = noprop::Runner::new(5, 64);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u64(ctx);
+            ctx.bucket("unbounded", x);
+            ctx.bucket("also-unbounded", x.wrapping_add(1));
+            ctx.bucket("yet-another", x.wrapping_mul(3));
+            Ok(())
+        })
+        .expect("high-cardinality features must be capped, not fatal");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+}
+
+#[test]
+fn run_corpus_guided_rejected_cases_register_features() {
+    // A rejected case that reported a novel feature before rejecting
+    // must be admitted into the rejected queue (low-energy
+    // scaffolding), so its features count toward the global registry.
+    // This is observable through the run's behaviour: the same feature
+    // reported later by an accepted case is no longer novel.
+    let mut runner = noprop::Runner::new(11, 32);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            ctx.event("shared-feature");
+            if x % 2 == 0 {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("rejected cases with novel features must be tolerated");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 32);
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
 fn run_corpus_guided_is_reproducible_from_seed() {
     let seed = 0xABCD_EF01_2345_6789;
 

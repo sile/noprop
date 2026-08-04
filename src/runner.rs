@@ -1138,8 +1138,14 @@ impl CorpusGuidedSearch {
             TestCaseContext::recording(case_seed)
         } else {
             let explore_seed = self.prng.next_u64();
+            // Prefer the accepted queue, except with probability
+            // `1 / REJECTED_PICK_DENOM` pick the rejected queue when it
+            // is non-empty. The rejected queue is the only source while
+            // the accepted queue is empty (an early rejected case that
+            // registered novel features).
             let use_rejected = !self.corpus.rejected.is_empty()
-                && self.prng.sample_below(REJECTED_PICK_DENOM) == 0;
+                && (self.corpus.accepted.is_empty()
+                    || self.prng.sample_below(REJECTED_PICK_DENOM) == 0);
             let mut sequence = if use_rejected {
                 let idx = self.prng.sample_below(self.corpus.rejected.len() as u64) as usize;
                 self.corpus.rejected[idx].sequence.clone()
