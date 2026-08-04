@@ -1348,3 +1348,54 @@ fn run_corpus_guided_steers_candidates_by_priority() {
          rewarding high reached {high_max}, rewarding low reached {low_max}"
     );
 }
+
+#[test]
+fn run_corpus_guided_steers_stateful_transitions() {
+    // A stateful-style target: the property advances an abstract state
+    // machine and reports each transition. The corpus must keep
+    // exploring cases that reach the deep transitions, so the deepest
+    // chain observed under corpus-guided search is deeper than under
+    // uniform sampling with the same seed cohort.
+    use std::cell::Cell;
+
+    fn observe(seed: u64, corpus_guided: bool) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        let mut runner = noprop::Runner::new(seed, 256);
+        let property = |ctx: &mut noprop::TestCaseContext| {
+            let mut state = 0u64;
+            for _ in 0..64 {
+                let step = noprop::sample_usize_in(ctx, 0..2);
+                if step != 0 {
+                    break;
+                }
+                let next = state + 1;
+                ctx.transition("advance", state, next);
+                state = next;
+            }
+            let mut v = observed.take();
+            v.push(state as usize);
+            observed.set(v);
+            Ok(())
+        };
+        if corpus_guided {
+            runner
+                .run_corpus_guided(property)
+                .expect("corpus-guided run must succeed");
+        } else {
+            runner.run(property).expect("uniform run must succeed");
+        }
+        observed.into_inner()
+    }
+
+    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
+
+    let uniform_depths = observe(9, false);
+    let corpus_depths = observe(9, true);
+    let uniform_max = second_half_max(&uniform_depths);
+    let corpus_max = second_half_max(&corpus_depths);
+    assert!(
+        corpus_max > uniform_max,
+        "the corpus must explore deeper transition chains than uniform sampling: \
+         uniform reached {uniform_max}, corpus reached {corpus_max}"
+    );
+}

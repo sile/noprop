@@ -432,7 +432,7 @@ impl Runner {
         F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
         self.stats = Stats::default();
-        let mut search = CorpusGuidedSearch::new(self.seed);
+        let mut search = CorpusGuidedSearch::new(self.seed, CorpusPolicy::SemanticWithPriority);
         let rejection_cap = rejection_limit(self.iterations);
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
@@ -839,6 +839,25 @@ impl TargetedSearch {
     }
 }
 
+/// Corpus-guided search policy.
+///
+/// `SemanticOnly` admits cases purely on novelty: a case that
+/// registers no novel feature never enters the corpus, and `maximize`
+/// is ignored. `SemanticWithPriority` additionally lets a case with no
+/// novel feature replace the lowest-scored entry of a feature group it
+/// overlaps, and breaks eviction ties on the lowest score. The two
+/// policies share one corpus engine; the difference is confined to
+/// admission and eviction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorpusPolicy {
+    /// Tested directly; `run_corpus_guided` currently uses
+    /// `SemanticWithPriority`, and the comparison that picks the
+    /// adopted policy is deferred until benchmark data exists.
+    #[cfg_attr(not(test), expect(dead_code))]
+    SemanticOnly,
+    SemanticWithPriority,
+}
+
 /// One candidate in the semantic corpus: the recorded choice sequence
 /// of an interesting case, the features it newly registered, and the
 /// feature group it belongs to.
@@ -868,18 +887,20 @@ struct SemanticEntry {
 ///
 /// Accepted and rejected cases live in separate queues; the combined
 /// size is capped at `CORPUS_SIZE`. Admission and eviction are
-/// deterministic:
+/// deterministic and follow the policy:
 ///
 /// - A case that registers at least one novel feature is admitted
-///   while the combined size is below the cap.
+///   while the combined size is below the cap (both policies).
 /// - Once full, the entry with the fewest newly registered features is
-///   evicted; ties keep the earlier arrival. When a scalar priority is
-///   present, ties within that group break on the lowest score (with
-///   missing scores counted as lowest).
-/// - A case with no novel feature is admitted only when its priority
-///   beats the lowest-scored entry of a feature group it overlaps
-///   (replacing that entry).
+///   evicted; ties keep the earlier arrival. Under
+///   `SemanticWithPriority`, ties within that group break on the
+///   lowest score (with missing scores counted as lowest).
+/// - Under `SemanticWithPriority`, a case with no novel feature is
+///   admitted only when its priority beats the lowest-scored entry of
+///   a feature group it overlaps (replacing that entry). Under
+///   `SemanticOnly` such a case is never admitted.
 struct SemanticCorpus {
+    policy: CorpusPolicy,
     accepted: Vec<SemanticEntry>,
     rejected: Vec<SemanticEntry>,
     /// Globally observed features in first-registration order, capped
@@ -889,8 +910,9 @@ struct SemanticCorpus {
 }
 
 impl SemanticCorpus {
-    fn new() -> Self {
+    fn new(policy: CorpusPolicy) -> Self {
         Self {
+            policy,
             accepted: Vec::with_capacity(CORPUS_SIZE),
             rejected: Vec::with_capacity(CORPUS_SIZE),
             observed: Vec::new(),
@@ -950,21 +972,22 @@ impl SemanticCorpus {
             self.evict_if_over_capacity();
             return true;
         }
-        // No novel feature: admit by scalar-priority replacement within
-        // an overlapping feature group, if the score beats the group's
-        // lowest-scored entry. The replacement keeps the case's group
-        // membership so it can be outscored again.
-        if let (Some(score), Some(victim)) = (score, self.group_lowest(&case_features)) {
-            let incumbent = self.accepted[victim].score;
-            if Self::score_beats(Some(score), incumbent) {
-                self.accepted[victim] = SemanticEntry {
-                    sequence,
-                    novel: Vec::new(),
-                    group: case_features,
-                    score: Some(score),
-                };
-                return true;
-            }
+        // No novel feature: under SemanticWithPriority, admit by
+        // scalar-priority replacement within an overlapping feature
+        // group, if the score beats the group's lowest-scored entry.
+        // The replacement keeps the case's group membership so it can
+        // be outscored again. SemanticOnly never admits such a case.
+        if self.policy == CorpusPolicy::SemanticWithPriority
+            && let (Some(score), Some(victim)) = (score, self.group_lowest(&case_features))
+            && Self::score_beats(Some(score), self.accepted[victim].score)
+        {
+            self.accepted[victim] = SemanticEntry {
+                sequence,
+                novel: Vec::new(),
+                group: case_features,
+                score: Some(score),
+            };
+            return true;
         }
         false
     }
@@ -1043,8 +1066,10 @@ impl SemanticCorpus {
                 Some((incumbent, _)) => {
                     let weaker = if entry.novel.len() != incumbent.novel.len() {
                         entry.novel.len() < incumbent.novel.len()
-                    } else {
+                    } else if self.policy == CorpusPolicy::SemanticWithPriority {
                         Self::score_beats(incumbent.score, entry.score)
+                    } else {
+                        false
                     };
                     if weaker {
                         weakest = Some((entry, i));
@@ -1079,9 +1104,9 @@ struct CorpusGuidedSearch {
 }
 
 impl CorpusGuidedSearch {
-    fn new(seed: u64) -> Self {
+    fn new(seed: u64, policy: CorpusPolicy) -> Self {
         Self {
-            corpus: SemanticCorpus::new(),
+            corpus: SemanticCorpus::new(policy),
             prng: XoshiroState::from_seed(seed),
         }
     }
@@ -1290,7 +1315,7 @@ mod tests {
 
     #[test]
     fn semantic_corpus_admits_novel_features() {
-        let mut corpus = SemanticCorpus::new();
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
         assert!(
             corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("a")], None),
             "a case with a novel feature must be admitted"
@@ -1303,8 +1328,33 @@ mod tests {
     }
 
     #[test]
+    fn semantic_only_policy_ignores_priority() {
+        // Under SemanticOnly, `maximize` is ignored: a case with no
+        // novel feature is never admitted, no matter its score.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticOnly);
+        assert!(
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(100.0)
+            ),
+            "a novel feature must still be admitted"
+        );
+        assert!(
+            !corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(200.0)
+            ),
+            "SemanticOnly must not admit by priority"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+        assert_eq!(corpus.accepted[0].score, Some(100.0));
+    }
+
+    #[test]
     fn semantic_corpus_admits_by_priority_within_group() {
-        let mut corpus = SemanticCorpus::new();
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
         corpus.admit_accepted(
             ChoiceSequence::default(),
             vec![event_feature("a")],
@@ -1334,7 +1384,7 @@ mod tests {
 
     #[test]
     fn semantic_corpus_rejected_queue_holds_novel_cases() {
-        let mut corpus = SemanticCorpus::new();
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
         assert!(
             corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("r")]),
             "a rejected case with a novel feature must enter the rejected queue"
@@ -1349,7 +1399,7 @@ mod tests {
 
     #[test]
     fn semantic_corpus_evicts_fewest_features_first() {
-        let mut corpus = SemanticCorpus::new();
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
         // Fill the corpus with distinct single-feature entries, then a
         // two-feature entry on top.
         for i in 0..CORPUS_SIZE {
@@ -1381,7 +1431,7 @@ mod tests {
 
     #[test]
     fn semantic_corpus_evicts_across_both_queues() {
-        let mut corpus = SemanticCorpus::new();
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
         for i in 0..CORPUS_SIZE {
             corpus.admit_accepted(
                 ChoiceSequence::default(),
