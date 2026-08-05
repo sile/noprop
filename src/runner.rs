@@ -1592,6 +1592,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn semantic_corpus_unscored_novel_case_evicts_itself_when_full_of_scores() {
+        // Documented behaviour (docs/corpus-guided-search.md): when the
+        // corpus is full of scored entries, a new case with novel
+        // features but no priority (missing score) ties the existing
+        // entries on novel count and loses the score tie-break, so it
+        // evicts itself on arrival. Its features stay in the global
+        // registry.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("scored", i as u64)],
+                Some(i as f64),
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        let novel = event_feature("unscored-novel");
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![novel.clone()], None),
+            "the novel feature must still be registered"
+        );
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        assert!(
+            !corpus.accepted.iter().any(|e| e.novel.contains(&novel)),
+            "the unscored novel entry must evict itself: {:?}",
+            corpus
+                .accepted
+                .iter()
+                .map(|e| e.novel.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            corpus.observed.contains(&novel),
+            "the feature must remain registered globally"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_unscored_novel_case_survives_when_corpus_unscored() {
+        // With an all-unscored corpus, the tie-break is a plain FIFO
+        // rotation: the earliest arrival is evicted, so a new unscored
+        // case with novel features survives.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("unscored", i as u64)],
+                None,
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        let novel = event_feature("survivor");
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![novel.clone()], None));
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        assert!(
+            corpus.accepted.iter().any(|e| e.novel.contains(&novel)),
+            "the new unscored entry must survive FIFO eviction"
+        );
+        assert!(
+            !corpus
+                .accepted
+                .iter()
+                .any(|e| e.novel.contains(&bucket_feature("unscored", 0))),
+            "the earliest arrival must be evicted"
+        );
+    }
+
     // === mutate_sequence ===
 
     #[test]

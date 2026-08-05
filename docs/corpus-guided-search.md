@@ -110,6 +110,19 @@ Admission:
   group). This keeps the search from drifting entirely away from a
   promising group once its features are covered.
 
+When the corpus is full of scored entries and a new case with no
+priority (it never called `maximize`, or called it with an invalid
+value) registers novel features, the eviction tie-break treats the
+missing score as the lowest: the new entry can evict itself on arrival.
+Its features still enter the global registry — so they never make
+another case interesting — but its choice sequence is discarded without
+serving as a mutation parent. This is an accepted consequence of
+"missing scores count as the lowest" under `SemanticWithPriority`; it
+only occurs when scored and unscored cases are mixed, since an
+all-unscored corpus evicts the earliest arrival instead (a plain FIFO
+rotation). A property that wants every novel discovery to persist in
+the corpus should call `maximize` consistently.
+
 A new case either restarts (with probability
 `1 / RANDOM_RESTART_DENOM`) and records fresh from a new seed, or
 explores: it picks a corpus entry and mutates it. Accepted picks are
