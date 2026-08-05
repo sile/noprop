@@ -1667,41 +1667,57 @@ fn run_corpus_guided_steers_stateful_transitions() {
     );
 }
 
+/// Build a property whose case counter panics at `fail_at` (when set),
+/// reporting semantic features for the accepted cases before that.
+fn make_corpus_property(
+    case: &std::cell::Cell<usize>,
+    fail_at: Option<usize>,
+) -> impl Fn(&mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> + '_ {
+    move |ctx| {
+        let n = case.get();
+        case.set(n + 1);
+        if fail_at.is_some_and(|t| n >= t) {
+            panic!("deterministic failure at case {n}");
+        }
+        let x = noprop::sample_u32(ctx);
+        if x.is_multiple_of(2) {
+            ctx.event("even");
+            ctx.bucket("low-byte", (x & 0xFF) as u64);
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn run_corpus_guided_with_policy_matches_plain_corpus_guided() {
     // The plain entry point must delegate to the policy-taking one with
     // `SemanticWithPriority`, so identical seeds produce identical
-    // results (success and failure).
+    // results. Each (seed, iterations) pair runs twice: a clean pass
+    // and a deterministic failure (the case counter panics at
+    // `iterations - 16`), comparing stats and failure reports.
     for (seed, iterations) in [(1u64, 64usize), (7, 128), (99, 32)] {
-        // A non-capturing closure coerces to a fn pointer, so the same
-        // property can be passed to both entry points.
-        let property: fn(&mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> =
-            |ctx| {
-                let x = noprop::sample_u32(ctx);
-                if x.is_multiple_of(2) {
-                    ctx.event("even");
-                    ctx.bucket("low-byte", (x & 0xFF) as u64);
-                }
-                if x == 0 {
-                    panic!("zero is a deterministic failure");
-                }
-                Ok(())
-            };
-
-        let mut plain = noprop::Runner::new(seed, iterations);
-        let plain_outcome = plain.run_corpus_guided(property);
-        let mut policy = noprop::Runner::new(seed, iterations);
-        let policy_outcome = policy
-            .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority, property);
-        assert_eq!(
-            policy_outcome.is_ok(),
-            plain_outcome.is_ok(),
-            "same success/failure"
-        );
-        assert_eq!(plain.stats(), policy.stats(), "stats must match exactly");
-        let plain_err = plain_outcome.err().map(|e| format!("{e}"));
-        let policy_err = policy_outcome.err().map(|e| format!("{e}"));
-        assert_eq!(policy_err, plain_err, "failure reports must match exactly");
+        for fail_at in [None, Some(iterations - 16)] {
+            // The counter must be reset before each run: a shared
+            // counter would make the second run start mid-sequence.
+            let case = std::cell::Cell::new(0usize);
+            let mut plain = noprop::Runner::new(seed, iterations);
+            let plain_outcome = plain.run_corpus_guided(make_corpus_property(&case, fail_at));
+            case.set(0);
+            let mut policy = noprop::Runner::new(seed, iterations);
+            let policy_outcome = policy.run_corpus_guided_with_policy(
+                noprop::CorpusPolicy::SemanticWithPriority,
+                make_corpus_property(&case, fail_at),
+            );
+            assert_eq!(
+                policy_outcome.is_ok(),
+                plain_outcome.is_ok(),
+                "same success/failure (fail_at={fail_at:?})"
+            );
+            assert_eq!(plain.stats(), policy.stats(), "stats must match exactly");
+            let plain_err = plain_outcome.err().map(|e| format!("{e}"));
+            let policy_err = policy_outcome.err().map(|e| format!("{e}"));
+            assert_eq!(policy_err, plain_err, "failure reports must match exactly");
+        }
     }
 }
 

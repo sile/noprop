@@ -29,11 +29,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `case_index()`, so the same seed and iteration budget reproduce the
 /// same exit.
 ///
-/// A corpus-guided failure report (`run_corpus_guided`) additionally
-/// carries the semantic features the failing case reported and a
-/// one-based candidate index. The candidate index counts every attempt
-/// — accepted, rejected, and the failing case itself — so it relates
-/// to the zero-based `case_index()` (accepted iterations only) as
+/// A corpus-guided failure report (`run_corpus_guided` /
+/// `run_corpus_guided_with_policy`) additionally carries the semantic
+/// features the failing case reported and a one-based candidate index.
+/// The candidate index counts every attempt — accepted, rejected, and
+/// the failing case itself — so it relates to the zero-based
+/// `case_index()` (accepted iterations only) as
 /// `candidate_index = case_index + 1 + rejections before the failure`.
 /// For `TooManyRejections`, the candidate index is the ordinal of the
 /// last rejected attempt (`accepted + rejected`) and the semantic
@@ -59,10 +60,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The hint reuses the original iteration budget and names the failing
 /// entry point: `run`'s hint prints the bare constructor, while the
 /// targeted hint appends `run_targeted(|ctx| ...)` and the
-/// corpus-guided hint `run_corpus_guided(|ctx| ...)` with the closure
-/// body left as a placeholder. In each case the original property
-/// closure must be supplied before rerunning; the re-run size never
-/// needs to be recomputed by hand.
+/// corpus-guided hint appends
+/// `run_corpus_guided_with_policy(noprop::CorpusPolicy::…, |ctx| ...)`
+/// (reusing the run's corpus policy) with the closure body left as a
+/// placeholder. In each case the original property closure must be
+/// supplied before rerunning; the re-run size never needs to be
+/// recomputed by hand.
 pub struct Error {
     seed: u64,
     case_index: usize,
@@ -153,8 +156,9 @@ impl Error {
     }
 
     /// Attach the semantic features and candidate index of a failing
-    /// corpus-guided case. Used only by
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+    /// corpus-guided case. Used by
+    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
+    /// and the too-many-rejections exit path.
     pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
         self.semantic = Some(Box::new(SemanticFailureReport {
             features,
@@ -272,7 +276,9 @@ impl Error {
 
     /// Observability counters accumulated up to (and including) the
     /// failing case. `accepted_iterations` matches
-    /// [`case_index`](Self::case_index).
+    /// [`case_index`](Self::case_index). The corpus fields
+    /// (`discovered_features` / `max_corpus_size`) do not include the
+    /// failing case's features (the failing case is not admitted).
     pub fn stats(&self) -> Stats {
         *self.stats
     }

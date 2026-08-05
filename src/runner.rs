@@ -2072,3 +2072,83 @@ fn stats_corpus_fields_respect_corpus_cap() {
         stats.discovered_features
     );
 }
+
+#[test]
+fn stats_corpus_fields_on_too_many_rejections() {
+    // Every case rejects, so the run ends with too-many-rejections
+    // after the rejection cap (1024 for small budgets). Each rejected
+    // case reports a fresh feature before rejecting, so the global
+    // observation set saturates at `MAX_GLOBAL_FEATURES` and the
+    // rejected queue fills to `CORPUS_SIZE`; the error must carry both.
+    let case = std::cell::Cell::new(0u64);
+    let mut runner = Runner::new(1, 4);
+    let err = runner
+        .run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, |ctx| {
+            let i = case.get();
+            case.set(i + 1);
+            ctx.bucket("b", i);
+            ctx.reject_case();
+        })
+        .expect_err("rejecting every case must hit the rejection cap");
+    let stats = err.stats();
+    assert_eq!(stats.rejected_iterations, rejection_limit(4) + 1);
+    assert_eq!(stats.discovered_features, MAX_GLOBAL_FEATURES);
+    assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
+}
+
+#[test]
+fn corpus_stats_matches_corpus_state() {
+    use crate::rng::{EventBucket, FeatureKind};
+    let mut search = CorpusGuidedSearch::new(1, CorpusPolicy::SemanticOnly);
+    assert_eq!(corpus_stats(&search), (0, 0));
+
+    // An accepted case registering a novel feature.
+    let feature = Feature {
+        label: "a",
+        kind: FeatureKind::Event(EventBucket::One),
+    };
+    assert!(
+        search
+            .corpus
+            .admit_accepted(ChoiceSequence::default(), vec![feature], None)
+    );
+    assert_eq!(corpus_stats(&search), (1, 1));
+
+    // A rejected case registering another novel feature: rejected
+    // cases also contribute to the observation set and the corpus.
+    let feature = Feature {
+        label: "b",
+        kind: FeatureKind::Event(EventBucket::One),
+    };
+    assert!(
+        search
+            .corpus
+            .admit_rejected(ChoiceSequence::default(), vec![feature])
+    );
+    assert_eq!(corpus_stats(&search), (2, 2));
+}
+
+#[test]
+fn stats_corpus_fields_include_rejected_case_features() {
+    // The first case rejects while reporting a novel feature: it
+    // enters the rejected queue and its feature enters the observation
+    // set. Later cases report the same (now observed) feature and are
+    // not admitted under `SemanticOnly`.
+    let case = std::cell::Cell::new(0u64);
+    let mut runner = Runner::new(1, 8);
+    runner
+        .run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, |ctx| {
+            let i = case.get();
+            case.set(i + 1);
+            ctx.bucket("b", 1);
+            if i == 0 {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("run must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.rejected_iterations, 1);
+    assert_eq!(stats.discovered_features, 1);
+    assert_eq!(stats.max_corpus_size, 1);
+}

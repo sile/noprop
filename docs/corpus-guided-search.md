@@ -36,9 +36,12 @@ record the mutated case's draws and features
            ────────► repeat
 ```
 
-`Runner::run_corpus_guided(closure)` is the entry point. The closure
-receives the same `&mut TestCaseContext` as `Runner::run`, so the same
-property runs under every policy. See the
+`Runner::run_corpus_guided(closure)` is the entry point (it delegates
+to `run_corpus_guided_with_policy` with `CorpusPolicy::SemanticWithPriority`);
+`Runner::run_corpus_guided_with_policy(policy, closure)` selects the
+admission policy explicitly (`SemanticOnly`, or `SemanticWithPriority`).
+The closure receives the same `&mut TestCaseContext` as `Runner::run`,
+so the same property runs under every policy. See the
 [`run_corpus_guided`](crate::Runner::run_corpus_guided) documentation
 for a runnable example.
 
@@ -185,11 +188,13 @@ rolls, corpus picks, and mutation rolls, so a fixed seed yields a fixed
 sequence of cases and mutations.
 
 A failure report's reproduce hint reruns the exact failing seed with
-the original iteration budget and names `run_corpus_guided`. The report
-also carries the failing case's candidate index (across accepted and
-rejected cases) and the semantic features the failing case reported, so
-the interesting input region is visible without exposing the choice
-sequence itself.
+the original iteration budget and names
+`run_corpus_guided_with_policy(noprop::CorpusPolicy::…, |ctx| ...)`
+(reusing the run's corpus policy), so the rerun reproduces the same
+failure. The report also carries the failing case's candidate index
+(across accepted and rejected cases) and the semantic features the
+failing case reported, so the interesting input region is visible
+without exposing the choice sequence itself.
 
 ## Known Limitations
 
