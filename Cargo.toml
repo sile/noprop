@@ -11,3 +11,7 @@ readme = "README.md"
 categories = ["development-tools::testing"]
 
 [dependencies]
+
+[dev-dependencies]
+nojson = "0.3"
+noargs = "0.4"
