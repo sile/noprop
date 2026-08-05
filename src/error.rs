@@ -6,7 +6,7 @@ use std::panic::Location;
 
 use crate::GeneratedValue;
 use crate::rng::Feature;
-use crate::runner::Stats;
+use crate::runner::{CorpusPolicy, Stats};
 
 /// Result alias used across noprop's public API.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -73,7 +73,9 @@ pub struct Error {
     iterations: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
-    stats: Stats,
+    /// Boxed to keep `Error` small (see `SemanticFailureReport`):
+    /// corpus stats double the size of `Stats`.
+    stats: Box<Stats>,
     /// The runner entry point that produced this failure. Switches the
     /// reproduce hint.
     policy: SearchPolicy,
@@ -102,8 +104,9 @@ pub(crate) enum SearchPolicy {
     Uniform,
     /// [`Runner::run_targeted`](crate::Runner::run_targeted).
     Targeted,
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
-    CorpusGuided,
+    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy),
+    /// carrying the corpus policy so the reproduce hint reuses it.
+    CorpusGuided(CorpusPolicy),
 }
 
 enum ErrorKind {
@@ -236,7 +239,7 @@ impl Error {
             iterations,
             kind,
             generated,
-            stats,
+            stats: Box::new(stats),
             policy,
             semantic: None,
         }
@@ -271,7 +274,7 @@ impl Error {
     /// failing case. `accepted_iterations` matches
     /// [`case_index`](Self::case_index).
     pub fn stats(&self) -> Stats {
-        self.stats
+        *self.stats
     }
 }
 
@@ -290,7 +293,11 @@ impl Error {
         match self.policy {
             SearchPolicy::Uniform => base,
             SearchPolicy::Targeted => format!("{base}.run_targeted(|ctx| ...)"),
-            SearchPolicy::CorpusGuided => format!("{base}.run_corpus_guided(|ctx| ...)"),
+            SearchPolicy::CorpusGuided(policy) => {
+                format!(
+                    "{base}.run_corpus_guided_with_policy(noprop::CorpusPolicy::{policy:?}, |ctx| ...)"
+                )
+            }
         }
     }
 }
@@ -329,10 +336,12 @@ impl std::fmt::Debug for Error {
         writeln!(f, "    reproduce: {},", self.reproduce_command())?;
         writeln!(
             f,
-            "    stats: {{ accepted: {}, rejected: {}, total_samples: {} }},",
+            "    stats: {{ accepted: {}, rejected: {}, total_samples: {}, discovered_features: {}, max_corpus_size: {} }},",
             self.stats.accepted_iterations,
             self.stats.rejected_iterations,
             self.stats.total_samples,
+            self.stats.discovered_features,
+            self.stats.max_corpus_size,
         )?;
         if self.generated.is_empty() {
             writeln!(f, "    generated: [],")?;
@@ -400,10 +409,12 @@ impl std::fmt::Display for Error {
         writeln!(f, "reproduce with: {}", self.reproduce_command())?;
         writeln!(
             f,
-            "stats: accepted={}, rejected={}, total_samples={}",
+            "stats: accepted={}, rejected={}, total_samples={}, discovered_features={}, max_corpus_size={}",
             self.stats.accepted_iterations,
             self.stats.rejected_iterations,
             self.stats.total_samples,
+            self.stats.discovered_features,
+            self.stats.max_corpus_size,
         )?;
         if !self.generated.is_empty() {
             writeln!(f, "Generated values:")?;

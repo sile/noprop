@@ -1666,3 +1666,122 @@ fn run_corpus_guided_steers_stateful_transitions() {
          corpus mean depth {corpus_mean}, uniform {uniform_mean}"
     );
 }
+
+#[test]
+fn run_corpus_guided_with_policy_matches_plain_corpus_guided() {
+    // The plain entry point must delegate to the policy-taking one with
+    // `SemanticWithPriority`, so identical seeds produce identical
+    // results (success and failure).
+    for (seed, iterations) in [(1u64, 64usize), (7, 128), (99, 32)] {
+        // A non-capturing closure coerces to a fn pointer, so the same
+        // property can be passed to both entry points.
+        let property: fn(&mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> =
+            |ctx| {
+                let x = noprop::sample_u32(ctx);
+                if x.is_multiple_of(2) {
+                    ctx.event("even");
+                    ctx.bucket("low-byte", (x & 0xFF) as u64);
+                }
+                if x == 0 {
+                    panic!("zero is a deterministic failure");
+                }
+                Ok(())
+            };
+
+        let mut plain = noprop::Runner::new(seed, iterations);
+        let plain_outcome = plain.run_corpus_guided(property);
+        let mut policy = noprop::Runner::new(seed, iterations);
+        let policy_outcome = policy
+            .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority, property);
+        assert_eq!(
+            policy_outcome.is_ok(),
+            plain_outcome.is_ok(),
+            "same success/failure"
+        );
+        assert_eq!(plain.stats(), policy.stats(), "stats must match exactly");
+        let plain_err = plain_outcome.err().map(|e| format!("{e}"));
+        let policy_err = policy_outcome.err().map(|e| format!("{e}"));
+        assert_eq!(policy_err, plain_err, "failure reports must match exactly");
+    }
+}
+
+#[test]
+fn run_corpus_guided_semantic_only_runs_and_reports_corpus_fields() {
+    // The corpus fields are non-zero for corpus-guided runs and stay
+    // within the documented bounds.
+    let case = std::cell::Cell::new(0u64);
+    let mut runner = noprop::Runner::new(1, 128);
+    runner
+        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+            let i = case.get();
+            case.set(i + 1);
+            ctx.bucket("b", i);
+            Ok(())
+        })
+        .expect("semantic-only run must succeed");
+    let stats = runner.stats();
+    assert!(stats.discovered_features > 0);
+    assert!(stats.discovered_features <= 1024, "feature cap");
+    assert!(stats.max_corpus_size > 0);
+    assert!(stats.max_corpus_size <= 64, "corpus cap");
+}
+
+#[test]
+fn run_corpus_guided_failure_error_carries_corpus_stats() {
+    // A property failure must embed the corpus stats in the error. The
+    // failing case's feature is not admitted, so on a first-case
+    // failure the corpus fields are 0 (see `Stats` docs).
+    let err = noprop::Runner::new(1, 32)
+        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+            ctx.event("before-failure");
+            panic!("deterministic failure");
+        })
+        .expect_err("panicking closure must fail the run");
+    let stats = err.stats();
+    assert_eq!(stats.accepted_iterations, 0);
+    assert_eq!(
+        stats.discovered_features, 0,
+        "failing case features are not counted"
+    );
+    assert_eq!(stats.max_corpus_size, 0);
+
+    // With accepted cases before the failure, their features are
+    // counted.
+    let case = std::cell::Cell::new(0u64);
+    let err = noprop::Runner::new(1, 32)
+        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+            let i = case.get();
+            case.set(i + 1);
+            ctx.bucket("b", i);
+            if i >= 4 {
+                panic!("fail after four accepted cases");
+            }
+            Ok(())
+        })
+        .expect_err("panicking closure must fail the run");
+    let stats = err.stats();
+    assert!(
+        stats.discovered_features >= 4,
+        "accepted cases must be counted"
+    );
+    assert!(stats.max_corpus_size >= 4);
+}
+
+#[test]
+fn corpus_guided_failure_hint_includes_corpus_policy() {
+    // A SemanticOnly failure must carry a reproduce hint that reuses
+    // the same policy, so the rerun reproduces the failure.
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+            ctx.event("e");
+            panic!("deterministic failure");
+        })
+        .expect_err("panicking closure must fail the run");
+    let display = format!("{err}");
+    assert!(
+        display.contains(
+            "run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| ...)"
+        ),
+        "Display must carry the corpus policy in the hint, got:\n{display}"
+    );
+}

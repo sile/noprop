@@ -50,8 +50,11 @@ const MAX_GLOBAL_FEATURES: usize = 1024;
 /// Read from a [`Runner`] after the run returns via
 /// [`Runner::stats`](Runner::stats), and also embedded in [`Error`] on
 /// failure so the caller can see how far the run progressed before it
-/// failed. All three counters are cumulative over the whole run
-/// (across every case, accepted or rejected).
+/// failed. All counters are cumulative over the whole run (across
+/// every case, accepted or rejected). The corpus fields
+/// ([`Stats::discovered_features`](Stats::discovered_features) and
+/// [`Stats::max_corpus_size`](Stats::max_corpus_size)) are only
+/// meaningful for corpus-guided runs and are 0 otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
     /// Number of iterations whose closure completed without calling
@@ -78,6 +81,21 @@ pub struct Stats {
     /// sample. Includes samples produced by rejected iterations, since
     /// those iterations still consumed generator budget.
     pub total_samples: usize,
+    /// Number of distinct semantic features observed during a
+    /// corpus-guided run (the size of the global observation set, i.e.
+    /// `observed.len()`, capped at `MAX_GLOBAL_FEATURES`). Features of
+    /// the failing case itself are not registered (admission happens
+    /// only for accepted or rejected cases that continue the run), so
+    /// the value may be smaller than the features printed in the
+    /// failure report. 0 for uniform and targeted runs.
+    pub discovered_features: usize,
+    /// Maximum combined size of the semantic corpus during a
+    /// corpus-guided run. The combined size (accepted + rejected) only
+    /// grows and is trimmed back to `CORPUS_SIZE` when full, so the
+    /// value at the end of the run equals the maximum; the transient
+    /// overshoot just before eviction is not counted. 0 for uniform
+    /// and targeted runs.
+    pub max_corpus_size: usize,
 }
 
 /// A property-based test runner.
@@ -289,6 +307,7 @@ impl Runner {
                         accepted,
                         rejected,
                         total_samples,
+                        (0, 0),
                         state.location,
                         SearchPolicy::Targeted,
                     ));
@@ -304,7 +323,7 @@ impl Runner {
                         FeedbackState::Targeted { max_score } => match max_score {
                             ScalarFeedback::Valid(score) => score,
                             ScalarFeedback::Missing => {
-                                record_stats(self, accepted, rejected, total_samples);
+                                record_stats(self, accepted, rejected, total_samples, 0, 0);
                                 return Err(Error::from_missing_feedback(
                                     self.seed,
                                     accepted,
@@ -314,7 +333,7 @@ impl Runner {
                                 ));
                             }
                             ScalarFeedback::Invalid => {
-                                record_stats(self, accepted, rejected, total_samples);
+                                record_stats(self, accepted, rejected, total_samples, 0, 0);
                                 return Err(Error::from_invalid_feedback(
                                     self.seed,
                                     accepted,
@@ -360,6 +379,7 @@ impl Runner {
                                 accepted,
                                 rejected,
                                 total_samples,
+                                (0, 0),
                                 std::panic::Location::caller(),
                                 SearchPolicy::Targeted,
                             ));
@@ -369,7 +389,7 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            record_stats(self, accepted, rejected, total_samples);
+            record_stats(self, accepted, rejected, total_samples, 0, 0);
             let generated = ctx.take_generated();
             return Err(Error::from_panic(
                 self.seed,
@@ -381,7 +401,7 @@ impl Runner {
                 SearchPolicy::Targeted,
             ));
         }
-        record_stats(self, accepted, rejected, total_samples);
+        record_stats(self, accepted, rejected, total_samples, 0, 0);
         Ok(())
     }
 
@@ -423,7 +443,7 @@ impl Runner {
     /// ```
     /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
     /// runner
-    ///     .run_corpus_guided(|ctx| {
+    ///     .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
     ///         let x = noprop::sample_u32(ctx);
     ///         if x == 0 {
     ///             ctx.event("zero");
@@ -436,8 +456,18 @@ impl Runner {
     where
         F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
+        self.run_corpus_guided_with_policy(CorpusPolicy::SemanticWithPriority, f)
+    }
+
+    /// Corpus-guided search under an explicit
+    /// [`CorpusPolicy`](CorpusPolicy), otherwise identical to
+    /// [`run_corpus_guided`](Runner::run_corpus_guided).
+    pub fn run_corpus_guided_with_policy<F>(&mut self, policy: CorpusPolicy, f: F) -> Result<()>
+    where
+        F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
+    {
         self.stats = Stats::default();
-        let mut search = CorpusGuidedSearch::new(self.seed, CorpusPolicy::SemanticWithPriority);
+        let mut search = CorpusGuidedSearch::new(self.seed, policy);
         let rejection_cap = rejection_limit(self.iterations);
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
@@ -468,8 +498,9 @@ impl Runner {
                         accepted,
                         rejected,
                         total_samples,
+                        corpus_stats(&search),
                         state.location,
-                        SearchPolicy::CorpusGuided,
+                        SearchPolicy::CorpusGuided(policy),
                     ));
                 }
                 // A rejected case may still register novel features and
@@ -519,8 +550,9 @@ impl Runner {
                                 accepted,
                                 rejected,
                                 total_samples,
+                                corpus_stats(&search),
                                 std::panic::Location::caller(),
-                                SearchPolicy::CorpusGuided,
+                                SearchPolicy::CorpusGuided(policy),
                             ));
                         }
                         continue;
@@ -528,7 +560,15 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            record_stats(self, accepted, rejected, total_samples);
+            let (discovered_features, max_corpus_size) = corpus_stats(&search);
+            record_stats(
+                self,
+                accepted,
+                rejected,
+                total_samples,
+                discovered_features,
+                max_corpus_size,
+            );
             let generated = ctx.take_generated();
             let feedback = ctx.take_feedback();
             let semantic_features = match feedback {
@@ -542,11 +582,19 @@ impl Runner {
                 message,
                 generated,
                 self.stats,
-                SearchPolicy::CorpusGuided,
+                SearchPolicy::CorpusGuided(policy),
             )
             .with_semantic(semantic_features, candidate_index));
         }
-        record_stats(self, accepted, rejected, total_samples);
+        let (discovered_features, max_corpus_size) = corpus_stats(&search);
+        record_stats(
+            self,
+            accepted,
+            rejected,
+            total_samples,
+            discovered_features,
+            max_corpus_size,
+        );
         Ok(())
     }
 
@@ -611,7 +659,7 @@ impl Runner {
                 let _ = outcome;
                 rejected += 1;
                 if rejected > rejection_cap {
-                    record_stats(self, accepted, rejected, ctx.total_samples());
+                    record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
                     let generated = ctx.take_generated();
                     return Err(Error::from_too_many_rejections(
                         self.seed,
@@ -643,7 +691,7 @@ impl Runner {
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
-                            record_stats(self, accepted, rejected, ctx.total_samples());
+                            record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
                             let generated = ctx.take_generated();
                             let unknown_location = std::panic::Location::caller();
                             return Err(Error::from_too_many_rejections(
@@ -662,7 +710,7 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            record_stats(self, accepted, rejected, ctx.total_samples());
+            record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
             let generated = ctx.take_generated();
             return Err(Error::from_panic(
                 self.seed,
@@ -674,7 +722,7 @@ impl Runner {
                 SearchPolicy::Uniform,
             ));
         }
-        record_stats(self, accepted, rejected, ctx.total_samples());
+        record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
         Ok(())
     }
 }
@@ -696,13 +744,33 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 /// Record the run progress counters on the runner. Every exit path
 /// (success, property failure, rejection cap, feedback failure)
-/// reports the same counters.
-fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_samples: usize) {
+/// reports the same counters. The corpus fields are only meaningful
+/// for corpus-guided runs; uniform and targeted runs report 0.
+fn record_stats(
+    runner: &mut Runner,
+    accepted: usize,
+    rejected: usize,
+    total_samples: usize,
+    discovered_features: usize,
+    max_corpus_size: usize,
+) {
     runner.stats = Stats {
         accepted_iterations: accepted,
         rejected_iterations: rejected,
         total_samples,
+        discovered_features,
+        max_corpus_size,
     };
+}
+
+/// The corpus-derived stats fields: the size of the global feature
+/// observation set and the combined (accepted + rejected) corpus size
+/// at the end of the run.
+fn corpus_stats(search: &CorpusGuidedSearch) -> (usize, usize) {
+    (
+        search.corpus.observed.len(),
+        search.corpus.accepted.len() + search.corpus.rejected.len(),
+    )
 }
 
 /// Record run stats and build the too-many-rejections exit error.
@@ -710,16 +778,25 @@ fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_sam
 /// For corpus-guided runs, the error additionally carries the semantic
 /// features of the last rejected case and its candidate index (the
 /// ordinal of the attempt that exceeded the cap: `accepted + rejected`).
+#[expect(clippy::too_many_arguments)]
 fn too_many_rejections(
     runner: &mut Runner,
     ctx: &mut TestCaseContext,
     accepted: usize,
     rejected: usize,
     total_samples: usize,
+    corpus_stats: (usize, usize),
     location: &'static std::panic::Location<'static>,
     policy: SearchPolicy,
 ) -> Error {
-    record_stats(runner, accepted, rejected, total_samples);
+    record_stats(
+        runner,
+        accepted,
+        rejected,
+        total_samples,
+        corpus_stats.0,
+        corpus_stats.1,
+    );
     let generated = ctx.take_generated();
     let err = Error::from_too_many_rejections(
         runner.seed,
@@ -731,7 +808,7 @@ fn too_many_rejections(
         runner.stats,
         policy,
     );
-    if policy == SearchPolicy::CorpusGuided {
+    if matches!(policy, SearchPolicy::CorpusGuided(_)) {
         let features = match ctx.take_feedback() {
             FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
             _ => Vec::new(),
@@ -865,6 +942,9 @@ impl TargetedSearch {
 
 /// Corpus-guided search policy.
 ///
+/// Corpus admission policy for
+/// [`Runner::run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy).
+///
 /// `SemanticOnly` admits cases purely on novelty: a case that
 /// registers no novel feature never enters the corpus, and `maximize`
 /// is ignored. `SemanticWithPriority` additionally lets a case with no
@@ -872,13 +952,18 @@ impl TargetedSearch {
 /// overlaps, and breaks eviction ties on the lowest score. The two
 /// policies share one corpus engine; the difference is confined to
 /// admission and eviction.
+///
+/// This enum is `#[non_exhaustive]`: the set of policies may change as
+/// the comparison benchmark data accumulates. `Runner::run_corpus_guided`
+/// currently uses `SemanticWithPriority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CorpusPolicy {
-    /// Tested directly; `run_corpus_guided` currently uses
-    /// `SemanticWithPriority`, and the comparison that picks the
-    /// adopted policy is deferred until benchmark data exists.
-    #[cfg_attr(not(test), expect(dead_code))]
+#[non_exhaustive]
+pub enum CorpusPolicy {
+    /// Admit cases only when they register at least one novel feature.
     SemanticOnly,
+    /// In addition to novelty, admit a case with no novel feature when
+    /// its scalar priority beats the lowest-scored entry of a feature
+    /// group it overlaps.
     SemanticWithPriority,
 }
 
@@ -1919,4 +2004,71 @@ fn mutation_rewrites_upper_bytes_of_16_byte_integer_draw() {
     }
     assert!(low_changed, "low 8 bytes must be rewritable");
     assert!(high_changed, "high 8 bytes must be rewritable");
+}
+
+// === Stats corpus fields ===
+
+#[test]
+fn stats_corpus_fields_are_zero_for_uniform_and_targeted() {
+    let mut runner = Runner::new(1, 4);
+    runner
+        .run(|ctx| {
+            crate::sample_u32(ctx);
+            Ok(())
+        })
+        .unwrap();
+    let stats = runner.stats();
+    assert_eq!(stats.discovered_features, 0);
+    assert_eq!(stats.max_corpus_size, 0);
+
+    let mut runner = Runner::new(1, 4);
+    runner
+        .run_targeted(|ctx| {
+            crate::sample_u32(ctx);
+            ctx.maximize(0.5);
+            Ok(())
+        })
+        .unwrap();
+    let stats = runner.stats();
+    assert_eq!(stats.discovered_features, 0);
+    assert_eq!(stats.max_corpus_size, 0);
+}
+
+#[test]
+fn stats_corpus_fields_reflect_observed_features() {
+    // Every case reports the same feature, so exactly one feature is
+    // observed and exactly one entry is admitted.
+    let mut runner = Runner::new(1, 4);
+    runner
+        .run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, |ctx| {
+            ctx.bucket("b", 1);
+            Ok(())
+        })
+        .unwrap();
+    let stats = runner.stats();
+    assert_eq!(stats.discovered_features, 1);
+    assert_eq!(stats.max_corpus_size, 1);
+}
+
+#[test]
+fn stats_corpus_fields_respect_corpus_cap() {
+    // Every case reports a fresh feature, so the corpus fills to the
+    // cap while the observation set keeps growing.
+    let case = std::cell::Cell::new(0u64);
+    let mut runner = Runner::new(1, 100);
+    runner
+        .run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, |ctx| {
+            let i = case.get();
+            case.set(i + 1);
+            ctx.bucket("b", i);
+            Ok(())
+        })
+        .unwrap();
+    let stats = runner.stats();
+    assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
+    assert!(
+        stats.discovered_features >= CORPUS_SIZE,
+        "at least the admitted entries must be observed: {}",
+        stats.discovered_features
+    );
 }
