@@ -1,9 +1,13 @@
 //! Curated-mutation target: a small binary search tree compared
 //! against the standard library map. The mutant forgets to skip
-//! duplicate keys on insert, so a key inserted twice corrupts the
-//! in-order key order. Uniform generation over a wide key range rarely
-//! draws a duplicate; the biased variant narrows the key range so
-//! duplicates become common.
+//! duplicate keys on insert, so a key inserted twice duplicates the
+//! key in the in-order traversal (the order stays sorted; the
+//! multiplicity breaks the equality with the model).
+//!
+//! Uniform generation over a wide key range draws a duplicate only
+//! after many iterations, so the mutant is detected late (or not at
+//! all with a small budget); the biased variant narrows the key range
+//! so duplicates appear within the first iterations.
 
 use super::{Observe, Task, Workload};
 use noprop::TestCaseContext;
@@ -88,10 +92,8 @@ fn delete_from(node: Option<Box<Node>>, key: u32) -> Option<Box<Node>> {
     match (node.left.take(), node.right.take()) {
         (None, right) => right,
         (left, None) => left,
-        (left, right) => {
-            let right = right.expect("right is non-empty here");
+        (left, Some(right)) => {
             let successor_key = successor_key(&right);
-            // Remove the successor from the right subtree, then re-root.
             let right = delete_from(Some(right), successor_key);
             Some(Box::new(Node {
                 key: successor_key,
@@ -118,7 +120,8 @@ fn collect(node: &Option<Box<Node>>, out: &mut Vec<u32>) {
     }
 }
 
-/// Generate an operation sequence: up to `max_ops` insert/delete pairs.
+/// Generate an operation sequence: up to `max_ops` insert/delete
+/// operations on keys in `0..1024` (biased: mostly `0..8`).
 fn run(
     sut_mutant: bool,
     biased: bool,

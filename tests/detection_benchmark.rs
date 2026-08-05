@@ -5,6 +5,26 @@
 //! known witnesses), and summary regeneration from raw results.
 
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// Build the harness once per test process: a filtered
+/// `cargo test --test ...` run does not build examples, and running
+/// `cargo build` on every invocation would race between the parallel
+/// tests while the binary is being replaced.
+static BUILD: OnceLock<()> = OnceLock::new();
+
+fn ensure_built() {
+    BUILD.get_or_init(|| {
+        let build = Command::new(env!("CARGO"))
+            .args(["build", "--example", "detection_benchmark"])
+            .status()
+            .expect("failed to run cargo build");
+        assert!(
+            build.success(),
+            "cargo build --example detection_benchmark failed"
+        );
+    });
+}
 
 /// Workload / mutant pairs registered by the harness.
 const TASKS: &[(&str, &str)] = &[
@@ -21,8 +41,7 @@ fn run(args: &[&str]) -> String {
 
 fn run_with_stdin(args: &[&str], stdin: Option<&str>) -> String {
     use std::io::Write;
-    // `cargo test` builds the examples before running integration
-    // tests, so the harness binary is always present at this path.
+    ensure_built();
     let binary = format!(
         "{}/target/debug/examples/detection_benchmark",
         env!("CARGO_MANIFEST_DIR")
@@ -136,4 +155,12 @@ fn summary_regenerates_from_raw_results() {
         summary_lines, expected_groups,
         "summary must cover every (variant, workload, mutant) group"
     );
+    // Every group must aggregate all three seeds: a dropped raw line
+    // would shrink `trials` while keeping the group count intact.
+    for line in groups.lines().filter(|l| l.starts_with("variant=")) {
+        assert!(
+            line.contains("trials=3"),
+            "every group must aggregate all seeds: {line}"
+        );
+    }
 }

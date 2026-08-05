@@ -44,8 +44,7 @@ pub(crate) struct Workload {
 }
 
 /// All registered workloads, keyed by `Workload::name`.
-pub(crate) const WORKLOADS: &[&Workload] =
-    &[&HIGH_FREQUENCY, &BOUNDARY, &COMBINATION, &DEPENDENT, &BST];
+pub(crate) const WORKLOADS: &[Workload] = &[HIGH_FREQUENCY, BOUNDARY, COMBINATION, DEPENDENT, BST];
 
 /// Observation sink for workload-specific measurements.
 ///
@@ -74,7 +73,7 @@ use noprop::TestCaseContext;
 
 /// Look up a workload by name.
 pub(crate) fn workload(name: &str) -> Option<&'static Workload> {
-    WORKLOADS.iter().copied().find(|w| w.name == name)
+    WORKLOADS.iter().find(|w| w.name == name)
 }
 
 /// Look up a task (mutant) within a workload by name.

@@ -1,5 +1,7 @@
 //! Generator variants: how the input space is sampled. The property
 //! and SUT are identical across variants; only the generator differs.
+//! (`Variant::Base` is the exception: it runs the base SUT as a
+//! ground-truth check, not a comparison variant.)
 
 use std::time::Instant;
 
@@ -9,7 +11,7 @@ use crate::raw::{RawResult, Status};
 use crate::targets::{Observe, Task};
 
 /// Generator variant for a task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Variant {
     /// Base SUT under uniform generation. Ground-truth check: must
     /// complete the property for any input. Not part of the
@@ -63,10 +65,10 @@ pub(crate) fn run_task(
     let mut runner = Runner::new(seed, iterations);
     let outcome = runner.run(|ctx| property(ctx, &observe).map_err(Into::into));
     let wall_clock_ns = start.elapsed().as_nanos();
-    let stats = runner.stats();
+    let stats: Stats = runner.stats();
     let observations = observe.take();
 
-    let (status, detected_at) = classify(&outcome, stats);
+    let (status, detected_at) = classify(&outcome);
 
     RawResult {
         format_version: crate::raw::FORMAT_VERSION,
@@ -90,8 +92,9 @@ pub(crate) fn run_task(
 ///
 /// `ErrorKind` is crate-private, so the classification relies on the
 /// stable `Display` wording of the too-many-rejections failure (pinned
-/// by the e2e tests).
-fn classify(outcome: &Result<(), Error>, stats: Stats) -> (Status, Option<usize>) {
+/// by the e2e tests). Non-rejection errors are property failures:
+/// `Runner::run` produces no other error kind today.
+fn classify(outcome: &Result<(), Error>) -> (Status, Option<usize>) {
     match outcome {
         Ok(()) => (Status::NotFound, None),
         Err(err) => {
@@ -101,7 +104,6 @@ fn classify(outcome: &Result<(), Error>, stats: Stats) -> (Status, Option<usize>
             } else {
                 // `case_index` is the accepted case that failed; the
                 // iterations-to-detection count includes it.
-                let _ = stats;
                 (Status::Found, Some(err.case_index() + 1))
             }
         }

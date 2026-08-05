@@ -7,7 +7,7 @@ use nojson::DisplayJson;
 pub(crate) const FORMAT_VERSION: u32 = 1;
 
 /// Terminal state of one task trial.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Status {
     /// The mutant was detected within the iteration budget.
     Found,
@@ -16,7 +16,8 @@ pub(crate) enum Status {
     /// The run gave up (rejection cap exceeded) before completing.
     GaveUp,
     /// The harness itself failed (configuration error, not a property
-    /// failure).
+    /// failure). No workload generates this today; the status keeps
+    /// the summary schema stable for future harness errors.
     Aborted,
 }
 
@@ -33,9 +34,8 @@ impl Status {
 
 /// One seed's raw result for a single task.
 ///
-/// Serialized with nojson so the format is stable and machine-readable;
-/// the fields follow the detection-benchmark contract in issue 0010.
-#[derive(Debug, Clone)]
+/// Serialized with nojson so the format is stable and machine-readable.
+#[derive(Debug)]
 pub(crate) struct RawResult {
     pub format_version: u32,
     pub workload: &'static str,

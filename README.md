@@ -46,7 +46,9 @@ Detection benchmark
 `examples/detection_benchmark` measures how many iterations noprop
 needs to detect known mutants of five small workloads (high-frequency,
 boundary, combination, dependent, bst) under different generator
-variants, and how broad the generated inputs are (semantic buckets).
+variants, and how broad the generated inputs are (semantic buckets;
+reported by the dependent workload, whose base variant shows the full
+breadth).
 
 ```
 # Run a single task: print one raw-result JSON line.

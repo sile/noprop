@@ -3,9 +3,11 @@
 //! misreads the duration field when both field bits are set, so only
 //! inputs whose flags are `0b11` expose it.
 //!
-//! This workload also reports semantic-bucket observations: how many
-//! distinct flag values the generator reached, so generator breadth is
-//! comparable across variants.
+//! This workload also reports semantic-bucket observations: the count
+//! of each flag value generated. A run stops at the first failure, so
+//! on a detected trial the counts cover only the cases up to
+//! detection; the base variant (which completes every trial) is the
+//! one that shows the generator's full breadth.
 
 use super::{Observe, Task, Workload};
 use noprop::TestCaseContext;
@@ -58,21 +60,16 @@ fn run(
 
     let duration = noprop::sample_u32(ctx);
     let size = noprop::sample_u32(ctx);
-    let (parsed_duration, parsed_size) = parse_trun(flags, duration, size, sut_mutant);
+    let parsed_duration = parse_trun(flags, duration, size, sut_mutant).0;
 
-    // Property: the parsed fields must agree with the flags and the
-    // generated values. The mutant's misread makes the duration
-    // disagree whenever both bits are set.
+    // Property: the parsed duration must agree with the flags and the
+    // generated value. The mutant's misread makes the duration
+    // disagree whenever both bits are set. (The size field is passed
+    // through unchanged by both the base SUT and the mutant.)
     let expected_duration = (flags & 0b01 != 0).then_some(duration);
-    let expected_size = (flags & 0b10 != 0).then_some(size);
     if parsed_duration != expected_duration {
         return Err(format!(
             "duration field misread for flags={flags}: parsed {parsed_duration:?}, expected {expected_duration:?}"
-        ));
-    }
-    if parsed_size != expected_size {
-        return Err(format!(
-            "size field misread for flags={flags}: parsed {parsed_size:?}, expected {expected_size:?}"
         ));
     }
     Ok(())

@@ -28,15 +28,10 @@ fn main() -> Result<(), Error> {
     }
     noargs::HELP_FLAG.take_help(&mut args);
 
-    if run_cmd(&mut args)? {
-        return Ok(());
-    }
-    if run_all_cmd(&mut args)? {
-        return Ok(());
-    }
-    if summary_cmd(&mut args)? {
-        return Ok(());
-    }
+    // Subcommand dispatch: each handler early-returns `Ok(true)` on
+    // success (or help mode), so `finish()` below always runs and
+    // reports unconsumed arguments and prints the help in help mode.
+    let _ = run_cmd(&mut args)? || run_all_cmd(&mut args)? || summary_cmd(&mut args)?;
 
     if let Some(help) = args.finish()? {
         print!("{help}");
@@ -56,21 +51,25 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
     let workload_name: String = opt("workload")
         .ty("NAME")
         .doc("Workload name")
+        .example("bst")
         .take(args)
         .then(|o| o.value().parse())?;
     let mutant_name: String = opt("mutant")
         .ty("NAME")
         .doc("Mutant name")
+        .example("insert_duplicate_key")
         .take(args)
         .then(|o| o.value().parse())?;
     let variant_name: String = opt("variant")
         .ty("NAME")
         .doc("Generator variant: uniform | biased (or base for the ground-truth SUT)")
+        .example("uniform")
         .take(args)
         .then(|o| o.value().parse())?;
     let seed: u64 = opt("seed")
         .ty("N")
         .doc("Seed for the run")
+        .example("0")
         .take(args)
         .then(|o| o.value().parse())?;
     let iterations: usize = opt("iterations")
@@ -79,6 +78,16 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         .default("1000")
         .take(args)
         .then(|o| o.value().parse())?;
+    if iterations == 0 {
+        return Err(Error::other(
+            args,
+            "iterations must be at least 1 (a zero budget produces a vacuous result)",
+        ));
+    }
+
+    if args.metadata().help_mode {
+        return Ok(true);
+    }
 
     let workload = targets::workload(&workload_name).ok_or_else(|| {
         let available = targets::WORKLOADS
@@ -93,8 +102,12 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
     })?;
     let task = targets::task(workload, &mutant_name)
         .ok_or_else(|| Error::other(args, format!("unknown mutant {mutant_name:?}")))?;
-    let variant = variants::Variant::from_str(&variant_name)
-        .ok_or_else(|| Error::other(args, format!("unknown variant {variant_name:?}")))?;
+    let variant = variants::Variant::from_str(&variant_name).ok_or_else(|| {
+        Error::other(
+            args,
+            format!("unknown variant {variant_name:?}; available: base, uniform, biased"),
+        )
+    })?;
 
     let result = variants::run_task(workload.name, task, variant, seed, iterations);
     println!("{}", nojson::Json(&result));
@@ -116,19 +129,30 @@ fn run_all_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         .default("1000")
         .take(args)
         .then(|o| o.value().parse())?;
+    if iterations == 0 {
+        return Err(Error::other(
+            args,
+            "iterations must be at least 1 (a zero budget produces a vacuous result)",
+        ));
+    }
     let seeds_text: String = opt("seeds")
         .ty("LIST")
         .doc("Comma-separated seed list, e.g. 0,1,2,3")
+        .example("0,1,2,3")
         .take(args)
         .then(|o| o.value().parse())?;
-    let seeds: Vec<u64> = seeds_text
+
+    if args.metadata().help_mode {
+        return Ok(true);
+    }
+
+    let mut seeds: Vec<u64> = seeds_text
         .split(',')
         .map(|s| s.trim().parse::<u64>())
         .collect::<Result<_, _>>()
         .map_err(|e| Error::other(args, format!("invalid seed list {seeds_text:?}: {e}")))?;
-    if seeds.is_empty() {
-        return Err(Error::other(args, "seed list must not be empty"));
-    }
+    seeds.sort_unstable();
+    seeds.dedup();
 
     for workload in targets::WORKLOADS {
         for task in workload.tasks {
@@ -153,18 +177,41 @@ fn summary_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         return Ok(false);
     }
 
+    if args.metadata().help_mode {
+        return Ok(true);
+    }
+
     let stdin = std::io::stdin();
     let (summaries, skipped) = summary::read_summaries(stdin.lock());
     print_summary(&summaries);
     if skipped > 0 {
-        eprintln!("warning: skipped {skipped} malformed raw-result line(s)");
+        // Partial results stay on stdout; the non-zero exit flags the
+        // corrupted input to pipelines.
+        return Err(Error::other(
+            args,
+            format!("skipped {skipped} malformed raw-result line(s)"),
+        ));
     }
     Ok(true)
 }
 
 fn print_summary(summaries: &summary::Summaries) {
     // One `key=value` line per (variant, workload, mutant) group, so
-    // the summary is both readable and machine-parseable.
+    // the summary is both readable and machine-parseable. The bucket
+    // bounds are printed once so group lines stay self-explanatory.
+    let bounds: Vec<String> = summary::DETECTION_BUCKETS
+        .iter()
+        .scan(1, |prev, bound| {
+            let label = format!("{prev}-{}", bound - 1);
+            *prev = *bound;
+            Some(label)
+        })
+        .chain(std::iter::once(format!(
+            "{}+",
+            summary::DETECTION_BUCKETS.last().expect("non-empty bounds")
+        )))
+        .collect();
+    println!("bucket_bounds={}", bounds.join(","));
     for ((variant, workload, mutant), s) in summaries {
         let detection_rate = s.detection_rate();
         let median = s
