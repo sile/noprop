@@ -22,7 +22,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup update ${{ matrix.toolchain }}
       - run: rustup default ${{ matrix.toolchain }}
-      - run: cargo test --all
+      # `--examples` runs the unit tests inside the detection-benchmark
+      # example, which plain `cargo test --all` skips.
+      - run: cargo test --all --examples
 
   lints:
     name: Lints

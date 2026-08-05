@@ -3,5 +3,21 @@
 version = 4
 
 [[package]]
+name = "noargs"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af5b13e43c3b5f1b4f2db60f5f03c803a04f5dd0a6fd44c83b5517ca1ec42ac4"
+
+[[package]]
+name = "nojson"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75dfcef0ca5529a58a350e6b80783c98521a70f73fb1c4f0d4b661ba892d766"
+
+[[package]]
 name = "noprop"
 version = "0.0.2"
+dependencies = [
+ "noargs",
+ "nojson",
+]
