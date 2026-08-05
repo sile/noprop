@@ -15,3 +15,4 @@ categories = ["development-tools::testing"]
 [dev-dependencies]
 nojson = "0.3"
 noargs = "0.4"
+proptest = "1.11"
