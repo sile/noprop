@@ -273,7 +273,7 @@ impl Runner {
             ctx.enable_targeted();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
             let rejection = ctx.take_rejection();
-            total_samples += ctx.total_samples();
+            total_samples = total_samples.saturating_add(ctx.total_samples());
 
             if let Some(state) = rejection {
                 rejected += 1;
@@ -447,8 +447,8 @@ impl Runner {
             ctx.enable_corpus_guided();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
             let rejection = ctx.take_rejection();
-            total_samples += ctx.total_samples();
-            candidate_index += 1;
+            total_samples = total_samples.saturating_add(ctx.total_samples());
+            candidate_index = candidate_index.saturating_add(1);
 
             if let Some(state) = rejection {
                 rejected += 1;
@@ -956,14 +956,15 @@ impl SemanticCorpus {
     /// stopping at `MAX_GLOBAL_FEATURES`. Returns the features that
     /// were actually registered (an empty result means the case added
     /// nothing new and is not interesting).
+    ///
+    /// `novel` must be the output of [`novel_features`](Self::novel_features)
+    /// (or otherwise contain only features absent from `observed`);
+    /// duplicates are not checked here.
     fn register(&mut self, novel: &[Feature]) -> Vec<Feature> {
         let mut registered = Vec::new();
         for feature in novel {
             if self.observed.len() >= MAX_GLOBAL_FEATURES {
                 break;
-            }
-            if self.observed.contains(feature) {
-                continue;
             }
             self.observed.push(feature.clone());
             registered.push(feature.clone());
@@ -1657,6 +1658,116 @@ mod tests {
                 .iter()
                 .any(|e| e.novel.contains(&bucket_feature("unscored", 0))),
             "the earliest arrival must be evicted"
+        );
+    }
+
+    // === CorpusGuidedSearch wiring ===
+
+    #[test]
+    fn corpus_guided_search_replays_accepted_entries() {
+        // With a one-eighth restart probability, most picks are
+        // exploratory: they replay the admitted draw under the same
+        // declared constraint (possibly mutated, always in domain).
+        // Recording (fresh) candidates draw unconstrained random bytes
+        // instead. Deterministic per seed. Mirrors the targeted-search
+        // wiring test.
+        let mut search = CorpusGuidedSearch::new(42, CorpusPolicy::SemanticWithPriority);
+        let mut seq = ChoiceSequence::default();
+        seq.push_draw(
+            7u64.to_le_bytes().to_vec(),
+            ChoiceMeta::Bounded { bound: 10 },
+        );
+        search
+            .corpus
+            .admit_accepted(seq, vec![event_feature("a")], Some(1.0));
+        let mut in_domain = 0;
+        for _ in 0..16 {
+            let mut ctx = search.next_context();
+            ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 10 });
+            let mut buf = [0u8; 8];
+            ctx.fill(&mut buf);
+            let x = u64::from_le_bytes(buf);
+            let _ = ctx.take_sequence();
+            if x < 10 {
+                in_domain += 1;
+            }
+        }
+        assert!(
+            in_domain >= 8,
+            "most candidates must replay an in-domain draw: {in_domain}"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_weakest_accepted_returns_lowest_score() {
+        // `weakest_accepted` drives the low-score pick (probability
+        // 1 / LOW_SCORE_DENOM); if it stopped selecting the lowest
+        // score, the low-energy search path would silently break.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("a")],
+            Some(3.0),
+        );
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("b")],
+            Some(1.0),
+        );
+        assert_eq!(
+            corpus.weakest_accepted(),
+            1,
+            "the lowest score must be picked"
+        );
+        // A missing score counts as the lowest, so the unscored entry
+        // becomes the weak spot.
+        corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("c")], None);
+        assert_eq!(
+            corpus.weakest_accepted(),
+            2,
+            "missing must count as the lowest"
+        );
+        // Ties keep the earlier arrival.
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("d")],
+            Some(1.0),
+        );
+        assert_eq!(
+            corpus.weakest_accepted(),
+            2,
+            "a tie must keep the earlier arrival"
+        );
+    }
+
+    #[test]
+    fn corpus_guided_search_picks_from_rejected_queue_when_accepted_empty() {
+        // While the accepted queue is empty, the rejected queue is the
+        // only source for exploratory candidates (forced pick, no
+        // rejected-queue roll consumed). The replayed draw must match
+        // the admitted rejected sequence.
+        let mut search = CorpusGuidedSearch::new(7, CorpusPolicy::SemanticWithPriority);
+        let mut seq = ChoiceSequence::default();
+        seq.push_draw(
+            3u64.to_le_bytes().to_vec(),
+            ChoiceMeta::Bounded { bound: 10 },
+        );
+        search.corpus.admit_rejected(seq, vec![event_feature("r")]);
+        let mut seen_replay = false;
+        for _ in 0..16 {
+            let mut ctx = search.next_context();
+            ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 10 });
+            let mut buf = [0u8; 8];
+            ctx.fill(&mut buf);
+            let x = u64::from_le_bytes(buf);
+            let _ = ctx.take_sequence();
+            if x == 3 {
+                seen_replay = true;
+            }
+        }
+        assert!(
+            seen_replay,
+            "the rejected entry must be replayed while the accepted queue is empty"
         );
     }
 

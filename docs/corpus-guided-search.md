@@ -85,16 +85,21 @@ high-cardinality property cannot grow the registry without bound.
 A per-case cap (`MAX_FEATURES_PER_CASE` in `src/rng.rs`) bounds the
 features one case may report; the excess is discarded in report order.
 An event saturating to a higher bucket replaces its earlier feature and
-does not count as a new one.
+does not count toward the per-case cap. Note that the replacement
+itself can still be a *global* novelty: a bucket that no case has
+reached before is registered as a new feature on the next case
+boundary, which is how repeated events steer the search toward
+high-visit paths.
 
 ## Corpus and Mutation
 
 Accepted cases that register at least one novel feature enter the
 accepted queue; rejected cases that register novel features enter a
-separate rejected queue, kept as low-energy scaffolding toward sparse
-preconditions (picked with probability
-`1 / REJECTED_PICK_DENOM`). The combined size of both queues is capped
-at `CORPUS_SIZE`.
+separate rejected queue, kept as low-energy scaffolding for reaching
+sparse preconditions (picked with probability
+`1 / REJECTED_PICK_DENOM`; while the accepted queue is empty, the
+rejected queue is the only source and is always picked). The combined
+size of both queues is capped at `CORPUS_SIZE`.
 
 Admission:
 

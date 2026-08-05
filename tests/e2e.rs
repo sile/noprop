@@ -1154,7 +1154,7 @@ fn run_corpus_guided_succeeds_with_features() {
     runner
         .run_corpus_guided(|ctx| {
             let x = noprop::sample_u32(ctx);
-            if x % 4 == 0 {
+            if x.is_multiple_of(4) {
                 ctx.event("multiple-of-four");
             }
             Ok(())
@@ -1317,7 +1317,7 @@ fn run_corpus_guided_counts_rejections() {
     runner
         .run_corpus_guided(|ctx| {
             let x = noprop::sample_u32(ctx);
-            if x % 2 == 0 {
+            if x.is_multiple_of(2) {
                 ctx.reject_case();
             }
             ctx.event("accepted");
@@ -1327,18 +1327,6 @@ fn run_corpus_guided_counts_rejections() {
     let stats = runner.stats();
     assert_eq!(stats.accepted_iterations, 16);
     assert!(stats.rejected_iterations > 0);
-}
-
-#[test]
-fn run_corpus_guided_stops_after_too_many_rejections() {
-    let err = noprop::Runner::new(1, 8)
-        .run_corpus_guided(|ctx| {
-            ctx.reject_case();
-        })
-        .expect_err("always-rejecting property must hit the rejection cap");
-    let display = format!("{err}");
-    assert!(display.contains("too many rejections"), "{display}");
-    assert!(display.contains("run_corpus_guided"), "{display}");
 }
 
 #[test]
@@ -1371,15 +1359,20 @@ fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
         "candidate_index must equal the rejected count: {debug}"
     );
     let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
     assert!(display.contains("Semantic features:"), "{display}");
 }
 
 #[test]
 fn run_corpus_guided_bounds_high_cardinality_features() {
     // A property that reports effectively unbounded bucket values must
-    // not grow memory without bound: the per-case and global feature
-    // caps keep the registry finite. The run succeeds regardless of how
-    // many distinct values are reported.
+    // not crash or grow memory without bound. This is a smoke test:
+    // with 64 iterations × 3 buckets it stays far below the per-case
+    // (64) and global (1024) caps, so neither cap nor eviction fires
+    // here — those bounds are exercised by the SemanticCorpus unit
+    // tests. The run succeeding regardless of the reported values is
+    // the point.
     let mut runner = noprop::Runner::new(5, 64);
     runner
         .run_corpus_guided(|ctx| {
@@ -1406,7 +1399,7 @@ fn run_corpus_guided_rejected_cases_register_features() {
         .run_corpus_guided(|ctx| {
             let x = noprop::sample_u32(ctx);
             ctx.event("shared-feature");
-            if x % 2 == 0 {
+            if x.is_multiple_of(2) {
                 ctx.reject_case();
             }
             Ok(())
@@ -1429,7 +1422,7 @@ fn run_corpus_guided_is_reproducible_from_seed() {
                 let mut v = observed.take();
                 v.push(x);
                 observed.set(v);
-                if x % 2 == 0 {
+                if x.is_multiple_of(2) {
                     ctx.event("even");
                 }
                 Ok(())
@@ -1458,10 +1451,10 @@ fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
                 let mut v = observed.take();
                 v.push(x);
                 observed.set(v);
-                if x % 2 == 0 {
+                if x.is_multiple_of(2) {
                     ctx.event("even");
                 }
-                if x % 4 == 0 {
+                if x.is_multiple_of(4) {
                     ctx.reject_case();
                 }
                 Ok(())
@@ -1475,7 +1468,7 @@ fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
     let b = run(seed);
     assert_eq!(a, b, "rejected candidates must reproduce from the seed");
     assert!(
-        a.iter().any(|x| x % 4 == 0),
+        a.iter().any(|x| x.is_multiple_of(4)),
         "the rejected path must actually run: {a:?}"
     );
 }

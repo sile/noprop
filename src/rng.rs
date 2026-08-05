@@ -135,6 +135,13 @@ impl SemanticCoverage {
                 *c
             }
             None => {
+                // New labels are capped like `features`; a label past
+                // the cap cannot produce a feature anyway (its event
+                // would be discarded by `report`), so it needs no
+                // count.
+                if self.event_counts.len() >= MAX_FEATURES_PER_CASE {
+                    return;
+                }
                 self.event_counts.push((label, 1));
                 1
             }
