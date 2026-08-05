@@ -42,8 +42,10 @@ const REJECTED_PICK_DENOM: u64 = 8;
 /// property cannot grow the registry without bound.
 const MAX_GLOBAL_FEATURES: usize = 1024;
 
-/// Observability data from a [`Runner::run`](Runner::run) or
-/// [`Runner::run_targeted`](Runner::run_targeted) invocation.
+/// Observability data from a [`Runner::run`](Runner::run),
+/// [`Runner::run_targeted`](Runner::run_targeted) or
+/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// invocation.
 ///
 /// Read from a [`Runner`] after the run returns via
 /// [`Runner::stats`](Runner::stats), and also embedded in [`Error`] on
@@ -64,7 +66,8 @@ pub struct Stats {
     /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
     /// helpers (they discard via `reject_case` internally, so the two
     /// origins share this single counter), and — under
-    /// [`Runner::run_targeted`](Runner::run_targeted) — the
+    /// [`Runner::run_targeted`](Runner::run_targeted) and
+    /// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) — the
     /// exploratory-replay draw cap discards.
     pub rejected_iterations: usize,
     /// Total number of top-level `sample_*` invocations across every
@@ -163,8 +166,10 @@ pub struct Runner {
     stats: Stats,
 }
 
-/// Global rejection limit for a single [`Runner::run`](Runner::run) or
-/// [`Runner::run_targeted`](Runner::run_targeted) invocation.
+/// Global rejection limit for a single [`Runner::run`](Runner::run),
+/// [`Runner::run_targeted`](Runner::run_targeted) or
+/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// invocation.
 ///
 /// Total rejected iterations (across all iteration indices) are capped
 /// so that a generator which always calls
@@ -528,7 +533,7 @@ impl Runner {
             let feedback = ctx.take_feedback();
             let semantic_features = match feedback {
                 FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
-                _ => Vec::new(),
+                _ => unreachable!("run_corpus_guided enables corpus-guided mode"),
             };
             return Err(Error::from_panic(
                 self.seed,

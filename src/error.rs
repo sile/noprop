@@ -60,7 +60,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// entry point: `run`'s hint prints the bare constructor, while the
 /// targeted hint appends `run_targeted(|ctx| ...)` and the
 /// corpus-guided hint `run_corpus_guided(|ctx| ...)` with the closure
-/// body left as a placeholder. In both cases the original property
+/// body left as a placeholder. In each case the original property
 /// closure must be supplied before rerunning; the re-run size never
 /// needs to be recomputed by hand.
 pub struct Error {

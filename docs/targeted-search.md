@@ -51,14 +51,15 @@ Targeted search owns:
 
 It does not own:
 
-- semantic coverage or feature-based novelty search (planned)
+- semantic coverage or feature-based novelty search — see
+  `corpus_guided_search` for that design
 - a general-purpose optimizer that returns an arbitrary objective's
   maximum
 - shrink and failure-case minimization
 - public sampler traits or pluggable search policies
-- shared case-loop logic between `run` and `run_targeted` (the two
-  loops are kept separate for now; sharing them is deferred until the
-  search policies stabilize)
+- shared case-loop logic between the runner entry points (`run`,
+  `run_targeted`, `run_corpus_guided`; the loops are kept separate for
+  now — sharing them is deferred until the search policies stabilize)
 
 ## Feedback Protocol
 
