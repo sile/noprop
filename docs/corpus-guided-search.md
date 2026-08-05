@@ -74,6 +74,41 @@ The semantic methods are no-ops outside corpus-guided mode: the uniform
 runner and `TestCaseContext::new` ignore them, and the feedback state in
 those modes does not allocate.
 
+## Choosing a feedback method
+
+The four feedback methods observe different things; pick the one that
+matches the property's domain:
+
+- `event(label)` — for finite occurrences whose *count* matters only
+  coarsely. Use it for protocol phases, snapshot installs, error paths
+  reached. Repeated events saturate into buckets (1 / 2-3 / 4-7 / 8+),
+  so the search distinguishes "visited once" from "visited many times"
+  without needing exact counts.
+- `bucket(label, value)` — for state values that are large or
+  continuous, where the caller's domain knowledge picks the interesting
+  ranges. Example: queue length bucketed as 0 / 1-4 / 5-16 / 17+.
+  Bucket *before* reporting: a raw value that differs every case (a
+  timestamp, a byte count, a sequence number) defeats the corpus —
+  every case reports a novel feature, the global registry hits
+  `MAX_GLOBAL_FEATURES`, and novelty stops meaning anything.
+- `transition(label, from, to)` — for stateful tests, when the abstract
+  state change itself is what matters (role changes, protocol phase
+  advances). The `(from, to)` pair is part of the feature identity, so
+  "follower → leader" and "leader → follower" are different features
+  even under the same label.
+- `maximize(score)` — when "closeness to failure" can be designed as a
+  single scalar. Unlike the semantic methods it never registers a
+  feature; it only steers admission and eviction within a feature group
+  (under the priority policy). It is optional: a case that never calls
+  it is still admitted if it reports a novel feature.
+
+The label must identify a *meaning*, not a call site: using the same
+label for different meanings silently merges them (the search treats
+the first coverage as sufficient); using different labels for the same
+meaning splits one feature into many. `format!`-built labels are
+discouraged — a representation change silently changes every feature
+identity, and unbounded labels defeat the registry cap.
+
 ## Feature Registry
 
 The runner keeps a global observation set of features, in
