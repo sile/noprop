@@ -22,6 +22,12 @@ const DEDUP_TAIL: usize = 8;
 /// not count toward the cap.
 const MAX_CHOICES_PER_CASE: usize = 4096;
 
+/// Maximum number of semantic features one case may report in
+/// corpus-guided mode. Exceeding the cap discards the excess; an event
+/// saturating to a higher bucket replaces its earlier feature and does
+/// not count as a new one.
+const MAX_FEATURES_PER_CASE: usize = 64;
+
 /// Seedable non-cryptographic PRNG used by all noprop generators.
 ///
 /// The underlying algorithm is `xoshiro256**` with the initial 256-bit
@@ -80,13 +86,17 @@ pub struct TestCaseContext {
 /// Private feedback state carried by every [`TestCaseContext`].
 ///
 /// `Disabled` is the default and must stay allocation-free: `maximize`
-/// and the future semantic methods are no-ops while it is active. The
+/// and the semantic methods are no-ops while it is active. The
 /// `Targeted` variant collects the maximum scalar reported via
-/// [`TestCaseContext::maximize`] during one case.
-#[derive(Debug, Clone, Copy)]
+/// [`TestCaseContext::maximize`] during one case; the
+/// `SemanticCoverage` variant collects the semantic features reported
+/// via [`TestCaseContext::event`] / `bucket` / `transition` and an
+/// optional scalar priority via `maximize`.
+#[derive(Debug, Clone)]
 pub(crate) enum FeedbackState {
     Disabled,
     Targeted { max_score: ScalarFeedback },
+    SemanticCoverage(SemanticCoverage),
 }
 
 /// Three-state scalar feedback for one case.
@@ -95,11 +105,167 @@ pub(crate) enum FeedbackState {
 /// `Invalid` marks a `NaN` / infinity report. Keeping invalid out of
 /// the `f64` payload means a later `Valid` score can never mask an
 /// earlier invalid report.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) enum ScalarFeedback {
+    #[default]
     Missing,
     Valid(f64),
     Invalid,
+}
+
+/// Per-case semantic feedback collected in corpus-guided mode.
+///
+/// `features` holds the features the case reported so far, capped at
+/// [`MAX_FEATURES_PER_CASE`]; `priority` is the optional scalar score
+/// reported via [`TestCaseContext::maximize`]. `event_counts` tracks
+/// per-label repetition counts so repeated events saturate into
+/// [`EventBucket`] features instead of unbounded counts.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SemanticCoverage {
+    features: Vec<Feature>,
+    priority: ScalarFeedback,
+    event_counts: Vec<(&'static str, usize)>,
+}
+
+impl SemanticCoverage {
+    fn report_event(&mut self, label: &'static str) {
+        let count = match self.event_counts.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, c)) => {
+                *c += 1;
+                *c
+            }
+            None => {
+                // New labels are capped like `features`; a label past
+                // the cap cannot produce a feature anyway (its event
+                // would be discarded by `report`), so it needs no
+                // count.
+                if self.event_counts.len() >= MAX_FEATURES_PER_CASE {
+                    return;
+                }
+                self.event_counts.push((label, 1));
+                1
+            }
+        };
+        self.report(label, FeatureKind::Event(event_bucket(count)));
+    }
+
+    fn report(&mut self, label: &'static str, kind: FeatureKind) {
+        // An event replaces the previous event feature with the same
+        // label (bucket saturation); the replacement does not count
+        // toward the per-case cap. Bucket / transition features
+        // deduplicate on identity.
+        if matches!(kind, FeatureKind::Event(_)) {
+            if let Some(f) = self
+                .features
+                .iter_mut()
+                .find(|f| f.label == label && matches!(f.kind, FeatureKind::Event(_)))
+            {
+                f.kind = kind;
+                return;
+            }
+        } else if self
+            .features
+            .iter()
+            .any(|f| f.label == label && f.kind == kind)
+        {
+            return;
+        }
+        if self.features.len() < MAX_FEATURES_PER_CASE {
+            self.features.push(Feature { label, kind });
+        }
+    }
+
+    fn report_priority(&mut self, score: f64) {
+        let next = if score.is_finite() {
+            match self.priority {
+                ScalarFeedback::Missing => ScalarFeedback::Valid(score),
+                ScalarFeedback::Valid(current) => ScalarFeedback::Valid(current.max(score)),
+                ScalarFeedback::Invalid => ScalarFeedback::Invalid,
+            }
+        } else {
+            ScalarFeedback::Invalid
+        };
+        self.priority = next;
+    }
+
+    /// The features reported during the case, in report order.
+    #[cfg(test)]
+    pub(crate) fn features(&self) -> &[Feature] {
+        &self.features
+    }
+
+    /// Move the reported features out of the coverage state.
+    pub(crate) fn take_features(&mut self) -> Vec<Feature> {
+        std::mem::take(&mut self.features)
+    }
+
+    /// The optional scalar priority: `None` when `maximize` was never
+    /// called or reported a `NaN` / infinity value. Both are tolerated
+    /// in corpus-guided mode (the case proceeds without a priority).
+    pub(crate) fn priority(&self) -> Option<f64> {
+        match self.priority {
+            ScalarFeedback::Valid(score) => Some(score),
+            ScalarFeedback::Missing | ScalarFeedback::Invalid => None,
+        }
+    }
+}
+
+/// A semantic feature reported by a property in corpus-guided mode.
+///
+/// Feature identity is the `(label, kind)` pair: the same label used
+/// for a different bucket or transition is a different feature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Feature {
+    pub label: &'static str,
+    pub kind: FeatureKind,
+}
+
+impl Feature {
+    /// Machine-free rendering for failure reports.
+    pub(crate) fn display_repr(&self) -> String {
+        match self.kind {
+            FeatureKind::Event(_) => format!("event({:?})", self.label),
+            FeatureKind::Bucket { value } => format!("bucket({:?}, {value})", self.label),
+            FeatureKind::Transition { from, to } => {
+                format!("transition({:?}, {from}, {to})", self.label)
+            }
+        }
+    }
+}
+
+/// The kind of a semantic feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum FeatureKind {
+    /// Reaching a finite event. Repeated events saturate into
+    /// [`EventBucket`] features.
+    Event(EventBucket),
+    /// A caller-bucketed finite state value.
+    Bucket { value: u64 },
+    /// An abstract state transition in a stateful test.
+    Transition { from: u64, to: u64 },
+}
+
+/// Saturation buckets for repeated events within one case.
+///
+/// Counts 1, 2-3, 4-7, and 8+ map to distinct feature identities so a
+/// case that visits an event many times is distinguished from one that
+/// visits it once, without unbounded counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum EventBucket {
+    One,
+    TwoThree,
+    FourSeven,
+    EightPlus,
+}
+
+/// Map a per-case event repetition count to its saturation bucket.
+fn event_bucket(count: usize) -> EventBucket {
+    match count {
+        1 => EventBucket::One,
+        2..=3 => EventBucket::TwoThree,
+        4..=7 => EventBucket::FourSeven,
+        _ => EventBucket::EightPlus,
+    }
 }
 
 /// Private entropy source variant carried by every [`TestCaseContext`].
@@ -593,8 +759,9 @@ impl TestCaseContext {
     }
 
     /// Reject the current iteration and unwind out of the property
-    /// closure. Only valid inside [`Runner::run`](crate::Runner::run) or
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted);
+    /// closure. Only valid inside [`Runner::run`](crate::Runner::run),
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted) or
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided);
     /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
@@ -615,9 +782,9 @@ impl TestCaseContext {
     pub fn reject_case(&mut self) -> ! {
         if !self.inside_runner {
             panic!(
-                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run or \
-                 Runner::run_targeted property closure. Constructing a TestCaseContext directly via TestCaseContext::new does not \
-                 create a Runner boundary."
+                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run, \
+                 Runner::run_targeted or Runner::run_corpus_guided property closure. Constructing a \
+                 TestCaseContext directly via TestCaseContext::new does not create a Runner boundary."
             );
         }
         let location = Location::caller();
@@ -1013,18 +1180,73 @@ impl TestCaseContext {
     /// marks the whole case invalid. Rejected cases (via
     /// [`TestCaseContext::reject_case`]) discard their score — they do
     /// not need to call `maximize`.
+    ///
+    /// In corpus-guided mode (see
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided))
+    /// this reports an optional scalar priority for the case, using the
+    /// same aggregation and invalid handling.
     pub fn maximize(&mut self, score: f64) {
-        if let FeedbackState::Targeted { max_score } = &mut self.feedback {
-            let next = if score.is_finite() {
-                match *max_score {
-                    ScalarFeedback::Missing => ScalarFeedback::Valid(score),
-                    ScalarFeedback::Valid(current) => ScalarFeedback::Valid(current.max(score)),
-                    ScalarFeedback::Invalid => ScalarFeedback::Invalid,
-                }
-            } else {
-                ScalarFeedback::Invalid
-            };
-            *max_score = next;
+        match &mut self.feedback {
+            FeedbackState::Targeted { max_score } => {
+                let next = if score.is_finite() {
+                    match *max_score {
+                        ScalarFeedback::Missing => ScalarFeedback::Valid(score),
+                        ScalarFeedback::Valid(current) => ScalarFeedback::Valid(current.max(score)),
+                        ScalarFeedback::Invalid => ScalarFeedback::Invalid,
+                    }
+                } else {
+                    ScalarFeedback::Invalid
+                };
+                *max_score = next;
+            }
+            FeedbackState::SemanticCoverage(cov) => cov.report_priority(score),
+            FeedbackState::Disabled => {}
+        }
+    }
+
+    /// Report reaching a finite event for the current case.
+    ///
+    /// Only meaningful in corpus-guided mode:
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// switches the context into that mode before running its case
+    /// loop. In the default mode (plain [`Runner::run`](crate::Runner::run)
+    /// or a directly constructed context) this is an allocation-free
+    /// no-op.
+    ///
+    /// Repeating the same event within one case saturates into a fixed
+    /// hit-count bucket (1 / 2-3 / 4-7 / 8+ occurrences), so a case
+    /// that visits an event many times is distinguished from one that
+    /// visits it once, without unbounded counts.
+    pub fn event(&mut self, label: &'static str) {
+        if let FeedbackState::SemanticCoverage(cov) = &mut self.feedback {
+            cov.report_event(label);
+        }
+    }
+
+    /// Report a caller-bucketed finite state value for the current
+    /// case. `value` must come from a finite bucket designed by the
+    /// caller; unbounded values (timestamps, sequence numbers, byte
+    /// counts) defeat the corpus's stability and size bounds.
+    ///
+    /// Only meaningful in corpus-guided mode; a no-op otherwise.
+    /// Reporting the same `(label, value)` pair again within one case
+    /// is deduplicated.
+    pub fn bucket(&mut self, label: &'static str, value: u64) {
+        if let FeedbackState::SemanticCoverage(cov) = &mut self.feedback {
+            cov.report(label, FeatureKind::Bucket { value });
+        }
+    }
+
+    /// Report an abstract state transition for the current case: the
+    /// stateful test's model moved from `from` to `to` under the
+    /// command named by `label`.
+    ///
+    /// Only meaningful in corpus-guided mode; a no-op otherwise.
+    /// Reporting the same transition again within one case is
+    /// deduplicated.
+    pub fn transition(&mut self, label: &'static str, from: u64, to: u64) {
+        if let FeedbackState::SemanticCoverage(cov) = &mut self.feedback {
+            cov.report(label, FeatureKind::Transition { from, to });
         }
     }
 
@@ -1036,6 +1258,15 @@ impl TestCaseContext {
         self.feedback = FeedbackState::Targeted {
             max_score: ScalarFeedback::Missing,
         };
+    }
+
+    /// Switch the context into corpus-guided feedback mode for the
+    /// upcoming case. Called by
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// before each case; the case-local feedback is drained via
+    /// [`take_feedback`](Self::take_feedback) at the case boundary.
+    pub(crate) fn enable_corpus_guided(&mut self) {
+        self.feedback = FeedbackState::SemanticCoverage(SemanticCoverage::default());
     }
 
     /// Drain the case-local feedback state, resetting to disabled.
@@ -1772,6 +2003,151 @@ mod targeted_tests {
         let mut ctx = TestCaseContext::new(1);
         ctx.enable_targeted();
         ctx.maximize(1.0);
+        let _ = ctx.take_feedback();
+        assert!(matches!(ctx.feedback, FeedbackState::Disabled));
+    }
+
+    // === semantic features (corpus-guided mode) ===
+
+    #[test]
+    fn semantic_methods_are_noop_when_disabled() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.event("e");
+        ctx.bucket("b", 7);
+        ctx.transition("t", 0, 1);
+        ctx.maximize(1.0);
+        assert!(matches!(ctx.take_feedback(), FeedbackState::Disabled));
+    }
+
+    #[test]
+    fn corpus_guided_collects_event_bucket_and_transition() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.event("snapshot-install");
+        ctx.bucket("queue-length", 3);
+        ctx.transition("raft-role", 0, 1);
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                let reprs: Vec<String> = cov.features().iter().map(|f| f.display_repr()).collect();
+                assert_eq!(
+                    reprs,
+                    [
+                        "event(\"snapshot-install\")",
+                        "bucket(\"queue-length\", 3)",
+                        "transition(\"raft-role\", 0, 1)",
+                    ]
+                );
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_saturates_into_hit_count_buckets() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.event("visit");
+        ctx.event("visit");
+        ctx.event("visit");
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                let reprs: Vec<String> = cov.features().iter().map(|f| f.display_repr()).collect();
+                // 3 occurrences saturate into the 2-3 bucket; the
+                // earlier 1-occurrence feature is replaced, not kept.
+                assert_eq!(reprs, ["event(\"visit\")"]);
+                assert!(matches!(
+                    cov.features()[0].kind,
+                    FeatureKind::Event(EventBucket::TwoThree)
+                ));
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_bucket_boundaries() {
+        assert_eq!(event_bucket(1), EventBucket::One);
+        assert_eq!(event_bucket(2), EventBucket::TwoThree);
+        assert_eq!(event_bucket(3), EventBucket::TwoThree);
+        assert_eq!(event_bucket(4), EventBucket::FourSeven);
+        assert_eq!(event_bucket(7), EventBucket::FourSeven);
+        assert_eq!(event_bucket(8), EventBucket::EightPlus);
+        assert_eq!(event_bucket(100), EventBucket::EightPlus);
+    }
+
+    #[test]
+    fn duplicate_bucket_and_transition_features_deduplicate() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.bucket("q", 3);
+        ctx.bucket("q", 3);
+        ctx.transition("r", 0, 1);
+        ctx.transition("r", 0, 1);
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.features().len(), 2);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn per_case_feature_cap_discards_excess() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        for i in 0..(MAX_FEATURES_PER_CASE + 10) {
+            ctx.bucket("b", i as u64);
+        }
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.features().len(), MAX_FEATURES_PER_CASE);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corpus_guided_priority_keeps_maximum_within_case() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.maximize(1.0);
+        ctx.maximize(3.0);
+        ctx.maximize(2.0);
+        match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.priority(), Some(3.0));
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corpus_guided_priority_tolerates_missing_and_invalid() {
+        let mut missing = TestCaseContext::new(1);
+        missing.enable_corpus_guided();
+        match missing.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.priority(), None);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+
+        let mut invalid = TestCaseContext::new(1);
+        invalid.enable_corpus_guided();
+        invalid.maximize(f64::NAN);
+        match invalid.take_feedback() {
+            FeedbackState::SemanticCoverage(cov) => {
+                assert_eq!(cov.priority(), None);
+            }
+            other => panic!("expected corpus-guided feedback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn take_feedback_resets_corpus_guided_to_disabled() {
+        let mut ctx = TestCaseContext::new(1);
+        ctx.enable_corpus_guided();
+        ctx.event("e");
         let _ = ctx.take_feedback();
         assert!(matches!(ctx.feedback, FeedbackState::Disabled));
     }

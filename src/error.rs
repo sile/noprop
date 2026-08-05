@@ -1,16 +1,20 @@
-//! Error and result types for [`Runner::run`](crate::Runner::run) and
-//! [`Runner::run_targeted`](crate::Runner::run_targeted).
+//! Error and result types for [`Runner::run`](crate::Runner::run),
+//! [`Runner::run_targeted`](crate::Runner::run_targeted) and
+//! [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
 
 use std::panic::Location;
 
 use crate::GeneratedValue;
+use crate::rng::Feature;
 use crate::runner::Stats;
 
 /// Result alias used across noprop's public API.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Failure information from a [`Runner::run`](crate::Runner::run) or
-/// [`Runner::run_targeted`](crate::Runner::run_targeted) invocation.
+/// Failure information from a [`Runner::run`](crate::Runner::run),
+/// [`Runner::run_targeted`](crate::Runner::run_targeted) or
+/// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+/// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
 /// reproducible: rerunning `noprop::Runner::new(err.seed(), N)` with
@@ -24,6 +28,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// accepted iterations that completed before the runner gave up as
 /// `case_index()`, so the same seed and iteration budget reproduce the
 /// same exit.
+///
+/// A corpus-guided failure report (`run_corpus_guided`) additionally
+/// carries the semantic features the failing case reported and a
+/// one-based candidate index. The candidate index counts every attempt
+/// — accepted, rejected, and the failing case itself — so it relates
+/// to the zero-based `case_index()` (accepted iterations only) as
+/// `candidate_index = case_index + 1 + rejections before the failure`.
+/// For `TooManyRejections`, the candidate index is the ordinal of the
+/// last rejected attempt (`accepted + rejected`) and the semantic
+/// features are those of that last rejected case.
 ///
 /// `generated()` returns the sequence of values every primitive
 /// generator produced during the failing case, together with each call
@@ -44,8 +58,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// The hint reuses the original iteration budget and names the failing
 /// entry point: `run`'s hint prints the bare constructor, while the
-/// targeted hint appends `run_targeted(|ctx| ...)` with the closure
-/// body left as a placeholder. In both cases the original property
+/// targeted hint appends `run_targeted(|ctx| ...)` and the
+/// corpus-guided hint `run_corpus_guided(|ctx| ...)` with the closure
+/// body left as a placeholder. In each case the original property
 /// closure must be supplied before rerunning; the re-run size never
 /// needs to be recomputed by hand.
 pub struct Error {
@@ -59,10 +74,36 @@ pub struct Error {
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
     stats: Stats,
-    /// `true` when the failure came from
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted). Switches
-    /// the reproduce hint to the targeted entry point.
-    targeted: bool,
+    /// The runner entry point that produced this failure. Switches the
+    /// reproduce hint.
+    policy: SearchPolicy,
+    /// Semantic details of the failing case (corpus-guided runs only;
+    /// `None` otherwise).
+    semantic: Option<Box<SemanticFailureReport>>,
+}
+
+/// Semantic details carried by a corpus-guided failure report.
+///
+/// Boxed so `Error` stays small: the fields are only populated on the
+/// corpus-guided failure path, and the uniform / targeted entry points
+/// never touch them.
+struct SemanticFailureReport {
+    /// Semantic features the failing case reported.
+    features: Vec<Feature>,
+    /// The one-based index of the failing candidate across accepted
+    /// and rejected cases (the failing case itself included).
+    candidate_index: usize,
+}
+
+/// The runner entry point that produced an [`Error`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchPolicy {
+    /// [`Runner::run`](crate::Runner::run).
+    Uniform,
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted).
+    Targeted,
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+    CorpusGuided,
 }
 
 enum ErrorKind {
@@ -95,7 +136,7 @@ impl Error {
         message: String,
         generated: Vec<GeneratedValue>,
         stats: Stats,
-        targeted: bool,
+        policy: SearchPolicy,
     ) -> Self {
         Self::new(
             seed,
@@ -104,8 +145,19 @@ impl Error {
             ErrorKind::Panic { message },
             generated,
             stats,
-            targeted,
+            policy,
         )
+    }
+
+    /// Attach the semantic features and candidate index of a failing
+    /// corpus-guided case. Used only by
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+    pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
+        self.semantic = Some(Box::new(SemanticFailureReport {
+            features,
+            candidate_index,
+        }));
+        self
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -117,7 +169,7 @@ impl Error {
         last_reject_location: &'static Location<'static>,
         generated: Vec<GeneratedValue>,
         stats: Stats,
-        targeted: bool,
+        policy: SearchPolicy,
     ) -> Self {
         Self::new(
             seed,
@@ -129,7 +181,7 @@ impl Error {
             },
             generated,
             stats,
-            targeted,
+            policy,
         )
     }
 
@@ -147,7 +199,7 @@ impl Error {
             ErrorKind::MissingFeedback,
             generated,
             stats,
-            true,
+            SearchPolicy::Targeted,
         )
     }
 
@@ -165,7 +217,7 @@ impl Error {
             ErrorKind::InvalidFeedback,
             generated,
             stats,
-            true,
+            SearchPolicy::Targeted,
         )
     }
 
@@ -176,7 +228,7 @@ impl Error {
         kind: ErrorKind,
         generated: Vec<GeneratedValue>,
         stats: Stats,
-        targeted: bool,
+        policy: SearchPolicy,
     ) -> Self {
         Self {
             seed,
@@ -185,7 +237,8 @@ impl Error {
             kind,
             generated,
             stats,
-            targeted,
+            policy,
+            semantic: None,
         }
     }
 
@@ -226,20 +279,18 @@ impl Error {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original iteration budget so reruns hit the same
-    /// rejection cap. In targeted mode the closure body is a
-    /// placeholder: the caller substitutes the original property
+    /// rejection cap. In targeted / corpus-guided mode the closure body
+    /// is a placeholder: the caller substitutes the original property
     /// closure.
     fn reproduce_command(&self) -> String {
-        if self.targeted {
-            format!(
-                "noprop::Runner::new({:#018x}, {}).run_targeted(|ctx| ...)",
-                self.seed, self.iterations
-            )
-        } else {
-            format!(
-                "noprop::Runner::new({:#018x}, {})",
-                self.seed, self.iterations
-            )
+        let base = format!(
+            "noprop::Runner::new({:#018x}, {})",
+            self.seed, self.iterations
+        );
+        match self.policy {
+            SearchPolicy::Uniform => base,
+            SearchPolicy::Targeted => format!("{base}.run_targeted(|ctx| ...)"),
+            SearchPolicy::CorpusGuided => format!("{base}.run_corpus_guided(|ctx| ...)"),
         }
     }
 }
@@ -249,6 +300,10 @@ impl std::fmt::Debug for Error {
         writeln!(f, "Error {{")?;
         writeln!(f, "    seed: {:#018x},", self.seed)?;
         writeln!(f, "    case_index: {},", self.case_index)?;
+        if let Some(report) = &self.semantic {
+            writeln!(f, "    candidate_index: {},", report.candidate_index)?;
+        }
+        writeln!(f, "    policy: {:?},", self.policy)?;
         match &self.kind {
             ErrorKind::Panic { message } => {
                 writeln!(f, "    panic: {message:?},")?;
@@ -285,6 +340,15 @@ impl std::fmt::Debug for Error {
             writeln!(f, "    generated: [")?;
             for entry in &self.generated {
                 writeln!(f, "        {entry:?}")?;
+            }
+            writeln!(f, "    ],")?;
+        }
+        if let Some(report) = &self.semantic
+            && !report.features.is_empty()
+        {
+            writeln!(f, "    semantic_features: [")?;
+            for feature in &report.features {
+                writeln!(f, "        {},", feature.display_repr())?;
             }
             writeln!(f, "    ],")?;
         }
@@ -345,6 +409,14 @@ impl std::fmt::Display for Error {
             writeln!(f, "Generated values:")?;
             for entry in &self.generated {
                 writeln!(f, "  {entry:?}")?;
+            }
+        }
+        if let Some(report) = &self.semantic
+            && !report.features.is_empty()
+        {
+            writeln!(f, "Semantic features:")?;
+            for feature in &report.features {
+                writeln!(f, "  {}", feature.display_repr())?;
             }
         }
         Ok(())

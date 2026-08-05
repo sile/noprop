@@ -2,8 +2,10 @@
 
 use std::panic::AssertUnwindSafe;
 
+use crate::error::SearchPolicy;
 use crate::rng::{
-    ChoiceMeta, ChoiceSequence, FeedbackState, ScalarFeedback, XoshiroState, is_iteration_rejected,
+    ChoiceMeta, ChoiceSequence, Feature, FeedbackState, ScalarFeedback, XoshiroState,
+    is_iteration_rejected,
 };
 use crate::{Error, Result, TestCaseContext};
 
@@ -28,8 +30,22 @@ const RANDOM_RESTART_DENOM: u64 = 8;
 /// entry, keeping an alternative search path alive.
 const LOW_SCORE_DENOM: u64 = 4;
 
-/// Observability data from a [`Runner::run`](Runner::run) or
-/// [`Runner::run_targeted`](Runner::run_targeted) invocation.
+/// Denominator of the rejected-entry pick probability: one in
+/// `REJECTED_PICK_DENOM` corpus picks target the rejected queue, which
+/// is kept with lower energy than accepted entries (a scaffolding
+/// toward sparse preconditions, not the main search path).
+const REJECTED_PICK_DENOM: u64 = 8;
+
+/// Maximum number of semantic features observed across a whole
+/// corpus-guided run. After the cap is reached, new features are not
+/// registered and never make a case interesting, so a high-cardinality
+/// property cannot grow the registry without bound.
+const MAX_GLOBAL_FEATURES: usize = 1024;
+
+/// Observability data from a [`Runner::run`](Runner::run),
+/// [`Runner::run_targeted`](Runner::run_targeted) or
+/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// invocation.
 ///
 /// Read from a [`Runner`] after the run returns via
 /// [`Runner::stats`](Runner::stats), and also embedded in [`Error`] on
@@ -50,7 +66,8 @@ pub struct Stats {
     /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
     /// helpers (they discard via `reject_case` internally, so the two
     /// origins share this single counter), and — under
-    /// [`Runner::run_targeted`](Runner::run_targeted) — the
+    /// [`Runner::run_targeted`](Runner::run_targeted) and
+    /// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) — the
     /// exploratory-replay draw cap discards.
     pub rejected_iterations: usize,
     /// Total number of top-level `sample_*` invocations across every
@@ -149,8 +166,10 @@ pub struct Runner {
     stats: Stats,
 }
 
-/// Global rejection limit for a single [`Runner::run`](Runner::run) or
-/// [`Runner::run_targeted`](Runner::run_targeted) invocation.
+/// Global rejection limit for a single [`Runner::run`](Runner::run),
+/// [`Runner::run_targeted`](Runner::run_targeted) or
+/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// invocation.
 ///
 /// Total rejected iterations (across all iteration indices) are capped
 /// so that a generator which always calls
@@ -259,7 +278,7 @@ impl Runner {
             ctx.enable_targeted();
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
             let rejection = ctx.take_rejection();
-            total_samples += ctx.total_samples();
+            total_samples = total_samples.saturating_add(ctx.total_samples());
 
             if let Some(state) = rejection {
                 rejected += 1;
@@ -271,6 +290,7 @@ impl Runner {
                         rejected,
                         total_samples,
                         state.location,
+                        SearchPolicy::Targeted,
                     ));
                 }
                 continue;
@@ -307,6 +327,9 @@ impl Runner {
                         FeedbackState::Disabled => {
                             unreachable!("run_targeted enables targeted mode before each case")
                         }
+                        FeedbackState::SemanticCoverage(_) => {
+                            unreachable!("run_targeted never enables corpus-guided mode")
+                        }
                     };
                     // The carried choice sequence (recorded or
                     // exploratory) becomes the next mutation seed.
@@ -338,6 +361,7 @@ impl Runner {
                                 rejected,
                                 total_samples,
                                 std::panic::Location::caller(),
+                                SearchPolicy::Targeted,
                             ));
                         }
                         continue;
@@ -354,8 +378,173 @@ impl Runner {
                 message,
                 generated,
                 self.stats,
-                true,
+                SearchPolicy::Targeted,
             ));
+        }
+        record_stats(self, accepted, rejected, total_samples);
+        Ok(())
+    }
+
+    /// Corpus-guided search over semantic features reported via
+    /// [`TestCaseContext::event`](crate::TestCaseContext::event) /
+    /// [`bucket`](crate::TestCaseContext::bucket) /
+    /// [`transition`](crate::TestCaseContext::transition), with an
+    /// optional scalar priority via
+    /// [`TestCaseContext::maximize`](crate::TestCaseContext::maximize).
+    ///
+    /// The property closure has the same shape as
+    /// [`run`](Runner::run), so the same property can be exercised
+    /// under both policies. Unlike targeted mode, feedback is not
+    /// mandatory: an accepted case that reports no semantic feature is
+    /// simply not interesting (it never enters the corpus), and a case
+    /// that never calls `maximize` (or reports `NaN` / infinity)
+    /// proceeds without a priority. No missing / invalid feedback error
+    /// is raised.
+    ///
+    /// Candidates are produced from a bounded corpus of interesting
+    /// cases: a case that registers at least one globally unobserved
+    /// feature is admitted, mutated within its recorded constraints,
+    /// and replayed with exploratory generation for draws the mutation
+    /// introduces. A case that registers no novel feature may still be
+    /// admitted — under the scalar-priority policy — by replacing the
+    /// lowest-scored entry of a feature group it overlaps when its
+    /// score beats that entry. Accepted and rejected cases live in
+    /// separate queues (the rejected queue is picked with probability
+    /// `1 / REJECTED_PICK_DENOM`); with probability
+    /// `1 / RANDOM_RESTART_DENOM` a candidate is freshly generated
+    /// instead, so the search can escape local optima.
+    ///
+    /// The rejection semantics (global rejection cap, `Stats`, and the
+    /// `Runner::iterations` budget counting only accepted cases) match
+    /// [`run`](Runner::run).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
+    /// runner
+    ///     .run_corpus_guided(|ctx| {
+    ///         let x = noprop::sample_u32(ctx);
+    ///         if x == 0 {
+    ///             ctx.event("zero");
+    ///         }
+    ///         Ok(())
+    ///     })
+    ///     .expect("corpus-guided run must succeed");
+    /// ```
+    pub fn run_corpus_guided<F>(&mut self, f: F) -> Result<()>
+    where
+        F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
+    {
+        self.stats = Stats::default();
+        let mut search = CorpusGuidedSearch::new(self.seed, CorpusPolicy::SemanticWithPriority);
+        let rejection_cap = rejection_limit(self.iterations);
+        let mut accepted: usize = 0;
+        let mut rejected: usize = 0;
+        let mut total_samples: usize = 0;
+        let mut candidate_index: usize = 0;
+
+        while accepted < self.iterations {
+            // Each iteration gets a fresh context (recording or
+            // exploratory), so there is no per-case state to clear.
+            let mut ctx = search.next_context();
+            ctx.set_inside_runner();
+            ctx.enable_corpus_guided();
+            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
+            let rejection = ctx.take_rejection();
+            total_samples = total_samples.saturating_add(ctx.total_samples());
+            candidate_index = candidate_index.saturating_add(1);
+
+            if let Some(state) = rejection {
+                rejected += 1;
+                if rejected > rejection_cap {
+                    // Cap exceeded: report before consuming the
+                    // feedback, so the error can carry the last
+                    // rejected case's semantic features and candidate
+                    // index (drained inside `too_many_rejections`).
+                    return Err(too_many_rejections(
+                        self,
+                        &mut ctx,
+                        accepted,
+                        rejected,
+                        total_samples,
+                        state.location,
+                        SearchPolicy::CorpusGuided,
+                    ));
+                }
+                // A rejected case may still register novel features and
+                // enter the rejected queue as scaffolding toward sparse
+                // preconditions.
+                let feedback = ctx.take_feedback();
+                if let FeedbackState::SemanticCoverage(mut cov) = feedback {
+                    let features = cov.take_features();
+                    if let Some(sequence) = ctx.take_sequence() {
+                        search.corpus.admit_rejected(sequence, features);
+                    }
+                }
+                continue;
+            }
+
+            let message = match outcome {
+                Ok(Ok(())) => {
+                    // Accepted case: the reported features decide
+                    // interest; the priority is optional.
+                    let feedback = ctx.take_feedback();
+                    let mut cov = match feedback {
+                        FeedbackState::SemanticCoverage(cov) => cov,
+                        _ => unreachable!("run_corpus_guided enables corpus-guided mode"),
+                    };
+                    let features = cov.take_features();
+                    let priority = cov.priority();
+                    if let Some(sequence) = ctx.take_sequence() {
+                        search.corpus.admit_accepted(sequence, features, priority);
+                    }
+                    accepted += 1;
+                    continue;
+                }
+                Ok(Err(err)) => format!("{err}"),
+                Err(panic) => {
+                    // Defensive: an IterationRejected marker without a
+                    // stored rejection state shouldn't happen because
+                    // `reject_case` (and the exploratory draw cap)
+                    // always set the state before resuming unwind. Keep
+                    // the same guard as `run` so all entry points treat
+                    // a stray marker identically.
+                    if is_iteration_rejected(&*panic) {
+                        rejected += 1;
+                        if rejected > rejection_cap {
+                            return Err(too_many_rejections(
+                                self,
+                                &mut ctx,
+                                accepted,
+                                rejected,
+                                total_samples,
+                                std::panic::Location::caller(),
+                                SearchPolicy::CorpusGuided,
+                            ));
+                        }
+                        continue;
+                    }
+                    panic_message(panic)
+                }
+            };
+            record_stats(self, accepted, rejected, total_samples);
+            let generated = ctx.take_generated();
+            let feedback = ctx.take_feedback();
+            let semantic_features = match feedback {
+                FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
+                _ => unreachable!("run_corpus_guided enables corpus-guided mode"),
+            };
+            return Err(Error::from_panic(
+                self.seed,
+                accepted,
+                self.iterations,
+                message,
+                generated,
+                self.stats,
+                SearchPolicy::CorpusGuided,
+            )
+            .with_semantic(semantic_features, candidate_index));
         }
         record_stats(self, accepted, rejected, total_samples);
         Ok(())
@@ -432,7 +621,7 @@ impl Runner {
                         state.location,
                         generated,
                         self.stats,
-                        false,
+                        SearchPolicy::Uniform,
                     ));
                 }
                 continue;
@@ -465,7 +654,7 @@ impl Runner {
                                 unknown_location,
                                 generated,
                                 self.stats,
-                                false,
+                                SearchPolicy::Uniform,
                             ));
                         }
                         continue;
@@ -482,7 +671,7 @@ impl Runner {
                 message,
                 generated,
                 self.stats,
-                false,
+                SearchPolicy::Uniform,
             ));
         }
         record_stats(self, accepted, rejected, ctx.total_samples());
@@ -516,8 +705,11 @@ fn record_stats(runner: &mut Runner, accepted: usize, rejected: usize, total_sam
     };
 }
 
-/// Record run stats and build the targeted too-many-rejections exit
-/// error.
+/// Record run stats and build the too-many-rejections exit error.
+///
+/// For corpus-guided runs, the error additionally carries the semantic
+/// features of the last rejected case and its candidate index (the
+/// ordinal of the attempt that exceeded the cap: `accepted + rejected`).
 fn too_many_rejections(
     runner: &mut Runner,
     ctx: &mut TestCaseContext,
@@ -525,10 +717,11 @@ fn too_many_rejections(
     rejected: usize,
     total_samples: usize,
     location: &'static std::panic::Location<'static>,
+    policy: SearchPolicy,
 ) -> Error {
     record_stats(runner, accepted, rejected, total_samples);
     let generated = ctx.take_generated();
-    Error::from_too_many_rejections(
+    let err = Error::from_too_many_rejections(
         runner.seed,
         accepted,
         runner.iterations,
@@ -536,8 +729,16 @@ fn too_many_rejections(
         location,
         generated,
         runner.stats,
-        true,
-    )
+        policy,
+    );
+    if policy == SearchPolicy::CorpusGuided {
+        let features = match ctx.take_feedback() {
+            FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
+            _ => Vec::new(),
+        };
+        return err.with_semantic(features, accepted + rejected);
+    }
+    err
 }
 
 /// One candidate in the targeted corpus: the recorded choice sequence
@@ -658,6 +859,333 @@ impl TargetedSearch {
         } else {
             let idx = self.prng.sample_below(self.corpus.entries.len() as u64) as usize;
             &self.corpus.entries[idx]
+        }
+    }
+}
+
+/// Corpus-guided search policy.
+///
+/// `SemanticOnly` admits cases purely on novelty: a case that
+/// registers no novel feature never enters the corpus, and `maximize`
+/// is ignored. `SemanticWithPriority` additionally lets a case with no
+/// novel feature replace the lowest-scored entry of a feature group it
+/// overlaps, and breaks eviction ties on the lowest score. The two
+/// policies share one corpus engine; the difference is confined to
+/// admission and eviction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorpusPolicy {
+    /// Tested directly; `run_corpus_guided` currently uses
+    /// `SemanticWithPriority`, and the comparison that picks the
+    /// adopted policy is deferred until benchmark data exists.
+    #[cfg_attr(not(test), expect(dead_code))]
+    SemanticOnly,
+    SemanticWithPriority,
+}
+
+/// One candidate in the semantic corpus: the recorded choice sequence
+/// of an interesting case, the features it newly registered, and the
+/// feature group it belongs to.
+///
+/// The sequence carries whatever the accepted case recorded: recorded
+/// cases keep their attempt spans, exploratory cases have none
+/// (exploration records no spans). Mutation reads only the draws and
+/// their metadata, never the spans.
+struct SemanticEntry {
+    sequence: ChoiceSequence,
+    /// The features this case newly registered in the global
+    /// observation set. Empty when the case was admitted by
+    /// scalar-priority replacement rather than by novelty. The count
+    /// is the eviction criterion (fewest novel features evicted
+    /// first).
+    novel: Vec<Feature>,
+    /// The features the case reported, including already-observed
+    /// ones. Kept so a priority-replaced entry stays a member of its
+    /// feature group and can be outscored again.
+    group: Vec<Feature>,
+    /// Optional scalar priority of the case (`None` when `maximize`
+    /// was never called or reported an invalid value).
+    score: Option<f64>,
+}
+
+/// Bounded corpus of interesting cases for corpus-guided search.
+///
+/// Accepted and rejected cases live in separate queues; the combined
+/// size is capped at `CORPUS_SIZE`. Admission and eviction are
+/// deterministic and follow the policy:
+///
+/// - A case that registers at least one novel feature is admitted
+///   while the combined size is below the cap (both policies).
+/// - Once full, the entry with the fewest newly registered features is
+///   evicted; ties keep the earlier arrival. Under
+///   `SemanticWithPriority`, ties within that group break on the
+///   lowest score (with missing scores counted as lowest).
+/// - Under `SemanticWithPriority`, a case with no novel feature is
+///   admitted only when its priority beats the lowest-scored entry of
+///   a feature group it overlaps (replacing that entry). Under
+///   `SemanticOnly` such a case is never admitted.
+struct SemanticCorpus {
+    policy: CorpusPolicy,
+    accepted: Vec<SemanticEntry>,
+    rejected: Vec<SemanticEntry>,
+    /// Globally observed features in first-registration order, capped
+    /// at `MAX_GLOBAL_FEATURES`. A feature already present here is not
+    /// interesting again.
+    observed: Vec<Feature>,
+}
+
+impl SemanticCorpus {
+    fn new(policy: CorpusPolicy) -> Self {
+        Self {
+            policy,
+            accepted: Vec::with_capacity(CORPUS_SIZE),
+            rejected: Vec::with_capacity(CORPUS_SIZE),
+            observed: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.accepted.is_empty() && self.rejected.is_empty()
+    }
+
+    /// The features of `case_features` that are not yet in the global
+    /// observation set, in report order.
+    fn novel_features(&self, case_features: &[Feature]) -> Vec<Feature> {
+        case_features
+            .iter()
+            .filter(|f| !self.observed.contains(f))
+            .cloned()
+            .collect()
+    }
+
+    /// Register novel features into the global observation set,
+    /// stopping at `MAX_GLOBAL_FEATURES`. Returns the features that
+    /// were actually registered (an empty result means the case added
+    /// nothing new and is not interesting).
+    ///
+    /// `novel` must be the output of [`novel_features`](Self::novel_features)
+    /// (or otherwise contain only features absent from `observed`);
+    /// duplicates are not checked here.
+    fn register(&mut self, novel: &[Feature]) -> Vec<Feature> {
+        let mut registered = Vec::new();
+        for feature in novel {
+            if self.observed.len() >= MAX_GLOBAL_FEATURES {
+                break;
+            }
+            self.observed.push(feature.clone());
+            registered.push(feature.clone());
+        }
+        registered
+    }
+
+    /// Admit an accepted case. Returns `true` when the case entered
+    /// the corpus.
+    fn admit_accepted(
+        &mut self,
+        sequence: ChoiceSequence,
+        case_features: Vec<Feature>,
+        score: Option<f64>,
+    ) -> bool {
+        let novel = self.novel_features(&case_features);
+        let registered = self.register(&novel);
+        if !registered.is_empty() {
+            self.accepted.push(SemanticEntry {
+                sequence,
+                novel: registered,
+                group: case_features,
+                score,
+            });
+            self.evict_if_over_capacity();
+            return true;
+        }
+        // No novel feature: under SemanticWithPriority, admit by
+        // scalar-priority replacement within an overlapping feature
+        // group, if the score beats the group's lowest-scored entry.
+        // The replacement keeps the case's group membership so it can
+        // be outscored again. SemanticOnly never admits such a case.
+        if self.policy == CorpusPolicy::SemanticWithPriority
+            && let (Some(score), Some(victim)) = (score, self.group_lowest(&case_features))
+            && Self::score_beats(Some(score), self.accepted[victim].score)
+        {
+            self.accepted[victim] = SemanticEntry {
+                sequence,
+                novel: Vec::new(),
+                group: case_features,
+                score: Some(score),
+            };
+            return true;
+        }
+        false
+    }
+
+    /// Admit a rejected case that registered novel features, into the
+    /// rejected queue (kept as low-energy scaffolding).
+    fn admit_rejected(&mut self, sequence: ChoiceSequence, case_features: Vec<Feature>) -> bool {
+        let novel = self.novel_features(&case_features);
+        let registered = self.register(&novel);
+        if registered.is_empty() {
+            return false;
+        }
+        self.rejected.push(SemanticEntry {
+            sequence,
+            novel: registered,
+            group: case_features,
+            score: None,
+        });
+        self.evict_if_over_capacity();
+        true
+    }
+
+    /// Index of the lowest-scored accepted entry that shares at least
+    /// one feature with `case_features`, or `None` when no group member
+    /// exists. Missing scores count as the lowest; ties keep the
+    /// earlier arrival.
+    fn group_lowest(&self, case_features: &[Feature]) -> Option<usize> {
+        let mut best: Option<usize> = None;
+        for (i, entry) in self.accepted.iter().enumerate() {
+            if !entry.group.iter().any(|f| case_features.contains(f)) {
+                continue;
+            }
+            match best {
+                None => best = Some(i),
+                Some(b) => {
+                    if Self::score_beats(self.accepted[b].score, entry.score) {
+                        best = Some(i);
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// `true` when `a` is a strictly better score than `b` (missing
+    /// scores count as the lowest).
+    fn score_beats(a: Option<f64>, b: Option<f64>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => a > b,
+            (Some(_), None) => true,
+            (None, _) => false,
+        }
+    }
+
+    /// Index of the weakest accepted entry: lowest score, missing
+    /// scores count as the lowest, ties keep the earlier arrival.
+    fn weakest_accepted(&self) -> usize {
+        let mut min = 0;
+        for (i, entry) in self.accepted.iter().enumerate().skip(1) {
+            let incumbent = self.accepted[min].score;
+            if Self::score_beats(incumbent, entry.score) {
+                min = i;
+            }
+        }
+        min
+    }
+
+    /// Index of the weakest entry across both queues: fewest newly
+    /// registered features first; ties break on the lowest score
+    /// (missing counts as lowest); remaining ties keep the earlier
+    /// arrival.
+    fn weakest_overall(&self) -> usize {
+        let mut weakest: Option<(&SemanticEntry, usize)> = None;
+        for (i, entry) in self.accepted.iter().chain(self.rejected.iter()).enumerate() {
+            match weakest {
+                None => weakest = Some((entry, i)),
+                Some((incumbent, _)) => {
+                    let weaker = if entry.novel.len() != incumbent.novel.len() {
+                        entry.novel.len() < incumbent.novel.len()
+                    } else if self.policy == CorpusPolicy::SemanticWithPriority {
+                        Self::score_beats(incumbent.score, entry.score)
+                    } else {
+                        false
+                    };
+                    if weaker {
+                        weakest = Some((entry, i));
+                    }
+                }
+            }
+        }
+        weakest.expect("corpus is non-empty while evicting").1
+    }
+
+    /// Evict the weakest entry (across both queues) while the combined
+    /// size exceeds `CORPUS_SIZE`.
+    fn evict_if_over_capacity(&mut self) {
+        while self.accepted.len() + self.rejected.len() > CORPUS_SIZE {
+            let idx = self.weakest_overall();
+            if idx < self.accepted.len() {
+                self.accepted.remove(idx);
+            } else {
+                self.rejected.remove(idx - self.accepted.len());
+            }
+        }
+    }
+}
+
+/// Per-run search state owned by the runner: the semantic corpus and
+/// the search PRNG from which every exploratory decision (entry pick,
+/// mutation site, restart roll, exploratory draw seed) is derived in
+/// fixed order.
+struct CorpusGuidedSearch {
+    corpus: SemanticCorpus,
+    prng: XoshiroState,
+}
+
+impl CorpusGuidedSearch {
+    fn new(seed: u64, policy: CorpusPolicy) -> Self {
+        Self {
+            corpus: SemanticCorpus::new(policy),
+            prng: XoshiroState::from_seed(seed),
+        }
+    }
+
+    /// Build the context for the next candidate.
+    ///
+    /// - While the corpus is empty, or with probability
+    ///   `1 / RANDOM_RESTART_DENOM`, a fresh candidate is generated
+    ///   from a case seed derived from the search PRNG (recording
+    ///   mode).
+    /// - Otherwise, with probability `1 / REJECTED_PICK_DENOM` the
+    ///   rejected queue is picked (when non-empty); a corpus entry is
+    ///   then picked — usually the lowest-scored accepted entry with
+    ///   probability `1 / LOW_SCORE_DENOM`, otherwise a uniform
+    ///   pick — its draws are mutated within their recorded
+    ///   constraints, and the result is explored (replay + generated
+    ///   tail draws).
+    ///
+    /// The search PRNG is consumed per candidate in this fixed order:
+    /// the restart roll first (skipped while the corpus is empty),
+    /// then — for exploratory candidates — the explore seed, the
+    /// rejected-queue roll (skipped while it is empty), the low-score
+    /// roll and index roll, and finally the mutation rolls. This fixed
+    /// order keeps the run reproducible from the seed.
+    fn next_context(&mut self) -> TestCaseContext {
+        let restart = self.corpus.is_empty() || self.prng.sample_below(RANDOM_RESTART_DENOM) == 0;
+        if restart {
+            let case_seed = self.prng.next_u64();
+            TestCaseContext::recording(case_seed)
+        } else {
+            let explore_seed = self.prng.next_u64();
+            // Prefer the accepted queue, except with probability
+            // `1 / REJECTED_PICK_DENOM` pick the rejected queue when it
+            // is non-empty. The rejected queue is the only source while
+            // the accepted queue is empty (an early rejected case that
+            // registered novel features).
+            let use_rejected = !self.corpus.rejected.is_empty()
+                && (self.corpus.accepted.is_empty()
+                    || self.prng.sample_below(REJECTED_PICK_DENOM) == 0);
+            let mut sequence = if use_rejected {
+                let idx = self.prng.sample_below(self.corpus.rejected.len() as u64) as usize;
+                self.corpus.rejected[idx].sequence.clone()
+            } else {
+                let low = self.prng.sample_below(LOW_SCORE_DENOM) == 0;
+                let idx = if low {
+                    self.corpus.weakest_accepted()
+                } else {
+                    self.prng.sample_below(self.corpus.accepted.len() as u64) as usize
+                };
+                self.corpus.accepted[idx].sequence.clone()
+            };
+            mutate_sequence(&mut sequence, &mut self.prng);
+            TestCaseContext::exploring(sequence, explore_seed)
         }
     }
 }
@@ -799,6 +1327,453 @@ mod tests {
             "a score below the lowest must be rejected"
         );
         assert_eq!(corpus.entries.len(), CORPUS_SIZE);
+    }
+
+    // === SemanticCorpus admission / eviction ===
+
+    fn event_feature(label: &'static str) -> Feature {
+        Feature {
+            label,
+            kind: crate::rng::FeatureKind::Event(crate::rng::EventBucket::One),
+        }
+    }
+
+    fn bucket_feature(label: &'static str, value: u64) -> Feature {
+        Feature {
+            label,
+            kind: crate::rng::FeatureKind::Bucket { value },
+        }
+    }
+
+    #[test]
+    fn semantic_corpus_admits_novel_features() {
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("a")], None),
+            "a case with a novel feature must be admitted"
+        );
+        assert!(
+            !corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("a")], None),
+            "a case with only known features must not be admitted without priority"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+    }
+
+    #[test]
+    fn semantic_only_policy_ignores_priority() {
+        // Under SemanticOnly, `maximize` is ignored: a case with no
+        // novel feature is never admitted, no matter its score.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticOnly);
+        assert!(
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(100.0)
+            ),
+            "a novel feature must still be admitted"
+        );
+        assert!(
+            !corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(200.0)
+            ),
+            "SemanticOnly must not admit by priority"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+        assert_eq!(corpus.accepted[0].score, Some(100.0));
+    }
+
+    #[test]
+    fn semantic_corpus_admits_by_priority_within_group() {
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("a")],
+            Some(1.0),
+        );
+        assert!(
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(2.0)
+            ),
+            "a higher score in the same group must replace the group's lowest"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+        assert_eq!(corpus.accepted[0].score, Some(2.0));
+
+        assert!(
+            !corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![event_feature("a")],
+                Some(1.5)
+            ),
+            "a score below the group's current entry must not be admitted"
+        );
+        assert_eq!(corpus.accepted.len(), 1);
+    }
+
+    #[test]
+    fn semantic_corpus_group_lowest_replaces_lowest_not_highest() {
+        // Regression guard for the priority-replacement victim
+        // selection: the victim must be the group's lowest-scored
+        // member, not its highest. With members {1.0, 3.0}, a new
+        // score of 2.0 must replace the 1.0 member; the argmax bug
+        // would reject it (2.0 does not beat 3.0).
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        let a = event_feature("a");
+        let b = event_feature("b");
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], Some(1.0)));
+        // "a"+"b" reports novel "b", so it is pushed (not a
+        // replacement) and its group is the full case feature set.
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone(), b], Some(3.0)));
+        assert_eq!(corpus.accepted.len(), 2);
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], Some(2.0)),
+            "a mid-score case must replace the group's lowest-scored member"
+        );
+        assert_eq!(corpus.accepted.len(), 2);
+        assert_eq!(
+            corpus.accepted[0].score,
+            Some(2.0),
+            "the lowest-scored member (1.0) must have been replaced: {:?}",
+            corpus.accepted.iter().map(|e| e.score).collect::<Vec<_>>()
+        );
+        assert_eq!(corpus.accepted[1].score, Some(3.0));
+        assert_eq!(corpus.accepted[0].group, vec![a]);
+    }
+
+    #[test]
+    fn semantic_corpus_missing_score_is_group_lowest() {
+        // "Missing scores count as the lowest" must hold for the
+        // replacement victim too: a finite score replaces a missing
+        // member even when a higher-scored member shares the group.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        let a = event_feature("a");
+        let b = event_feature("b");
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], None));
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone(), b], Some(3.0)));
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![a.clone()], Some(1.0)),
+            "a finite score must replace the missing-scored group member"
+        );
+        assert_eq!(corpus.accepted.len(), 2);
+        assert_eq!(corpus.accepted[0].score, Some(1.0));
+        assert_eq!(corpus.accepted[1].score, Some(3.0));
+        assert!(corpus.accepted.iter().all(|e| e.score.is_some()));
+    }
+
+    #[test]
+    fn score_beats_missing_counts_as_lowest() {
+        assert!(SemanticCorpus::score_beats(Some(1.0), None));
+        assert!(!SemanticCorpus::score_beats(None, Some(1.0)));
+        assert!(!SemanticCorpus::score_beats(None, None));
+        assert!(SemanticCorpus::score_beats(Some(2.0), Some(1.0)));
+        assert!(!SemanticCorpus::score_beats(Some(1.0), Some(2.0)));
+        assert!(
+            !SemanticCorpus::score_beats(Some(1.0), Some(1.0)),
+            "a tie must not beat the incumbent"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_register_stops_at_global_cap() {
+        // The global feature registry must stop growing at
+        // MAX_GLOBAL_FEATURES: a novel feature reported after the cap
+        // never makes a case interesting, so a high-cardinality
+        // property cannot grow memory without bound.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..MAX_GLOBAL_FEATURES {
+            assert!(corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("f", i as u64)],
+                Some(1.0),
+            ));
+        }
+        assert_eq!(corpus.observed.len(), MAX_GLOBAL_FEATURES);
+        assert!(
+            !corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("f", MAX_GLOBAL_FEATURES as u64)],
+                Some(1.0),
+            ),
+            "a novel feature after the cap must not be admitted"
+        );
+        assert_eq!(corpus.observed.len(), MAX_GLOBAL_FEATURES);
+        assert_eq!(
+            corpus.accepted.len(),
+            CORPUS_SIZE,
+            "the corpus itself stays bounded by eviction"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_register_partially_registers_at_cap_boundary() {
+        // At the cap boundary, only the features that fit are
+        // registered: the case is admitted with the truncated novel
+        // set, and the overflow feature is not registered.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        let prefix: Vec<Feature> = (0..MAX_GLOBAL_FEATURES - 1)
+            .map(|i| bucket_feature("g", i as u64))
+            .collect();
+        assert_eq!(corpus.register(&prefix).len(), MAX_GLOBAL_FEATURES - 1);
+        let fits = bucket_feature("g", (MAX_GLOBAL_FEATURES - 1) as u64);
+        let overflows = bucket_feature("g", MAX_GLOBAL_FEATURES as u64);
+        assert!(corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![fits.clone(), overflows],
+            None,
+        ));
+        assert_eq!(corpus.accepted[0].novel, vec![fits]);
+        assert_eq!(corpus.observed.len(), MAX_GLOBAL_FEATURES);
+    }
+
+    #[test]
+    fn semantic_corpus_rejected_queue_holds_novel_cases() {
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        assert!(
+            corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("r")]),
+            "a rejected case with a novel feature must enter the rejected queue"
+        );
+        assert!(
+            !corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("r")]),
+            "a rejected case with only known features must not be kept"
+        );
+        assert_eq!(corpus.rejected.len(), 1);
+        assert_eq!(corpus.observed.len(), 1);
+    }
+
+    #[test]
+    fn semantic_corpus_evicts_fewest_features_first() {
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        // Fill the corpus with distinct single-feature entries, then a
+        // two-feature entry on top.
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("single", i as u64)],
+                Some(i as f64),
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("two-a"), event_feature("two-b")],
+            Some(1000.0),
+        );
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        // The two-feature entry survives; a single-feature entry was
+        // evicted. The evicted one is the lowest-scored single-feature
+        // entry (score 0.0).
+        assert!(
+            corpus.accepted.iter().any(|e| e.score == Some(1000.0)),
+            "the feature-richest entry must survive eviction"
+        );
+        assert!(
+            !corpus.accepted.iter().any(|e| e.score == Some(0.0)),
+            "the weakest single-feature entry must be evicted"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_evicts_across_both_queues() {
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("accepted", i as u64)],
+                Some(i as f64),
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        corpus.admit_rejected(ChoiceSequence::default(), vec![event_feature("rejected")]);
+        // The combined size is capped: the rejected entry (fewest
+        // novel features, tied with the accepted single-feature
+        // entries, then lowest score) was evicted.
+        assert_eq!(corpus.accepted.len() + corpus.rejected.len(), CORPUS_SIZE);
+        assert!(
+            corpus.rejected.is_empty(),
+            "the rejected entry must be the weakest across both queues"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_unscored_novel_case_evicts_itself_when_full_of_scores() {
+        // Documented behaviour (docs/corpus-guided-search.md): when the
+        // corpus is full of scored entries, a new case with novel
+        // features but no priority (missing score) ties the existing
+        // entries on novel count and loses the score tie-break, so it
+        // evicts itself on arrival. Its features stay in the global
+        // registry.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("scored", i as u64)],
+                Some(i as f64),
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        let novel = event_feature("unscored-novel");
+        assert!(
+            corpus.admit_accepted(ChoiceSequence::default(), vec![novel.clone()], None),
+            "the novel feature must still be registered"
+        );
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        assert!(
+            !corpus.accepted.iter().any(|e| e.novel.contains(&novel)),
+            "the unscored novel entry must evict itself: {:?}",
+            corpus
+                .accepted
+                .iter()
+                .map(|e| e.novel.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            corpus.observed.contains(&novel),
+            "the feature must remain registered globally"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_unscored_novel_case_survives_when_corpus_unscored() {
+        // With an all-unscored corpus, the tie-break is a plain FIFO
+        // rotation: the earliest arrival is evicted, so a new unscored
+        // case with novel features survives.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        for i in 0..CORPUS_SIZE {
+            corpus.admit_accepted(
+                ChoiceSequence::default(),
+                vec![bucket_feature("unscored", i as u64)],
+                None,
+            );
+        }
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        let novel = event_feature("survivor");
+        assert!(corpus.admit_accepted(ChoiceSequence::default(), vec![novel.clone()], None));
+        assert_eq!(corpus.accepted.len(), CORPUS_SIZE);
+        assert!(
+            corpus.accepted.iter().any(|e| e.novel.contains(&novel)),
+            "the new unscored entry must survive FIFO eviction"
+        );
+        assert!(
+            !corpus
+                .accepted
+                .iter()
+                .any(|e| e.novel.contains(&bucket_feature("unscored", 0))),
+            "the earliest arrival must be evicted"
+        );
+    }
+
+    // === CorpusGuidedSearch wiring ===
+
+    #[test]
+    fn corpus_guided_search_replays_accepted_entries() {
+        // With a one-eighth restart probability, most picks are
+        // exploratory: they replay the admitted draw under the same
+        // declared constraint (possibly mutated, always in domain).
+        // Recording (fresh) candidates draw unconstrained random bytes
+        // instead. Deterministic per seed. Mirrors the targeted-search
+        // wiring test.
+        let mut search = CorpusGuidedSearch::new(42, CorpusPolicy::SemanticWithPriority);
+        let mut seq = ChoiceSequence::default();
+        seq.push_draw(
+            7u64.to_le_bytes().to_vec(),
+            ChoiceMeta::Bounded { bound: 10 },
+        );
+        search
+            .corpus
+            .admit_accepted(seq, vec![event_feature("a")], Some(1.0));
+        let mut in_domain = 0;
+        for _ in 0..16 {
+            let mut ctx = search.next_context();
+            ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 10 });
+            let mut buf = [0u8; 8];
+            ctx.fill(&mut buf);
+            let x = u64::from_le_bytes(buf);
+            let _ = ctx.take_sequence();
+            if x < 10 {
+                in_domain += 1;
+            }
+        }
+        assert!(
+            in_domain >= 8,
+            "most candidates must replay an in-domain draw: {in_domain}"
+        );
+    }
+
+    #[test]
+    fn semantic_corpus_weakest_accepted_returns_lowest_score() {
+        // `weakest_accepted` drives the low-score pick (probability
+        // 1 / LOW_SCORE_DENOM); if it stopped selecting the lowest
+        // score, the low-energy search path would silently break.
+        let mut corpus = SemanticCorpus::new(CorpusPolicy::SemanticWithPriority);
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("a")],
+            Some(3.0),
+        );
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("b")],
+            Some(1.0),
+        );
+        assert_eq!(
+            corpus.weakest_accepted(),
+            1,
+            "the lowest score must be picked"
+        );
+        // A missing score counts as the lowest, so the unscored entry
+        // becomes the weak spot.
+        corpus.admit_accepted(ChoiceSequence::default(), vec![event_feature("c")], None);
+        assert_eq!(
+            corpus.weakest_accepted(),
+            2,
+            "missing must count as the lowest"
+        );
+        // Ties keep the earlier arrival.
+        corpus.admit_accepted(
+            ChoiceSequence::default(),
+            vec![event_feature("d")],
+            Some(1.0),
+        );
+        assert_eq!(
+            corpus.weakest_accepted(),
+            2,
+            "a tie must keep the earlier arrival"
+        );
+    }
+
+    #[test]
+    fn corpus_guided_search_picks_from_rejected_queue_when_accepted_empty() {
+        // While the accepted queue is empty, the rejected queue is the
+        // only source for exploratory candidates (forced pick, no
+        // rejected-queue roll consumed). The replayed draw must match
+        // the admitted rejected sequence.
+        let mut search = CorpusGuidedSearch::new(7, CorpusPolicy::SemanticWithPriority);
+        let mut seq = ChoiceSequence::default();
+        seq.push_draw(
+            3u64.to_le_bytes().to_vec(),
+            ChoiceMeta::Bounded { bound: 10 },
+        );
+        search.corpus.admit_rejected(seq, vec![event_feature("r")]);
+        let mut seen_replay = false;
+        for _ in 0..16 {
+            let mut ctx = search.next_context();
+            ctx.set_next_choice_meta(ChoiceMeta::Bounded { bound: 10 });
+            let mut buf = [0u8; 8];
+            ctx.fill(&mut buf);
+            let x = u64::from_le_bytes(buf);
+            let _ = ctx.take_sequence();
+            if x == 3 {
+                seen_replay = true;
+            }
+        }
+        assert!(
+            seen_replay,
+            "the rejected entry must be replayed while the accepted queue is empty"
+        );
     }
 
     // === mutate_sequence ===

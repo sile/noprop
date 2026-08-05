@@ -1145,3 +1145,524 @@ fn run_targeted_steers_candidates_by_score() {
          rewarding high reached {high_max}, rewarding low reached {low_max}"
     );
 }
+
+// === Corpus-guided PBT (Runner::run_corpus_guided / event / bucket / transition) ===
+
+#[test]
+fn run_corpus_guided_succeeds_with_features() {
+    let mut runner = noprop::Runner::new(42, 64);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            if x.is_multiple_of(4) {
+                ctx.event("multiple-of-four");
+            }
+            Ok(())
+        })
+        .expect("corpus-guided run with semantic feedback must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+}
+
+#[test]
+fn run_corpus_guided_without_features_succeeds() {
+    // Corpus-guided mode does not require feedback: a property that
+    // never reports a feature just yields no interesting cases.
+    let mut runner = noprop::Runner::new(1, 8);
+    runner
+        .run_corpus_guided(|_ctx| Ok(()))
+        .expect("a property without semantic feedback must not fail");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 8);
+    assert_eq!(stats.rejected_iterations, 0);
+}
+
+#[test]
+fn run_corpus_guided_zero_iterations_does_not_invoke_closure() {
+    let invoked = std::cell::Cell::new(0usize);
+    let mut runner = noprop::Runner::new(1, 0);
+    runner
+        .run_corpus_guided(|ctx| {
+            invoked.set(invoked.get() + 1);
+            ctx.event("e");
+            Ok(())
+        })
+        .expect("zero iterations must succeed");
+    assert_eq!(invoked.get(), 0, "the closure must not be invoked");
+    assert_eq!(runner.stats(), noprop::Stats::default());
+}
+
+#[test]
+fn run_corpus_guided_without_priority_succeeds() {
+    // maximize is optional in corpus-guided mode; missing feedback is
+    // not an error (unlike targeted mode).
+    noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            ctx.event("e");
+            Ok(())
+        })
+        .expect("a case without maximize must not fail corpus-guided mode");
+}
+
+#[test]
+fn run_corpus_guided_invalid_priority_is_tolerated() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        noprop::Runner::new(1, 8)
+            .run_corpus_guided(|ctx| {
+                ctx.maximize(bad);
+                Ok(())
+            })
+            .expect("NaN / infinity priority must not fail corpus-guided mode");
+    }
+}
+
+#[test]
+fn semantic_methods_are_noop_under_plain_run() {
+    noprop::Runner::new(1, 8)
+        .run(|ctx| {
+            ctx.event("e");
+            ctx.bucket("b", 1);
+            ctx.transition("t", 0, 1);
+            ctx.maximize(1.0);
+            Ok(())
+        })
+        .expect("semantic methods must be ignored by the plain runner");
+}
+
+#[test]
+fn run_corpus_guided_reports_property_failure() {
+    let err = noprop::Runner::new(1, 32)
+        .run_corpus_guided(|ctx| {
+            ctx.event("before-failure");
+            panic!("deterministic failure");
+        })
+        .expect_err("panicking closure must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("deterministic failure"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(display.contains("Semantic features:"), "{display}");
+    assert!(display.contains("event(\"before-failure\")"), "{display}");
+    assert_eq!(err.case_index(), 0);
+}
+
+#[test]
+fn run_corpus_guided_candidate_index_is_one_based() {
+    // The candidate index counts every attempt (accepted, rejected,
+    // and the failing case itself) and is one-based, unlike the
+    // zero-based accepted-iteration `case_index`.
+    let attempts = std::cell::Cell::new(0usize);
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            attempts.set(attempts.get() + 1);
+            ctx.event("e");
+            panic!("fail on first attempt");
+        })
+        .expect_err("first attempt must fail");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("candidate_index: 1"),
+        "the first attempt must be candidate 1: {debug}"
+    );
+    assert!(debug.contains("case_index: 0"), "{debug}");
+    assert_eq!(attempts.get(), 1);
+}
+
+#[test]
+fn run_corpus_guided_candidate_index_counts_rejected_attempts() {
+    // A rejected attempt still advances the candidate index, so the
+    // failing second attempt is candidate 2 while `case_index` stays 0
+    // (no accepted iteration ran).
+    let attempts = std::cell::Cell::new(0usize);
+    let err = noprop::Runner::new(7, 8)
+        .run_corpus_guided(|ctx| {
+            let n = attempts.get();
+            attempts.set(n + 1);
+            ctx.event("e");
+            if n == 0 {
+                ctx.reject_case();
+            }
+            panic!("fail on second attempt");
+        })
+        .expect_err("second attempt must fail");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("candidate_index: 2"),
+        "the rejected attempt must count toward the candidate index: {debug}"
+    );
+    assert!(debug.contains("case_index: 0"), "{debug}");
+    assert_eq!(err.stats().rejected_iterations, 1);
+}
+
+#[test]
+fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            ctx.event("before-error");
+            Err("corpus error".into())
+        })
+        .expect_err("returned Err must fail the run");
+    let display = format!("{err}");
+    assert!(display.contains("corpus error"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(display.contains("Semantic features:"), "{display}");
+    assert!(display.contains("event(\"before-error\")"), "{display}");
+    assert_eq!(err.case_index(), 0);
+    assert!(format!("{err:?}").contains("candidate_index: 1"), "{err:?}");
+}
+
+#[test]
+fn run_corpus_guided_counts_rejections() {
+    let mut runner = noprop::Runner::new(3, 16);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            if x.is_multiple_of(2) {
+                ctx.reject_case();
+            }
+            ctx.event("accepted");
+            Ok(())
+        })
+        .expect("rejections must be retried like the plain runner");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 16);
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
+fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
+    // The rejection-cap failure must carry the semantic features of
+    // the last rejected case and its candidate index (every attempt
+    // was rejected, so the index equals the rejected count). This
+    // guards against the report silently dropping to "candidate_index:
+    // 0" on this path.
+    let err = noprop::Runner::new(1, 8)
+        .run_corpus_guided(|ctx| {
+            ctx.event("always-reject");
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting must hit the rejection cap");
+    let debug = format!("{err:?}");
+    assert!(debug.contains("too_many_rejections"), "{debug}");
+    assert!(
+        debug.contains("event(\"always-reject\")"),
+        "the last rejected case's features must be reported: {debug}"
+    );
+    // All attempts were rejected, so the candidate index of the last
+    // rejected attempt equals the rejected count. Avoid hard-coding
+    // the cap formula (it is deliberately crate-private).
+    assert!(
+        debug.contains(&format!(
+            "candidate_index: {}",
+            err.stats().rejected_iterations
+        )),
+        "candidate_index must equal the rejected count: {debug}"
+    );
+    let display = format!("{err}");
+    assert!(display.contains("too many rejections"), "{display}");
+    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(display.contains("Semantic features:"), "{display}");
+}
+
+#[test]
+fn run_corpus_guided_bounds_high_cardinality_features() {
+    // A property that reports effectively unbounded bucket values must
+    // not crash or grow memory without bound. This is a smoke test:
+    // with 64 iterations × 3 buckets it stays far below the per-case
+    // (64) and global (1024) caps, so neither cap nor eviction fires
+    // here — those bounds are exercised by the SemanticCorpus unit
+    // tests. The run succeeding regardless of the reported values is
+    // the point.
+    let mut runner = noprop::Runner::new(5, 64);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u64(ctx);
+            ctx.bucket("unbounded", x);
+            ctx.bucket("also-unbounded", x.wrapping_add(1));
+            ctx.bucket("yet-another", x.wrapping_mul(3));
+            Ok(())
+        })
+        .expect("high-cardinality features must be capped, not fatal");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 64);
+}
+
+#[test]
+fn run_corpus_guided_rejected_cases_register_features() {
+    // A rejected case that reported a novel feature before rejecting
+    // must be admitted into the rejected queue (low-energy
+    // scaffolding), so its features count toward the global registry.
+    // This is observable through the run's behaviour: the same feature
+    // reported later by an accepted case is no longer novel.
+    let mut runner = noprop::Runner::new(11, 32);
+    runner
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            ctx.event("shared-feature");
+            if x.is_multiple_of(2) {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("rejected cases with novel features must be tolerated");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 32);
+    assert!(stats.rejected_iterations > 0);
+}
+
+#[test]
+fn run_corpus_guided_is_reproducible_from_seed() {
+    let seed = 0xABCD_EF01_2345_6789;
+
+    fn run(seed: u64) -> Vec<u32> {
+        let observed = std::cell::Cell::new(Vec::new());
+        noprop::Runner::new(seed, 64)
+            .run_corpus_guided(|ctx| {
+                let x = noprop::sample_u32(ctx);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                if x.is_multiple_of(2) {
+                    ctx.event("even");
+                }
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    assert_eq!(run(seed), run(seed));
+}
+
+#[test]
+fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
+    // The plain reproducibility test never rejects, so the
+    // rejected-queue pick path (and the PRNG rolls it consumes) stays
+    // unexercised. This property rejects a fraction of candidates so
+    // the full candidate stream — including the rejected-queue branch
+    // of `next_context` — must reproduce from the seed.
+    use std::cell::Cell;
+
+    fn run(seed: u64) -> Vec<u32> {
+        let observed: Cell<Vec<u32>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 64)
+            .run_corpus_guided(|ctx| {
+                let x = noprop::sample_u32(ctx);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                if x.is_multiple_of(2) {
+                    ctx.event("even");
+                }
+                if x.is_multiple_of(4) {
+                    ctx.reject_case();
+                }
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    let seed = 0xC0FFEE;
+    let a = run(seed);
+    let b = run(seed);
+    assert_eq!(a, b, "rejected candidates must reproduce from the seed");
+    assert!(
+        a.iter().any(|x| x.is_multiple_of(4)),
+        "the rejected path must actually run: {a:?}"
+    );
+}
+
+#[test]
+fn run_corpus_guided_stats_count_rejected_attempt_samples() {
+    // `total_samples` must include samples produced by rejected
+    // attempts (they consumed generator budget), and
+    // `rejected_iterations` must count every `reject_case`.
+    use std::cell::Cell;
+
+    let attempts = Cell::new(0usize);
+    let mut runner = noprop::Runner::new(1, 4);
+    runner
+        .run_corpus_guided(|ctx| {
+            attempts.set(attempts.get() + 1);
+            ctx.event("e");
+            let _ = noprop::sample_u32(ctx);
+            if attempts.get() == 1 {
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("run must succeed");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 4);
+    assert_eq!(stats.rejected_iterations, 1);
+    assert_eq!(
+        stats.total_samples, 5,
+        "1 rejected + 4 accepted attempts, one sample each"
+    );
+}
+
+#[test]
+fn run_corpus_guided_replays_rejected_candidates() {
+    // The rejected queue is a mutation parent: an early rejected case
+    // with a novel feature enters the rejected queue and — while the
+    // accepted queue stays empty — it is the only source for
+    // exploratory candidates. Replaying it keeps the observed values in
+    // the rejected region (a uniform-only run would have a median
+    // around 500).
+    use std::cell::Cell;
+
+    let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+    noprop::Runner::new(1, 256)
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..1000);
+            let mut v = observed.take();
+            v.push(x);
+            observed.set(v);
+            if x < 100 {
+                ctx.event("low");
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("run must succeed");
+    let mut sorted = observed.into_inner();
+    sorted.sort_unstable();
+    assert!(
+        sorted[sorted.len() / 2] < 200,
+        "the rejected entry must be replayed as a mutation parent: median {}",
+        sorted[sorted.len() / 2]
+    );
+}
+
+#[test]
+fn run_corpus_guided_steers_candidates_by_novel_features() {
+    // The corpus must concentrate the search on the interesting input
+    // region: the first case that reaches the "high" feature is
+    // admitted and replayed (unmutated with probability 3/4) as the
+    // mutation parent, so the second-half median of observed values
+    // sits inside the feature region. A uniform-only run would have a
+    // median around 500, so a max comparison would pass on restart
+    // noise alone; the median is asserted instead.
+    use std::cell::Cell;
+
+    let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+    noprop::Runner::new(7, 256)
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..1000);
+            let mut v = observed.take();
+            v.push(x);
+            observed.set(v);
+            if x > 900 {
+                ctx.event("high");
+            }
+            Ok(())
+        })
+        .expect("corpus-guided run must succeed");
+    let mut second_half: Vec<usize> = observed.into_inner()[128..].to_vec();
+    second_half.sort_unstable();
+    let second_half_median = second_half[second_half.len() / 2];
+    assert!(
+        second_half_median > 900,
+        "the corpus must concentrate the search on the feature region: \
+         second-half median reached {second_half_median}"
+    );
+}
+
+#[test]
+fn run_corpus_guided_steers_candidates_by_priority() {
+    // With scalar priority enabled, a case that reports no novel
+    // feature can still be admitted by outscoring its feature group, so
+    // rewarding large x must keep the search in the high end and
+    // rewarding small x must pin it to the low end. The absolute
+    // medians are asserted (not a max comparison) so the test cannot
+    // pass on uniform-restart noise alone.
+    use std::cell::Cell;
+
+    fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 256)
+            .run_corpus_guided(|ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.event("covered");
+                ctx.maximize(score_of(x));
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    fn median(xs: &[usize]) -> usize {
+        let mut sorted: Vec<usize> = xs[128..].to_vec();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    }
+
+    let reward_high = observe(6, |x| x as f64 / 1000.0);
+    let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
+
+    let high_med = median(&reward_high);
+    let low_med = median(&reward_low);
+    assert!(
+        high_med > 850,
+        "rewarding high must keep the search in the high end: high median {high_med}"
+    );
+    assert!(
+        low_med < 150,
+        "rewarding low must pin the search to the low end: low median {low_med}"
+    );
+}
+
+#[test]
+fn run_corpus_guided_steers_stateful_transitions() {
+    // A stateful-style target: the property advances an abstract state
+    // machine and reports each transition. The corpus must explore
+    // deeper transition chains than uniform sampling. The mean depth of
+    // the second half is asserted (the max is a single tail point and
+    // would pass on uniform-restart noise alone).
+    use std::cell::Cell;
+
+    fn observe(seed: u64, corpus_guided: bool) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        let mut runner = noprop::Runner::new(seed, 256);
+        let property = |ctx: &mut noprop::TestCaseContext| {
+            let mut state = 0u64;
+            for _ in 0..64 {
+                let step = noprop::sample_usize_in(ctx, 0..2);
+                if step != 0 {
+                    break;
+                }
+                let next = state + 1;
+                ctx.transition("advance", state, next);
+                state = next;
+            }
+            let mut v = observed.take();
+            v.push(state as usize);
+            observed.set(v);
+            Ok(())
+        };
+        if corpus_guided {
+            runner
+                .run_corpus_guided(property)
+                .expect("corpus-guided run must succeed");
+        } else {
+            runner.run(property).expect("uniform run must succeed");
+        }
+        observed.into_inner()
+    }
+
+    let mean = |xs: &[usize]| xs[128..].iter().sum::<usize>() as f64 / 128.0;
+
+    let uniform_depths = observe(9, false);
+    let corpus_depths = observe(9, true);
+    let uniform_mean = mean(&uniform_depths);
+    let corpus_mean = mean(&corpus_depths);
+    assert!(
+        corpus_mean > uniform_mean + 0.5,
+        "the corpus must explore deeper transition chains than uniform sampling: \
+         corpus mean depth {corpus_mean}, uniform {uniform_mean}"
+    );
+}
