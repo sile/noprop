@@ -752,8 +752,9 @@ impl TestCaseContext {
     }
 
     /// Reject the current iteration and unwind out of the property
-    /// closure. Only valid inside [`Runner::run`](crate::Runner::run) or
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted);
+    /// closure. Only valid inside [`Runner::run`](crate::Runner::run),
+    /// [`Runner::run_targeted`](crate::Runner::run_targeted) or
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided);
     /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
@@ -774,9 +775,9 @@ impl TestCaseContext {
     pub fn reject_case(&mut self) -> ! {
         if !self.inside_runner {
             panic!(
-                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run or \
-                 Runner::run_targeted property closure. Constructing a TestCaseContext directly via TestCaseContext::new does not \
-                 create a Runner boundary."
+                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run, \
+                 Runner::run_targeted or Runner::run_corpus_guided property closure. Constructing a \
+                 TestCaseContext directly via TestCaseContext::new does not create a Runner boundary."
             );
         }
         let location = Location::caller();

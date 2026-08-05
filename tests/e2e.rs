@@ -1510,11 +1510,47 @@ fn run_corpus_guided_stats_count_rejected_attempt_samples() {
 }
 
 #[test]
+fn run_corpus_guided_replays_rejected_candidates() {
+    // The rejected queue is a mutation parent: an early rejected case
+    // with a novel feature enters the rejected queue and — while the
+    // accepted queue stays empty — it is the only source for
+    // exploratory candidates. Replaying it keeps the observed values in
+    // the rejected region (a uniform-only run would have a median
+    // around 500).
+    use std::cell::Cell;
+
+    let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+    noprop::Runner::new(1, 256)
+        .run_corpus_guided(|ctx| {
+            let x = noprop::sample_usize_in(ctx, 0..1000);
+            let mut v = observed.take();
+            v.push(x);
+            observed.set(v);
+            if x < 100 {
+                ctx.event("low");
+                ctx.reject_case();
+            }
+            Ok(())
+        })
+        .expect("run must succeed");
+    let mut sorted = observed.into_inner();
+    sorted.sort_unstable();
+    assert!(
+        sorted[sorted.len() / 2] < 200,
+        "the rejected entry must be replayed as a mutation parent: median {}",
+        sorted[sorted.len() / 2]
+    );
+}
+
+#[test]
 fn run_corpus_guided_steers_candidates_by_novel_features() {
-    // The search must reproduce the interesting input region: a
-    // property that reports a feature only when x is large keeps
-    // exploring inputs that reach that feature, so the best observed
-    // candidate in the second half of the run is high.
+    // The corpus must concentrate the search on the interesting input
+    // region: the first case that reaches the "high" feature is
+    // admitted and replayed (unmutated with probability 3/4) as the
+    // mutation parent, so the second-half median of observed values
+    // sits inside the feature region. A uniform-only run would have a
+    // median around 500, so a max comparison would pass on restart
+    // noise alone; the median is asserted instead.
     use std::cell::Cell;
 
     let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
@@ -1530,12 +1566,13 @@ fn run_corpus_guided_steers_candidates_by_novel_features() {
             Ok(())
         })
         .expect("corpus-guided run must succeed");
-    let xs = observed.into_inner();
-    let second_half_max = xs[128..].iter().max().copied().unwrap_or(0);
+    let mut second_half: Vec<usize> = observed.into_inner()[128..].to_vec();
+    second_half.sort_unstable();
+    let second_half_median = second_half[second_half.len() / 2];
     assert!(
-        second_half_max > 900,
-        "the corpus must steer the search toward the feature region: \
-         second-half max reached {second_half_max}"
+        second_half_median > 900,
+        "the corpus must concentrate the search on the feature region: \
+         second-half median reached {second_half_median}"
     );
 }
 
@@ -1543,8 +1580,10 @@ fn run_corpus_guided_steers_candidates_by_novel_features() {
 fn run_corpus_guided_steers_candidates_by_priority() {
     // With scalar priority enabled, a case that reports no novel
     // feature can still be admitted by outscoring its feature group, so
-    // rewarding large x must keep the search in the high end just like
-    // targeted mode.
+    // rewarding large x must keep the search in the high end and
+    // rewarding small x must pin it to the low end. The absolute
+    // medians are asserted (not a max comparison) so the test cannot
+    // pass on uniform-restart noise alone.
     use std::cell::Cell;
 
     fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
@@ -1563,27 +1602,34 @@ fn run_corpus_guided_steers_candidates_by_priority() {
         observed.into_inner()
     }
 
-    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
+    fn median(xs: &[usize]) -> usize {
+        let mut sorted: Vec<usize> = xs[128..].to_vec();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    }
 
     let reward_high = observe(6, |x| x as f64 / 1000.0);
     let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
 
-    let high_max = second_half_max(&reward_high);
-    let low_max = second_half_max(&reward_low);
+    let high_med = median(&reward_high);
+    let low_med = median(&reward_low);
     assert!(
-        high_max > low_max,
-        "the priority must steer the search toward the rewarded end: \
-         rewarding high reached {high_max}, rewarding low reached {low_max}"
+        high_med > 850,
+        "rewarding high must keep the search in the high end: high median {high_med}"
+    );
+    assert!(
+        low_med < 150,
+        "rewarding low must pin the search to the low end: low median {low_med}"
     );
 }
 
 #[test]
 fn run_corpus_guided_steers_stateful_transitions() {
     // A stateful-style target: the property advances an abstract state
-    // machine and reports each transition. The corpus must keep
-    // exploring cases that reach the deep transitions, so the deepest
-    // chain observed under corpus-guided search is deeper than under
-    // uniform sampling with the same seed cohort.
+    // machine and reports each transition. The corpus must explore
+    // deeper transition chains than uniform sampling. The mean depth of
+    // the second half is asserted (the max is a single tail point and
+    // would pass on uniform-restart noise alone).
     use std::cell::Cell;
 
     fn observe(seed: u64, corpus_guided: bool) -> Vec<usize> {
@@ -1615,15 +1661,15 @@ fn run_corpus_guided_steers_stateful_transitions() {
         observed.into_inner()
     }
 
-    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
+    let mean = |xs: &[usize]| xs[128..].iter().sum::<usize>() as f64 / 128.0;
 
     let uniform_depths = observe(9, false);
     let corpus_depths = observe(9, true);
-    let uniform_max = second_half_max(&uniform_depths);
-    let corpus_max = second_half_max(&corpus_depths);
+    let uniform_mean = mean(&uniform_depths);
+    let corpus_mean = mean(&corpus_depths);
     assert!(
-        corpus_max > uniform_max,
+        corpus_mean > uniform_mean + 0.5,
         "the corpus must explore deeper transition chains than uniform sampling: \
-         uniform reached {uniform_max}, corpus reached {corpus_max}"
+         corpus mean depth {corpus_mean}, uniform {uniform_mean}"
     );
 }
