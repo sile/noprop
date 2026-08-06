@@ -22,9 +22,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup update ${{ matrix.toolchain }}
       - run: rustup default ${{ matrix.toolchain }}
-      # `--examples` replaces the default target set, so it must run
-      # alongside the full suite (lib / bins / tests); `--doc` cannot
-      # be combined with other target selectors.
+      # `--examples` replaces the default target set, so the full
+      # suite must be selected explicitly; `--doc` cannot be combined
+      # with other target selectors.
       - run: cargo test --all --lib --bins --tests --examples
       - run: cargo test --doc
 

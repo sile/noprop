@@ -43,8 +43,9 @@ const REJECTED_PICK_DENOM: u64 = 8;
 const MAX_GLOBAL_FEATURES: usize = 1024;
 
 /// Observability data from a [`Runner::run`](Runner::run),
-/// [`Runner::run_targeted`](Runner::run_targeted) or
-/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// [`Runner::run_targeted`](Runner::run_targeted),
+/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) or
+/// [`Runner::run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy)
 /// invocation.
 ///
 /// Read from a [`Runner`] after the run returns via
@@ -72,8 +73,9 @@ pub struct Stats {
     /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
     /// helpers (they discard via `reject_case` internally, so the two
     /// origins share this single counter), and — under
-    /// [`Runner::run_targeted`](Runner::run_targeted) and
-    /// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) — the
+    /// [`Runner::run_targeted`](Runner::run_targeted),
+    /// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) and
+    /// [`Runner::run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy) — the
     /// exploratory-replay draw cap discards.
     pub rejected_iterations: usize,
     /// Total number of top-level `sample_*` invocations across every
@@ -85,21 +87,18 @@ pub struct Stats {
     /// those iterations still consumed generator budget.
     pub total_samples: usize,
     /// Number of distinct semantic features registered in the global
-    /// observation set during a corpus-guided run (i.e. `observed.len()`,
-    /// which saturates at `MAX_GLOBAL_FEATURES`). Features registered
-    /// by rejected cases are included. Features of the failing case
-    /// itself are not registered (admission happens only for accepted
-    /// or rejected cases that continue the run), so the value may be
-    /// smaller than the features printed in the failure report.
+    /// observation set during a corpus-guided run, capped at 1024
+    /// (`MAX_GLOBAL_FEATURES`). Features registered by rejected cases
+    /// are included; features of the failing case itself are not (a
+    /// case is registered only after its verdict, and the failing case
+    /// never reaches admission).
     pub discovered_features: usize,
     /// Combined size of the semantic corpus (accepted + rejected) at
     /// the end of a corpus-guided run. The combined size only grows
-    /// and is trimmed back to `CORPUS_SIZE` when full, so the value at
-    /// the end of the run equals the maximum; the transient overshoot
-    /// just before eviction is not counted. This relies on the current
-    /// eviction behavior (admission pushes, then trims only when over
-    /// the cap), so a future admission change must re-check the
-    /// invariant.
+    /// and is trimmed back to the corpus cap (64) when full, so the
+    /// value at the end of the run equals the maximum; the transient
+    /// overshoot just before eviction is not counted (admission
+    /// pushes, then trims only when over the cap).
     pub max_corpus_size: usize,
 }
 
@@ -190,8 +189,9 @@ pub struct Runner {
 }
 
 /// Global rejection limit for a single [`Runner::run`](Runner::run),
-/// [`Runner::run_targeted`](Runner::run_targeted) or
-/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// [`Runner::run_targeted`](Runner::run_targeted),
+/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) or
+/// [`Runner::run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy)
 /// invocation.
 ///
 /// Total rejected iterations (across all iteration indices) are capped
@@ -354,7 +354,9 @@ impl Runner {
                             unreachable!("run_targeted enables targeted mode before each case")
                         }
                         FeedbackState::SemanticCoverage(_) => {
-                            unreachable!("run_targeted never enables corpus-guided mode")
+                            unreachable!(
+                                "run_corpus_guided_with_policy enables corpus-guided mode before each case"
+                            )
                         }
                     };
                     // The carried choice sequence (recorded or
@@ -419,6 +421,12 @@ impl Runner {
     /// optional scalar priority via
     /// [`TestCaseContext::maximize`](crate::TestCaseContext::maximize).
     ///
+    /// This is the default entry point: it delegates to
+    /// [`run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy)
+    /// with
+    /// [`CorpusPolicy::SemanticWithPriority`](CorpusPolicy::SemanticWithPriority);
+    /// use the policy-taking entry point to select `SemanticOnly`.
+    ///
     /// The property closure has the same shape as
     /// [`run`](Runner::run), so the same property can be exercised
     /// under both policies. Unlike targeted mode, feedback is not
@@ -433,7 +441,7 @@ impl Runner {
     /// feature is admitted, mutated within its recorded constraints,
     /// and replayed with exploratory generation for draws the mutation
     /// introduces. A case that registers no novel feature may still be
-    /// admitted — under the scalar-priority policy — by replacing the
+    /// admitted — under `SemanticWithPriority` — by replacing the
     /// lowest-scored entry of a feature group it overlaps when its
     /// score beats that entry. Accepted and rejected cases live in
     /// separate queues (the rejected queue is picked with probability
@@ -468,7 +476,10 @@ impl Runner {
 
     /// Corpus-guided search under an explicit
     /// [`CorpusPolicy`](CorpusPolicy), otherwise identical to
-    /// [`run_corpus_guided`](Runner::run_corpus_guided).
+    /// [`run_corpus_guided`](Runner::run_corpus_guided) (which calls
+    /// this with `SemanticWithPriority`): only admission and eviction
+    /// depend on the policy, as described on
+    /// [`CorpusPolicy`](CorpusPolicy).
     ///
     /// # Example
     ///
@@ -595,7 +606,9 @@ impl Runner {
             let feedback = ctx.take_feedback();
             let semantic_features = match feedback {
                 FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
-                _ => unreachable!("run_corpus_guided enables corpus-guided mode"),
+                _ => unreachable!(
+                    "run_corpus_guided_with_policy enables corpus-guided mode before each case"
+                ),
             };
             return Err(Error::from_panic(
                 self.seed,
@@ -766,8 +779,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 /// Record the run progress counters on the runner. Every exit path
 /// (success, property failure, rejection cap, feedback failure)
-/// reports the same counters. The corpus fields are only meaningful
-/// for corpus-guided runs; uniform and targeted runs report 0.
+/// reports the same counters.
 fn record_stats(
     runner: &mut Runner,
     accepted: usize,
@@ -787,7 +799,7 @@ fn record_stats(
 
 /// The corpus-derived stats fields: the size of the global feature
 /// observation set and the combined (accepted + rejected) corpus size
-/// at the end of the run.
+/// at the current search state.
 fn corpus_stats(search: &CorpusGuidedSearch) -> (usize, usize) {
     (
         search.corpus.observed.len(),
@@ -967,15 +979,17 @@ impl TargetedSearch {
 ///
 /// `SemanticOnly` admits cases purely on novelty: a case that
 /// registers no novel feature never enters the corpus, and `maximize`
-/// is ignored. `SemanticWithPriority` additionally lets a case with no
-/// novel feature replace the lowest-scored entry of a feature group it
-/// overlaps, and breaks eviction ties on the lowest score. The two
-/// policies share one corpus engine; the difference is confined to
-/// admission and eviction.
+/// is ignored for admission and eviction. `SemanticWithPriority`
+/// additionally lets a case with no novel feature replace the
+/// lowest-scored entry of a feature group it overlaps, and breaks
+/// eviction ties on the lowest score. The two policies share one
+/// corpus engine; the difference is confined to admission and
+/// eviction.
 ///
 /// The set of policies may change as the comparison benchmark data
-/// accumulates. `Runner::run_corpus_guided` currently uses
-/// `SemanticWithPriority`.
+/// accumulates (an unstable v0.0.x API: adding a variant breaks
+/// downstream exhaustive `match`es). `Runner::run_corpus_guided`
+/// currently uses `SemanticWithPriority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorpusPolicy {
     /// Admit cases only when they register at least one novel feature.
@@ -1020,7 +1034,7 @@ struct SemanticEntry {
 /// - A case that registers at least one novel feature is admitted
 ///   while the combined size is below the cap (both policies).
 /// - Once full, the entry with the fewest newly registered features is
-///   evicted; ties keep the earlier arrival. Under
+///   evicted; ties evict the earliest arrival. Under
 ///   `SemanticWithPriority`, ties within that group break on the
 ///   lowest score (with missing scores counted as lowest).
 /// - Under `SemanticWithPriority`, a case with no novel feature is

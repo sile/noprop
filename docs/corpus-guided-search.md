@@ -102,8 +102,8 @@ matches the property's domain:
 - `maximize(score)` — when "closeness to failure" can be designed as a
   single scalar. Unlike the semantic methods it never registers a
   feature; it only steers admission and eviction within a feature group
-  (under the priority policy). It is optional: a case that never calls
-  it is still admitted if it reports a novel feature.
+  (under `SemanticWithPriority`). It is optional: a case that never
+  calls it is still admitted if it reports a novel feature.
 
 The label must identify a *meaning*, not a call site: using the same
 label for different meanings silently merges them (the search treats
@@ -144,10 +144,9 @@ Admission:
 - A case with novel features is admitted while the combined size is
   below the cap (both policies).
 - Once full, the entry with the fewest newly registered features is
-  evicted; ties keep the earlier arrival. Under
-  `SemanticWithPriority`, when the case carries a scalar priority, ties
-  within that group break on the lowest score (missing scores count as
-  the lowest).
+  evicted; ties evict the earliest arrival. Under
+  `SemanticWithPriority`, ties within that group break on the lowest
+  score (missing scores count as the lowest).
 - Under `SemanticWithPriority`, a case with no novel feature is
   admitted only when its priority beats the lowest-scored entry of a
   feature group it overlaps, replacing that entry (the targeted top-k

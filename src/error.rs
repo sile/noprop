@@ -1,6 +1,7 @@
 //! Error and result types for [`Runner::run`](crate::Runner::run),
-//! [`Runner::run_targeted`](crate::Runner::run_targeted) and
-//! [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+//! [`Runner::run_targeted`](crate::Runner::run_targeted),
+//! [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) and
+//! [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy).
 
 use std::panic::Location;
 
@@ -12,8 +13,9 @@ use crate::runner::{CorpusPolicy, Stats};
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Failure information from a [`Runner::run`](crate::Runner::run),
-/// [`Runner::run_targeted`](crate::Runner::run_targeted) or
-/// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+/// [`Runner::run_targeted`](crate::Runner::run_targeted),
+/// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) or
+/// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
 /// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
@@ -79,7 +81,8 @@ pub struct Error {
     /// Boxed to keep `Error` small: with the corpus stats fields
     /// inline, `Error` is exactly 128 bytes, which already triggers
     /// clippy's `result_large_err` (its threshold comparison is
-    /// `>= 128`). Boxed, `Error` is 96 bytes.
+    /// `>= 128`). Boxed, `Error` is 96 bytes — and its size no longer
+    /// grows when `Stats` gains fields.
     stats: Box<Stats>,
     /// The runner entry point that produced this failure. Switches the
     /// reproduce hint.
