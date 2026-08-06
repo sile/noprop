@@ -1365,6 +1365,45 @@ fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
 }
 
 #[test]
+fn corpus_guided_tmr_error_pins_hint_stats_and_features() {
+    // The too-many-rejections report must carry the corpus policy in
+    // its reproduce hint (so the rerun reproduces the same exit), the
+    // new corpus stats fields, and the last rejected case's semantic
+    // features. The existing tests only substring-match the hint; this
+    // pins the full policy-carrying hint and the corpus fields.
+    let err = noprop::Runner::new(7, 8)
+        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+            ctx.event("always-reject");
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting must hit the rejection cap");
+    let display = format!("{err}");
+    assert!(
+        display.contains(&format!(
+            "reproduce with: noprop::Runner::new({:#018x}, 8).run_corpus_guided_with_policy(\
+             noprop::CorpusPolicy::SemanticOnly, |ctx| ...)",
+            err.seed()
+        )),
+        "the hint must reuse the corpus policy: {display}"
+    );
+    assert!(display.contains("Semantic features:"), "{display}");
+    assert!(display.contains("event(\"always-reject\")"), "{display}");
+    // Every rejected case reports the same feature, so exactly one
+    // feature is observed and exactly one entry is admitted.
+    let stats = err.stats();
+    assert_eq!(stats.discovered_features, 1);
+    assert_eq!(stats.max_corpus_size, 1);
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains(&format!(
+            "stats: {{ accepted: 0, rejected: {}, total_samples: 0, discovered_features: 1, max_corpus_size: 1 }},",
+            stats.rejected_iterations
+        )),
+        "the Debug stats line must include the corpus fields: {debug}"
+    );
+}
+
+#[test]
 fn run_corpus_guided_bounds_high_cardinality_features() {
     // A property that reports effectively unbounded bucket values must
     // not crash or grow memory without bound. This is a smoke test:
