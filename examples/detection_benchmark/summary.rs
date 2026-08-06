@@ -18,6 +18,28 @@ fn bucket_of(detected_at: usize) -> usize {
         .unwrap_or(DETECTION_BUCKETS.len())
 }
 
+/// Nearest-rank median of `values` (upper median, i.e. index `n / 2`).
+fn median_of(values: &[usize]) -> Option<usize> {
+    let n = values.len();
+    if n == 0 {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    Some(sorted[n / 2])
+}
+
+/// Nearest-rank quartiles of `values` (indices `n / 4` and `3n / 4`).
+fn quartiles_of(values: &[usize]) -> Option<(usize, usize)> {
+    let n = values.len();
+    if n == 0 {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    Some((sorted[n / 4], sorted[3 * n / 4]))
+}
+
 /// Per-task summary across seeds.
 #[derive(Debug, Default)]
 pub(crate) struct TaskSummary {
@@ -31,6 +53,18 @@ pub(crate) struct TaskSummary {
     pub detection_times: Vec<usize>,
     /// Detection-time bucket counts (index = `bucket_of`).
     pub detection_buckets: [usize; 4],
+    /// Candidate executions-to-detection across `found` trials
+    /// (accepted + rejected + the failing case). One-based; excludes
+    /// the search warm-up cost from the iterations metric by counting
+    /// every candidate.
+    pub candidate_times: Vec<usize>,
+    /// Candidate-count bucket counts (index = `bucket_of`).
+    pub candidate_buckets: [usize; 4],
+    /// Distinct observed features per trial (corpus-guided variants
+    /// only; uniform / biased report 0).
+    pub discovered_features: Vec<usize>,
+    /// Combined corpus size per trial (corpus-guided variants only).
+    pub max_corpus_sizes: Vec<usize>,
 }
 
 impl TaskSummary {
@@ -43,25 +77,29 @@ impl TaskSummary {
     }
 
     pub fn median_detection(&self) -> Option<usize> {
-        let n = self.detection_times.len();
-        if n == 0 {
-            return None;
-        }
-        let mut times = self.detection_times.clone();
-        times.sort_unstable();
-        Some(times[n / 2])
+        median_of(&self.detection_times)
     }
 
     /// 25th / 75th percentiles of iterations-to-detection (nearest-rank
     /// with the upper median, i.e. index `p * n` of the sorted values).
     pub fn quartiles(&self) -> Option<(usize, usize)> {
-        let n = self.detection_times.len();
-        if n == 0 {
-            return None;
-        }
-        let mut times = self.detection_times.clone();
-        times.sort_unstable();
-        Some((times[n / 4], times[3 * n / 4]))
+        quartiles_of(&self.detection_times)
+    }
+
+    pub fn median_candidates(&self) -> Option<usize> {
+        median_of(&self.candidate_times)
+    }
+
+    pub fn candidate_quartiles(&self) -> Option<(usize, usize)> {
+        quartiles_of(&self.candidate_times)
+    }
+
+    pub fn median_discovered_features(&self) -> Option<usize> {
+        median_of(&self.discovered_features)
+    }
+
+    pub fn median_max_corpus_size(&self) -> Option<usize> {
+        median_of(&self.max_corpus_sizes)
     }
 }
 
@@ -78,6 +116,8 @@ pub(crate) fn accumulate(summaries: &mut Summaries, raw: &ParsedRaw) {
         ))
         .or_default();
     entry.trials += 1;
+    entry.discovered_features.push(raw.discovered_features);
+    entry.max_corpus_sizes.push(raw.max_corpus_size);
     match raw.status {
         Status::Found => {
             entry.found += 1;
@@ -87,6 +127,14 @@ pub(crate) fn accumulate(summaries: &mut Summaries, raw: &ParsedRaw) {
                 .expect("found status always carries a numeric detected_at");
             entry.detection_times.push(detected_at);
             entry.detection_buckets[bucket_of(detected_at)] += 1;
+            // Candidate executions-to-detection: the accepted cases,
+            // the rejected cases, and the failing case itself (which
+            // is neither accepted nor rejected). The run stops at the
+            // failure, so the run-end stats equal the detection-point
+            // stats.
+            let candidates = raw.accepted_iterations + raw.rejected_iterations + 1;
+            entry.candidate_times.push(candidates);
+            entry.candidate_buckets[bucket_of(candidates)] += 1;
         }
         Status::NotFound => entry.not_found += 1,
         Status::GaveUp => entry.gave_up += 1,
@@ -104,6 +152,10 @@ pub(crate) struct ParsedRaw {
     pub mutant: String,
     pub status: Status,
     pub detected_at: Option<usize>,
+    pub accepted_iterations: usize,
+    pub rejected_iterations: usize,
+    pub discovered_features: usize,
+    pub max_corpus_size: usize,
 }
 
 /// Parse one raw-result JSON line. Returns `None` for blank lines;
@@ -183,6 +235,10 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<ParsedRaw>, String> {
         mutant: get_str("mutant")?,
         status,
         detected_at,
+        accepted_iterations: get_u64("accepted_iterations")? as usize,
+        rejected_iterations: get_u64("rejected_iterations")? as usize,
+        discovered_features: get_u64("discovered_features")? as usize,
+        max_corpus_size: get_u64("max_corpus_size")? as usize,
     }))
 }
 /// Read raw results from a reader (one JSON line per task) and return
@@ -219,7 +275,7 @@ mod tests {
     /// Minimal raw-result line for `parse_line` unit tests.
     fn line(status: &str, detected_at: &str) -> String {
         format!(
-            r#"{{"format_version":1,"workload":"w","mutant":"m","variant":"v","status":"{status}","detected_at":{detected_at}}}"#
+            r#"{{"format_version":2,"workload":"w","mutant":"m","variant":"v","status":"{status}","detected_at":{detected_at},"accepted_iterations":3,"rejected_iterations":2,"discovered_features":1,"max_corpus_size":1}}"#
         )
     }
 
@@ -230,6 +286,10 @@ mod tests {
             .expect("non-blank");
         assert!(matches!(raw.status, Status::Found));
         assert_eq!(raw.detected_at, Some(7));
+        assert_eq!(raw.accepted_iterations, 3);
+        assert_eq!(raw.rejected_iterations, 2);
+        assert_eq!(raw.discovered_features, 1);
+        assert_eq!(raw.max_corpus_size, 1);
     }
 
     #[test]
@@ -243,7 +303,7 @@ mod tests {
 
     #[test]
     fn parse_line_rejects_wrong_format_version() {
-        let line = line("found", "7").replace("\"format_version\":1", "\"format_version\":99");
+        let line = line("found", "7").replace("\"format_version\":2", "\"format_version\":99");
         let err = parse_line(&line).expect_err("wrong format version must be rejected");
         assert!(err.contains("unsupported format_version 99"), "{err}");
     }
@@ -263,7 +323,7 @@ mod tests {
     #[test]
     fn parse_line_rejects_missing_required_fields() {
         let input =
-            r#"{"format_version":1,"workload":"w","mutant":"m","status":"found","detected_at":1}"#;
+            r#"{"format_version":2,"workload":"w","mutant":"m","status":"found","detected_at":1}"#;
         let err = parse_line(input).expect_err("missing variant must be rejected");
         assert!(err.contains("variant"), "{err}");
     }
@@ -304,6 +364,10 @@ mod tests {
             mutant: "fails_on_zero".to_string(),
             status: Status::NotFound,
             detected_at: None,
+            accepted_iterations: 100,
+            rejected_iterations: 0,
+            discovered_features: 0,
+            max_corpus_size: 0,
         };
         accumulate(&mut summaries, &raw);
         let entry = summaries
@@ -316,5 +380,31 @@ mod tests {
         assert_eq!(entry.trials, 1);
         assert_eq!(entry.not_found, 1);
         assert_eq!(entry.detection_times.len(), 0);
+        assert_eq!(entry.candidate_times.len(), 0);
+    }
+
+    #[test]
+    fn accumulate_counts_candidate_executions_on_found() {
+        let mut summaries = Summaries::new();
+        let raw = ParsedRaw {
+            variant: "targeted".to_string(),
+            workload: "w".to_string(),
+            mutant: "m".to_string(),
+            status: Status::Found,
+            detected_at: Some(4),
+            accepted_iterations: 4,
+            rejected_iterations: 7,
+            discovered_features: 0,
+            max_corpus_size: 0,
+        };
+        accumulate(&mut summaries, &raw);
+        let entry = summaries
+            .get(&("targeted".to_string(), "w".to_string(), "m".to_string()))
+            .expect("group must exist");
+        assert_eq!(entry.found, 1);
+        // accepted + rejected + the failing case itself.
+        assert_eq!(entry.candidate_times, vec![12]);
+        assert_eq!(entry.candidate_buckets[bucket_of(12)], 1);
+        assert_eq!(entry.discovered_features, vec![0]);
     }
 }
