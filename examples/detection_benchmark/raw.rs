@@ -4,7 +4,7 @@ use nojson::DisplayJson;
 
 /// Version of the raw-result format. Bump when the meaning of any field
 /// changes so old artifacts are not silently reinterpreted.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// Terminal state of one task trial.
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +52,12 @@ pub(crate) struct RawResult {
     pub accepted_iterations: usize,
     pub rejected_iterations: usize,
     pub total_samples: usize,
+    /// Distinct semantic features registered in the global observation
+    /// set (corpus-guided variants only; 0 otherwise).
+    pub discovered_features: usize,
+    /// Combined accepted + rejected corpus size at the end of the run
+    /// (corpus-guided variants only; 0 otherwise).
+    pub max_corpus_size: usize,
     /// Workload-specific observations gathered during the run
     /// (e.g. the dependent workload's semantic-bucket reach counts).
     pub observations: Vec<(&'static str, u64)>,
@@ -72,6 +78,8 @@ impl DisplayJson for RawResult {
             f.member("accepted_iterations", self.accepted_iterations)?;
             f.member("rejected_iterations", self.rejected_iterations)?;
             f.member("total_samples", self.total_samples)?;
+            f.member("discovered_features", self.discovered_features)?;
+            f.member("max_corpus_size", self.max_corpus_size)?;
             f.member(
                 "observations",
                 nojson::array(|f| {

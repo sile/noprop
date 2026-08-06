@@ -58,6 +58,17 @@ fn run(
         1,
     );
 
+    // Feedback: the mutant misreads the duration when both bits are
+    // set, so the priority rewards flags close to 0b11 and the bucket
+    // observes the flag distribution. These calls draw no random
+    // bytes, so the generator stream is unchanged.
+    ctx.bucket("flags", flags as u64);
+    ctx.maximize(match flags {
+        0b11 => 1.0,
+        0b10 | 0b01 => 0.5,
+        _ => 0.0,
+    });
+
     let duration = noprop::sample_u32(ctx);
     let size = noprop::sample_u32(ctx);
     let parsed_duration = parse_trun(flags, duration, size, sut_mutant).0;

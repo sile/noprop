@@ -29,6 +29,13 @@ fn run(
     } else {
         noprop::sample_u32(ctx)
     };
+    // Feedback: the mutant fails for x == 0, so the priority rewards
+    // values close to zero (measured by leading zeros, 0..=32) and the
+    // bucket observes that distance in finite steps. These calls draw
+    // no random bytes, so the generator stream is unchanged.
+    let zeros = x.leading_zeros();
+    ctx.bucket("leading_zeros", zeros as u64);
+    ctx.maximize(zeros as f64 / 32.0);
     process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 
