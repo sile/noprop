@@ -2069,8 +2069,11 @@ fn stats_corpus_fields_reflect_observed_features() {
 
 #[test]
 fn stats_corpus_fields_respect_corpus_cap() {
-    // Every case reports a fresh feature, so the corpus fills to the
-    // cap while the observation set keeps growing.
+    // Every case reports a fresh feature: the corpus fills to the cap
+    // while the observation set keeps growing. Each candidate invokes
+    // the closure exactly once (exploratory replay replays draws, not
+    // the closure), so 100 accepted cases register exactly 100
+    // features.
     let case = std::cell::Cell::new(0u64);
     let mut runner = Runner::new(1, 100);
     runner
@@ -2083,10 +2086,9 @@ fn stats_corpus_fields_respect_corpus_cap() {
         .unwrap();
     let stats = runner.stats();
     assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
-    assert!(
-        stats.discovered_features >= CORPUS_SIZE,
-        "at least the admitted entries must be observed: {}",
-        stats.discovered_features
+    assert_eq!(
+        stats.discovered_features, 100,
+        "the observation set must keep growing past the corpus cap"
     );
 }
 
