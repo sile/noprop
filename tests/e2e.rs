@@ -1240,7 +1240,11 @@ fn run_corpus_guided_reports_property_failure() {
         .expect_err("panicking closure must fail the run");
     let display = format!("{err}");
     assert!(display.contains("deterministic failure"), "{display}");
-    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(
+        display
+            .contains("run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority"),
+        "{display}"
+    );
     assert!(display.contains("Semantic features:"), "{display}");
     assert!(display.contains("event(\"before-failure\")"), "{display}");
     assert_eq!(err.case_index(), 0);
@@ -1304,7 +1308,11 @@ fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
         .expect_err("returned Err must fail the run");
     let display = format!("{err}");
     assert!(display.contains("corpus error"), "{display}");
-    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(
+        display
+            .contains("run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority"),
+        "{display}"
+    );
     assert!(display.contains("Semantic features:"), "{display}");
     assert!(display.contains("event(\"before-error\")"), "{display}");
     assert_eq!(err.case_index(), 0);
@@ -1360,7 +1368,11 @@ fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
     );
     let display = format!("{err}");
     assert!(display.contains("too many rejections"), "{display}");
-    assert!(display.contains("run_corpus_guided"), "{display}");
+    assert!(
+        display
+            .contains("run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority"),
+        "{display}"
+    );
     assert!(display.contains("Semantic features:"), "{display}");
 }
 

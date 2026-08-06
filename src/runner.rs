@@ -2128,12 +2128,12 @@ fn stats_corpus_fields_respect_corpus_cap() {
 fn stats_corpus_fields_on_too_many_rejections() {
     // Every case rejects, so the run ends with too-many-rejections
     // after the rejection cap. Each rejected case reports a fresh
-    // feature before rejecting, so the observation set saturates at
-    // `MAX_GLOBAL_FEATURES` (or at the number of rejected cases, if
-    // the cap were ever below it) and the rejected queue fills to
+    // feature before rejecting: with 103 iterations the rejection cap
+    // (1030) exceeds `MAX_GLOBAL_FEATURES`, so the observation set
+    // saturates at the cap and the rejected queue fills to
     // `CORPUS_SIZE`; the error must carry both.
     let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1, 4);
+    let mut runner = Runner::new(1, 103);
     let err = runner
         .run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, |ctx| {
             let i = case.get();
@@ -2143,11 +2143,8 @@ fn stats_corpus_fields_on_too_many_rejections() {
         })
         .expect_err("rejecting every case must hit the rejection cap");
     let stats = err.stats();
-    assert_eq!(stats.rejected_iterations, rejection_limit(4) + 1);
-    assert_eq!(
-        stats.discovered_features,
-        rejection_limit(4).min(MAX_GLOBAL_FEATURES),
-    );
+    assert_eq!(stats.rejected_iterations, rejection_limit(103) + 1);
+    assert_eq!(stats.discovered_features, MAX_GLOBAL_FEATURES);
     assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
 }
 
