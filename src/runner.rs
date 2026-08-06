@@ -308,13 +308,12 @@ impl Runner {
             if let Some(state) = rejection {
                 rejected += 1;
                 if rejected > rejection_cap {
+                    record_stats(self, accepted, rejected, total_samples, 0, 0);
                     return Err(too_many_rejections(
                         self,
                         &mut ctx,
                         accepted,
                         rejected,
-                        total_samples,
-                        (0, 0),
                         state.location,
                         SearchPolicy::Targeted,
                     ));
@@ -382,13 +381,12 @@ impl Runner {
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
+                            record_stats(self, accepted, rejected, total_samples, 0, 0);
                             return Err(too_many_rejections(
                                 self,
                                 &mut ctx,
                                 accepted,
                                 rejected,
-                                total_samples,
-                                (0, 0),
                                 std::panic::Location::caller(),
                                 SearchPolicy::Targeted,
                             ));
@@ -505,7 +503,6 @@ impl Runner {
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
         let mut total_samples: usize = 0;
-        let mut candidate_index: usize = 0;
 
         while accepted < self.iterations {
             // Each iteration gets a fresh context (recording or
@@ -516,7 +513,6 @@ impl Runner {
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
             let rejection = ctx.take_rejection();
             total_samples = total_samples.saturating_add(ctx.total_samples());
-            candidate_index = candidate_index.saturating_add(1);
 
             if let Some(state) = rejection {
                 rejected += 1;
@@ -525,13 +521,12 @@ impl Runner {
                     // feedback, so the error can carry the last
                     // rejected case's semantic features and candidate
                     // index (drained inside `too_many_rejections`).
+                    record_corpus_stats(self, &search, accepted, rejected, total_samples);
                     return Err(too_many_rejections(
                         self,
                         &mut ctx,
                         accepted,
                         rejected,
-                        total_samples,
-                        corpus_stats(&search),
                         state.location,
                         SearchPolicy::CorpusGuided(policy),
                     ));
@@ -556,7 +551,9 @@ impl Runner {
                     let feedback = ctx.take_feedback();
                     let mut cov = match feedback {
                         FeedbackState::SemanticCoverage(cov) => cov,
-                        _ => unreachable!("run_corpus_guided enables corpus-guided mode"),
+                        _ => unreachable!(
+                            "run_corpus_guided_with_policy enables corpus-guided mode before each case"
+                        ),
                     };
                     let features = cov.take_features();
                     let priority = cov.priority();
@@ -577,13 +574,12 @@ impl Runner {
                     if is_iteration_rejected(&*panic) {
                         rejected += 1;
                         if rejected > rejection_cap {
+                            record_corpus_stats(self, &search, accepted, rejected, total_samples);
                             return Err(too_many_rejections(
                                 self,
                                 &mut ctx,
                                 accepted,
                                 rejected,
-                                total_samples,
-                                corpus_stats(&search),
                                 std::panic::Location::caller(),
                                 SearchPolicy::CorpusGuided(policy),
                             ));
@@ -593,15 +589,7 @@ impl Runner {
                     panic_message(panic)
                 }
             };
-            let (discovered_features, max_corpus_size) = corpus_stats(&search);
-            record_stats(
-                self,
-                accepted,
-                rejected,
-                total_samples,
-                discovered_features,
-                max_corpus_size,
-            );
+            record_corpus_stats(self, &search, accepted, rejected, total_samples);
             let generated = ctx.take_generated();
             let feedback = ctx.take_feedback();
             let semantic_features = match feedback {
@@ -619,17 +607,15 @@ impl Runner {
                 self.stats,
                 SearchPolicy::CorpusGuided(policy),
             )
-            .with_semantic(semantic_features, candidate_index));
+            .with_semantic(
+                semantic_features,
+                // The failing case is the current attempt: it is
+                // neither accepted nor rejected, so its candidate
+                // index is one past the completed attempts.
+                accepted + rejected + 1,
+            ));
         }
-        let (discovered_features, max_corpus_size) = corpus_stats(&search);
-        record_stats(
-            self,
-            accepted,
-            rejected,
-            total_samples,
-            discovered_features,
-            max_corpus_size,
-        );
+        record_corpus_stats(self, &search, accepted, rejected, total_samples);
         Ok(())
     }
 
@@ -807,30 +793,44 @@ fn corpus_stats(search: &CorpusGuidedSearch) -> (usize, usize) {
     )
 }
 
-/// Record run stats and build the too-many-rejections exit error.
-///
-/// For corpus-guided runs, the error additionally carries the semantic
-/// features of the last rejected case and its candidate index (the
-/// ordinal of the attempt that exceeded the cap: `accepted + rejected`).
-#[expect(clippy::too_many_arguments)]
-fn too_many_rejections(
+/// Record the run progress counters including the corpus-derived
+/// fields at the current search state.
+fn record_corpus_stats(
     runner: &mut Runner,
-    ctx: &mut TestCaseContext,
+    search: &CorpusGuidedSearch,
     accepted: usize,
     rejected: usize,
     total_samples: usize,
-    corpus_stats: (usize, usize),
-    location: &'static std::panic::Location<'static>,
-    policy: SearchPolicy,
-) -> Error {
+) {
+    let (discovered_features, max_corpus_size) = corpus_stats(search);
     record_stats(
         runner,
         accepted,
         rejected,
         total_samples,
-        corpus_stats.0,
-        corpus_stats.1,
+        discovered_features,
+        max_corpus_size,
     );
+}
+
+/// Build the too-many-rejections exit error. The caller must have
+/// recorded the run progress counters first (via `record_stats` or
+/// `record_corpus_stats`); this helper reads them back from
+/// `runner.stats`.
+///
+/// For corpus-guided runs, the error additionally carries the semantic
+/// features of the last rejected case and its candidate index (the
+/// ordinal of the attempt that exceeded the cap: `accepted + rejected`;
+/// the caller checks the cap right after `rejected += 1`, so the
+/// ordinal is exact).
+fn too_many_rejections(
+    runner: &mut Runner,
+    ctx: &mut TestCaseContext,
+    accepted: usize,
+    rejected: usize,
+    location: &'static std::panic::Location<'static>,
+    policy: SearchPolicy,
+) -> Error {
     let generated = ctx.take_generated();
     let err = Error::from_too_many_rejections(
         runner.seed,
