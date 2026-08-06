@@ -55,6 +55,9 @@ const MAX_GLOBAL_FEATURES: usize = 1024;
 /// ([`Stats::discovered_features`](Stats::discovered_features) and
 /// [`Stats::max_corpus_size`](Stats::max_corpus_size)) are only
 /// meaningful for corpus-guided runs and are 0 otherwise.
+///
+/// As an unstable v0.0.x API, fields may be added over time, which
+/// breaks external struct-literal construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
     /// Number of iterations whose closure completed without calling
@@ -81,20 +84,22 @@ pub struct Stats {
     /// sample. Includes samples produced by rejected iterations, since
     /// those iterations still consumed generator budget.
     pub total_samples: usize,
-    /// Number of distinct semantic features observed during a
-    /// corpus-guided run (the size of the global observation set, i.e.
-    /// `observed.len()`, capped at `MAX_GLOBAL_FEATURES`). Features of
-    /// the failing case itself are not registered (admission happens
-    /// only for accepted or rejected cases that continue the run), so
-    /// the value may be smaller than the features printed in the
-    /// failure report. 0 for uniform and targeted runs.
+    /// Number of distinct semantic features registered in the global
+    /// observation set during a corpus-guided run (i.e. `observed.len()`,
+    /// which saturates at `MAX_GLOBAL_FEATURES`). Features registered
+    /// by rejected cases are included. Features of the failing case
+    /// itself are not registered (admission happens only for accepted
+    /// or rejected cases that continue the run), so the value may be
+    /// smaller than the features printed in the failure report.
     pub discovered_features: usize,
-    /// Maximum combined size of the semantic corpus during a
-    /// corpus-guided run. The combined size (accepted + rejected) only
-    /// grows and is trimmed back to `CORPUS_SIZE` when full, so the
-    /// value at the end of the run equals the maximum; the transient
-    /// overshoot just before eviction is not counted. 0 for uniform
-    /// and targeted runs.
+    /// Combined size of the semantic corpus (accepted + rejected) at
+    /// the end of a corpus-guided run. The combined size only grows
+    /// and is trimmed back to `CORPUS_SIZE` when full, so the value at
+    /// the end of the run equals the maximum; the transient overshoot
+    /// just before eviction is not counted. This relies on the current
+    /// eviction behavior (admission pushes, then trims only when over
+    /// the cap), so a future admission change must re-check the
+    /// invariant.
     pub max_corpus_size: usize,
 }
 
@@ -443,7 +448,7 @@ impl Runner {
     /// ```
     /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
     /// runner
-    ///     .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+    ///     .run_corpus_guided(|ctx| {
     ///         let x = noprop::sample_u32(ctx);
     ///         if x == 0 {
     ///             ctx.event("zero");
@@ -462,6 +467,21 @@ impl Runner {
     /// Corpus-guided search under an explicit
     /// [`CorpusPolicy`](CorpusPolicy), otherwise identical to
     /// [`run_corpus_guided`](Runner::run_corpus_guided).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
+    /// runner
+    ///     .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+    ///         let x = noprop::sample_u32(ctx);
+    ///         if x == 0 {
+    ///             ctx.event("zero");
+    ///         }
+    ///         Ok(())
+    ///     })
+    ///     .expect("corpus-guided run must succeed");
+    /// ```
     pub fn run_corpus_guided_with_policy<F>(&mut self, policy: CorpusPolicy, f: F) -> Result<()>
     where
         F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
@@ -940,8 +960,6 @@ impl TargetedSearch {
     }
 }
 
-/// Corpus-guided search policy.
-///
 /// Corpus admission policy for
 /// [`Runner::run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy).
 ///
@@ -953,11 +971,10 @@ impl TargetedSearch {
 /// policies share one corpus engine; the difference is confined to
 /// admission and eviction.
 ///
-/// This enum is `#[non_exhaustive]`: the set of policies may change as
-/// the comparison benchmark data accumulates. `Runner::run_corpus_guided`
-/// currently uses `SemanticWithPriority`.
+/// The set of policies may change as the comparison benchmark data
+/// accumulates. `Runner::run_corpus_guided` currently uses
+/// `SemanticWithPriority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum CorpusPolicy {
     /// Admit cases only when they register at least one novel feature.
     SemanticOnly,
@@ -2151,4 +2168,15 @@ fn stats_corpus_fields_include_rejected_case_features() {
     assert_eq!(stats.rejected_iterations, 1);
     assert_eq!(stats.discovered_features, 1);
     assert_eq!(stats.max_corpus_size, 1);
+}
+
+#[test]
+fn stats_corpus_fields_zero_iterations() {
+    let mut runner = Runner::new(1, 0);
+    runner
+        .run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, |_ctx| {
+            panic!("closure must not be invoked with zero iterations");
+        })
+        .expect("zero iterations must succeed");
+    assert_eq!(runner.stats(), Stats::default());
 }

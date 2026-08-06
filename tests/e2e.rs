@@ -1723,8 +1723,9 @@ fn run_corpus_guided_with_policy_matches_plain_corpus_guided() {
 
 #[test]
 fn run_corpus_guided_semantic_only_runs_and_reports_corpus_fields() {
-    // The corpus fields are non-zero for corpus-guided runs and stay
-    // within the documented bounds.
+    // The corpus fields are non-zero for corpus-guided runs. The exact
+    // values and the caps (feature set 1024, corpus 64) are verified
+    // in unit tests; e2e only checks the 0 / non-zero distinction.
     let case = std::cell::Cell::new(0u64);
     let mut runner = noprop::Runner::new(1, 128);
     runner
@@ -1737,9 +1738,7 @@ fn run_corpus_guided_semantic_only_runs_and_reports_corpus_fields() {
         .expect("semantic-only run must succeed");
     let stats = runner.stats();
     assert!(stats.discovered_features > 0);
-    assert!(stats.discovered_features <= 1024, "feature cap");
     assert!(stats.max_corpus_size > 0);
-    assert!(stats.max_corpus_size <= 64, "corpus cap");
 }
 
 #[test]
@@ -1776,11 +1775,13 @@ fn run_corpus_guided_failure_error_carries_corpus_stats() {
         })
         .expect_err("panicking closure must fail the run");
     let stats = err.stats();
-    assert!(
-        stats.discovered_features >= 4,
+    // The four accepted cases each register a novel feature; the
+    // failing case (i = 4) is not admitted, so the count is exactly 4.
+    assert_eq!(
+        stats.discovered_features, 4,
         "accepted cases must be counted"
     );
-    assert!(stats.max_corpus_size >= 4);
+    assert_eq!(stats.max_corpus_size, 4);
 }
 
 #[test]

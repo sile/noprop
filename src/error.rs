@@ -76,8 +76,9 @@ pub struct Error {
     iterations: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
-    /// Boxed to keep `Error` small (see `SemanticFailureReport`):
-    /// corpus stats double the size of `Stats`.
+    /// Boxed to keep `Error` small: the corpus stats fields would push
+    /// the inline `Error` past clippy's 128-byte `result_large_err`
+    /// threshold (96 bytes boxed vs 128+ inline).
     stats: Box<Stats>,
     /// The runner entry point that produced this failure. Switches the
     /// reproduce hint.
