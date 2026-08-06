@@ -36,9 +36,12 @@ record the mutated case's draws and features
            ────────► repeat
 ```
 
-`Runner::run_corpus_guided(closure)` is the entry point. The closure
-receives the same `&mut TestCaseContext` as `Runner::run`, so the same
-property runs under every policy. See the
+`Runner::run_corpus_guided(closure)` is the entry point (it delegates
+to `run_corpus_guided_with_policy` with `CorpusPolicy::SemanticWithPriority`);
+`Runner::run_corpus_guided_with_policy(policy, closure)` selects the
+admission policy explicitly (`SemanticOnly`, or `SemanticWithPriority`).
+The closure receives the same `&mut TestCaseContext` as `Runner::run`,
+so the same property runs under every policy. See the
 [`run_corpus_guided`](crate::Runner::run_corpus_guided) documentation
 for a runnable example.
 
@@ -99,8 +102,8 @@ matches the property's domain:
 - `maximize(score)` — when "closeness to failure" can be designed as a
   single scalar. Unlike the semantic methods it never registers a
   feature; it only steers admission and eviction within a feature group
-  (under the priority policy). It is optional: a case that never calls
-  it is still admitted if it reports a novel feature.
+  (under `SemanticWithPriority`). It is optional: a case that never
+  calls it is still admitted if it reports a novel feature.
 
 The label must identify a *meaning*, not a call site: using the same
 label for different meanings silently merges them (the search treats
@@ -139,16 +142,17 @@ size of both queues is capped at `CORPUS_SIZE`.
 Admission:
 
 - A case with novel features is admitted while the combined size is
-  below the cap.
+  below the cap (both policies).
 - Once full, the entry with the fewest newly registered features is
-  evicted; ties keep the earlier arrival. When the case carries a
-  scalar priority, ties within that group break on the lowest score
-  (missing scores count as the lowest).
-- A case with no novel feature is admitted only when its priority beats
-  the lowest-scored entry of a feature group it overlaps, replacing
-  that entry (the targeted top-k replacement, restricted to one feature
-  group). This keeps the search from drifting entirely away from a
-  promising group once its features are covered.
+  evicted; ties evict the earliest arrival. Under
+  `SemanticWithPriority`, ties within that group break on the lowest
+  score (missing scores count as the lowest).
+- Under `SemanticWithPriority`, a case with no novel feature is
+  admitted only when its priority beats the lowest-scored entry of a
+  feature group it overlaps, replacing that entry (the targeted top-k
+  replacement, restricted to one feature group). This keeps the search
+  from drifting entirely away from a promising group once its features
+  are covered. Under `SemanticOnly` such a case is never admitted.
 
 When the corpus is full of scored entries and a new case with no
 priority (it never called `maximize`, or called it with an invalid
@@ -185,11 +189,13 @@ rolls, corpus picks, and mutation rolls, so a fixed seed yields a fixed
 sequence of cases and mutations.
 
 A failure report's reproduce hint reruns the exact failing seed with
-the original iteration budget and names `run_corpus_guided`. The report
-also carries the failing case's candidate index (across accepted and
-rejected cases) and the semantic features the failing case reported, so
-the interesting input region is visible without exposing the choice
-sequence itself.
+the original iteration budget and names
+`run_corpus_guided_with_policy(noprop::CorpusPolicy::…, |ctx| ...)`
+(reusing the run's corpus policy), so the rerun reproduces the same
+failure. The report also carries the failing case's candidate index
+(across accepted and rejected cases) and the semantic features the
+failing case reported, so the interesting input region is visible
+without exposing the choice sequence itself.
 
 ## Known Limitations
 

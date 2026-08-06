@@ -761,7 +761,8 @@ impl TestCaseContext {
     /// Reject the current iteration and unwind out of the property
     /// closure. Only valid inside [`Runner::run`](crate::Runner::run),
     /// [`Runner::run_targeted`](crate::Runner::run_targeted) or
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided);
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) or
+    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy);
     /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
@@ -783,7 +784,8 @@ impl TestCaseContext {
         if !self.inside_runner {
             panic!(
                 "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run, \
-                 Runner::run_targeted or Runner::run_corpus_guided property closure. Constructing a \
+                 Runner::run_targeted, Runner::run_corpus_guided or \
+                 Runner::run_corpus_guided_with_policy property closure. Constructing a \
                  TestCaseContext directly via TestCaseContext::new does not create a Runner boundary."
             );
         }
@@ -1182,7 +1184,7 @@ impl TestCaseContext {
     /// not need to call `maximize`.
     ///
     /// In corpus-guided mode (see
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided))
+    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy))
     /// this reports an optional scalar priority for the case, using the
     /// same aggregation and invalid handling.
     pub fn maximize(&mut self, score: f64) {
@@ -1207,7 +1209,7 @@ impl TestCaseContext {
     /// Report reaching a finite event for the current case.
     ///
     /// Only meaningful in corpus-guided mode:
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
     /// switches the context into that mode before running its case
     /// loop. In the default mode (plain [`Runner::run`](crate::Runner::run)
     /// or a directly constructed context) this is an allocation-free
@@ -1262,7 +1264,7 @@ impl TestCaseContext {
 
     /// Switch the context into corpus-guided feedback mode for the
     /// upcoming case. Called by
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
     /// before each case; the case-local feedback is drained via
     /// [`take_feedback`](Self::take_feedback) at the case boundary.
     pub(crate) fn enable_corpus_guided(&mut self) {

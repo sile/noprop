@@ -58,8 +58,9 @@ It does not own:
 - shrink and failure-case minimization
 - public sampler traits or pluggable search policies
 - shared case-loop logic between the runner entry points (`run`,
-  `run_targeted`, `run_corpus_guided`; the loops are kept separate for
-  now — sharing them is deferred until the search policies stabilize)
+  `run_targeted`, `run_corpus_guided`, `run_corpus_guided_with_policy`;
+  the loops are kept separate for now — sharing them is deferred until
+  the search policies stabilize)
 
 ## Feedback Protocol
 
