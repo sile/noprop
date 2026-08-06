@@ -1617,6 +1617,57 @@ fn run_corpus_guided_steers_candidates_by_priority() {
 }
 
 #[test]
+fn run_corpus_guided_with_policy_steering_depends_on_policy() {
+    // The policy argument must reach the search: `SemanticWithPriority`
+    // lets `maximize` steer admission and eviction, so rewarding large
+    // x keeps the search in the high end; under `SemanticOnly` the
+    // priority is ignored for admission and eviction, so the same
+    // property must not steer. A bug that ignores the argument
+    // (always running one policy) fails one of the two assertions.
+    // Medians are asserted (not a max comparison) so the test cannot
+    // pass on uniform-restart noise alone.
+    use std::cell::Cell;
+
+    fn observe(seed: u64, policy: noprop::CorpusPolicy, score_of: fn(usize) -> f64) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 256)
+            .run_corpus_guided_with_policy(policy, |ctx| {
+                let x = noprop::sample_usize_in(ctx, 0..1000);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.event("covered");
+                ctx.maximize(score_of(x));
+                Ok(())
+            })
+            .expect("corpus-guided run must succeed");
+        observed.into_inner()
+    }
+
+    fn median(xs: &[usize]) -> usize {
+        let mut sorted: Vec<usize> = xs[128..].to_vec();
+        sorted.sort_unstable();
+        sorted[sorted.len() / 2]
+    }
+
+    let reward_high: fn(usize) -> f64 = |x| x as f64 / 1000.0;
+    let with_priority = median(&observe(
+        6,
+        noprop::CorpusPolicy::SemanticWithPriority,
+        reward_high,
+    ));
+    let semantic_only = median(&observe(6, noprop::CorpusPolicy::SemanticOnly, reward_high));
+    assert!(
+        with_priority > 850,
+        "SemanticWithPriority must keep the search in the high end: median {with_priority}"
+    );
+    assert!(
+        semantic_only < 850,
+        "SemanticOnly must not steer by priority: median {semantic_only}"
+    );
+}
+
+#[test]
 fn run_corpus_guided_steers_stateful_transitions() {
     // A stateful-style target: the property advances an abstract state
     // machine and reports each transition. The corpus must explore
