@@ -238,7 +238,9 @@ impl Runner {
     }
 
     /// Observability counters from the most recent
-    /// [`run`](Runner::run) or [`run_targeted`](Runner::run_targeted)
+    /// [`run`](Runner::run), [`run_targeted`](Runner::run_targeted),
+    /// [`run_corpus_guided`](Runner::run_corpus_guided) or
+    /// [`run_corpus_guided_with_policy`](Runner::run_corpus_guided_with_policy)
     /// call on this runner. Returns [`Stats::default`] (all zeros)
     /// before a run has been invoked.
     pub fn stats(&self) -> Stats {
@@ -2049,6 +2051,22 @@ fn stats_corpus_fields_are_zero_for_uniform_and_targeted() {
     let stats = runner.stats();
     assert_eq!(stats.discovered_features, 0);
     assert_eq!(stats.max_corpus_size, 0);
+
+    // The corpus fields stay 0 on failure paths too.
+    let err = Runner::new(1, 4)
+        .run(|_ctx| Err::<(), Box<dyn std::error::Error>>("boom".into()))
+        .expect_err("returned Err must fail the run");
+    assert_eq!(err.stats().discovered_features, 0);
+    assert_eq!(err.stats().max_corpus_size, 0);
+
+    let err = Runner::new(1, 4)
+        .run_targeted(|ctx| {
+            crate::sample_u32(ctx);
+            panic!("boom");
+        })
+        .expect_err("panicking closure must fail the run");
+    assert_eq!(err.stats().discovered_features, 0);
+    assert_eq!(err.stats().max_corpus_size, 0);
 }
 
 #[test]
@@ -2095,10 +2113,11 @@ fn stats_corpus_fields_respect_corpus_cap() {
 #[test]
 fn stats_corpus_fields_on_too_many_rejections() {
     // Every case rejects, so the run ends with too-many-rejections
-    // after the rejection cap (1024 for small budgets). Each rejected
-    // case reports a fresh feature before rejecting, so the global
-    // observation set saturates at `MAX_GLOBAL_FEATURES` and the
-    // rejected queue fills to `CORPUS_SIZE`; the error must carry both.
+    // after the rejection cap. Each rejected case reports a fresh
+    // feature before rejecting, so the observation set saturates at
+    // `MAX_GLOBAL_FEATURES` (or at the number of rejected cases, if
+    // the cap were ever below it) and the rejected queue fills to
+    // `CORPUS_SIZE`; the error must carry both.
     let case = std::cell::Cell::new(0u64);
     let mut runner = Runner::new(1, 4);
     let err = runner
@@ -2111,7 +2130,10 @@ fn stats_corpus_fields_on_too_many_rejections() {
         .expect_err("rejecting every case must hit the rejection cap");
     let stats = err.stats();
     assert_eq!(stats.rejected_iterations, rejection_limit(4) + 1);
-    assert_eq!(stats.discovered_features, MAX_GLOBAL_FEATURES);
+    assert_eq!(
+        stats.discovered_features,
+        rejection_limit(4).min(MAX_GLOBAL_FEATURES),
+    );
     assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
 }
 

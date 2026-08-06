@@ -142,16 +142,18 @@ size of both queues is capped at `CORPUS_SIZE`.
 Admission:
 
 - A case with novel features is admitted while the combined size is
-  below the cap.
+  below the cap (both policies).
 - Once full, the entry with the fewest newly registered features is
-  evicted; ties keep the earlier arrival. When the case carries a
-  scalar priority, ties within that group break on the lowest score
-  (missing scores count as the lowest).
-- A case with no novel feature is admitted only when its priority beats
-  the lowest-scored entry of a feature group it overlaps, replacing
-  that entry (the targeted top-k replacement, restricted to one feature
-  group). This keeps the search from drifting entirely away from a
-  promising group once its features are covered.
+  evicted; ties keep the earlier arrival. Under
+  `SemanticWithPriority`, when the case carries a scalar priority, ties
+  within that group break on the lowest score (missing scores count as
+  the lowest).
+- Under `SemanticWithPriority`, a case with no novel feature is
+  admitted only when its priority beats the lowest-scored entry of a
+  feature group it overlaps, replacing that entry (the targeted top-k
+  replacement, restricted to one feature group). This keeps the search
+  from drifting entirely away from a promising group once its features
+  are covered. Under `SemanticOnly` such a case is never admitted.
 
 When the corpus is full of scored entries and a new case with no
 priority (it never called `maximize`, or called it with an invalid
