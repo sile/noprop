@@ -41,6 +41,8 @@ pub(crate) struct Task {
     pub uniform: Property,
     /// Mutant SUT under explicitly biased generation.
     pub biased: Property,
+    /// Mutant SUT under automatic type-level boundary bias.
+    pub bb: Property,
 }
 
 pub(crate) struct Workload {

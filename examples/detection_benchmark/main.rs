@@ -9,6 +9,7 @@
 //! - `summary`: read raw-result JSON lines from stdin and print a
 //!   per-task bucket summary (regenerated from the raw results).
 
+mod bb;
 mod raw;
 mod summary;
 mod targets;
@@ -62,7 +63,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         .then(|o| o.value().parse())?;
     let variant_name: String = opt("variant")
         .ty("NAME")
-        .doc("Search variant: uniform | biased | targeted | semantic-only | semantic-with-priority (or base for the ground-truth SUT)")
+        .doc("Search variant: uniform | biased | boundary-biased | targeted | semantic-only | semantic-with-priority (or base for the ground-truth SUT)")
         .example("uniform")
         .take(args)
         .then(|o| o.value().parse())?;
@@ -107,7 +108,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
             args,
             format!(
                 "unknown variant {variant_name:?}; available: base, uniform, biased, \
-                 targeted, semantic-only, semantic-with-priority"
+                 boundary-biased, targeted, semantic-only, semantic-with-priority"
             ),
         )
     })?;

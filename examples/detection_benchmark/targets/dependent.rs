@@ -35,6 +35,7 @@ fn parse_trun(flags: u8, duration: u32, size: u32, mutant: bool) -> (Option<u32>
 fn run(
     sut_mutant: bool,
     biased: bool,
+    bb: bool,
     ctx: &mut TestCaseContext,
     obs: &Observe,
 ) -> Result<(), String> {
@@ -69,8 +70,16 @@ fn run(
         _ => 0.0,
     });
 
-    let duration = noprop::sample_u32(ctx);
-    let size = noprop::sample_u32(ctx);
+    let duration = if bb {
+        crate::bb::u32(ctx)
+    } else {
+        noprop::sample_u32(ctx)
+    };
+    let size = if bb {
+        crate::bb::u32(ctx)
+    } else {
+        noprop::sample_u32(ctx)
+    };
     let parsed_duration = parse_trun(flags, duration, size, sut_mutant).0;
 
     // Property: the parsed duration must agree with the flags and the
@@ -94,15 +103,19 @@ pub(crate) const WORKLOAD: Workload = Workload {
         base: run_base,
         uniform: run_uniform,
         biased: run_biased,
+        bb: run_bb,
     }],
 };
 
 fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(false, false, ctx, obs)
+    run(false, false, false, ctx, obs)
 }
 fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(true, false, ctx, obs)
+    run(true, false, false, ctx, obs)
 }
 fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(true, true, ctx, obs)
+    run(true, true, false, ctx, obs)
+}
+fn run_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    run(true, false, true, ctx, obs)
 }

@@ -46,6 +46,10 @@ pub(crate) const WORKLOAD: Workload = Workload {
         base: run_base,
         uniform: run_uniform,
         biased: run_biased,
+        // The generator draws only bounded ranges and booleans, which
+        // the generic boundary mix does not wrap, so the bb property
+        // is the uniform one.
+        bb: run_uniform,
     }],
 };
 

@@ -25,12 +25,11 @@ fn draw(witness: Option<u32>, ctx: &mut TestCaseContext) -> u32 {
 
 fn run(
     sut_mutant: bool,
-    biased: bool,
+    x: u32,
+    y: u32,
     ctx: &mut TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
-    let x = draw(if biased { Some(1) } else { None }, ctx);
-    let y = draw(if biased { Some(2) } else { None }, ctx);
     // Feedback: the mutant fails for the exact pair (1, 2), so the
     // priority rewards each draw landing on its witness value and the
     // events observe the two conditions separately. These calls draw
@@ -41,6 +40,27 @@ fn run(
     process(x, y, sut_mutant).map_err(|_| format!("process failed for ({x}, {y})"))
 }
 
+fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    let x = draw(None, ctx);
+    let y = draw(None, ctx);
+    run(false, x, y, ctx, obs)
+}
+fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    let x = draw(None, ctx);
+    let y = draw(None, ctx);
+    run(true, x, y, ctx, obs)
+}
+fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    let x = draw(Some(1), ctx);
+    let y = draw(Some(2), ctx);
+    run(true, x, y, ctx, obs)
+}
+fn run_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    let x = crate::bb::u32(ctx);
+    let y = crate::bb::u32(ctx);
+    run(true, x, y, ctx, obs)
+}
+
 pub(crate) const WORKLOAD: Workload = Workload {
     name: "combination",
     description: "mutant fails only for the exact draw pair (1, 2)",
@@ -49,15 +69,6 @@ pub(crate) const WORKLOAD: Workload = Workload {
         base: run_base,
         uniform: run_uniform,
         biased: run_biased,
+        bb: run_bb,
     }],
 };
-
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(false, false, ctx, obs)
-}
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(true, false, ctx, obs)
-}
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(true, true, ctx, obs)
-}
