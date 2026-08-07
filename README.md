@@ -35,6 +35,20 @@ fn addition_is_commutative() -> noprop::Result<()> {
 }
 ```
 
+To mix boundary values into a draw with an exact probability, use
+`sample_with_boundaries` — 10% of the time one of the candidates
+(which may be domain-level values such as an MTU or a page size),
+otherwise a uniform draw:
+
+```rust
+let x = noprop::sample_with_boundaries(
+    ctx,
+    &[0, 1500, u32::MAX],
+    noprop::Ratio::ONE_TENTH,
+    noprop::sample_u32,
+);
+```
+
 Status
 ------
 
@@ -44,11 +58,12 @@ Detection benchmark
 -------------------
 
 `examples/detection_benchmark` measures how many iterations noprop
-needs to detect known mutants of five small workloads (high-frequency,
-boundary, combination, dependent, bst) under different generator
-variants, and how broad the generated inputs are (semantic buckets;
-reported by the dependent workload, whose base variant shows the full
-breadth).
+needs to detect known mutants of small workloads (high-frequency,
+boundary, combination, dependent, bst, stepping, stateful) under
+different generator variants, and how broad the generated inputs are
+(semantic buckets; reported by the dependent workload, whose base
+variant shows the full breadth). The guard workload checks that the
+corpus-guided machinery stays bounded.
 
 ```
 # Run a single task: print one raw-result JSON line.
@@ -64,10 +79,11 @@ cargo run --example detection_benchmark -- summary < raw.jsonl
 ```
 
 The `base` variant (ground-truth SUT) completes every property and is
-used to verify the workloads; the comparison variants are `uniform`
-and `biased`. Raw results are written as format-versioned JSON lines,
-so summaries can always be regenerated from a saved cohort. Smoke
-tests live in `tests/detection_benchmark.rs`.
+used to verify the workloads; the comparison variants are `uniform`,
+`biased`, `boundary-biased`, `targeted`, `semantic-only`, and
+`semantic-with-priority`. Raw results are written as format-versioned
+JSON lines, so summaries can always be regenerated from a saved cohort.
+Smoke tests live in `tests/detection_benchmark.rs`.
 
 These numbers measure only the chosen workloads, mutants, seed
 cohort, and iteration budget. They are not a complete measure of

@@ -439,17 +439,122 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
     v
 }
 
-/// Return `true` with probability `numerator / denominator`.
+/// An exact rational probability `numerator / denominator`.
+///
+/// The ratio is valid by construction: `denominator` is non-zero and
+/// `numerator <= denominator`, so the probability always lies in
+/// `[0, 1]`. Use [`Ratio::new`] when the inputs are known-good or
+/// checked, [`Ratio::saturating_new`] to clamp a computed ratio into
+/// the valid range, and the `ONE_*` constants for the common values.
+///
+/// A ratio is a probability, not a fraction of other quantities:
+/// `Ratio::new(1, 3)` means exactly one-in-three — the sampling core
+/// compares against `denominator` directly, so the value stays exact
+/// rather than a `0.333…`-close float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ratio {
+    numerator: u32,
+    denominator: u32,
+}
+
+impl Ratio {
+    /// Construct a ratio, or `None` when the inputs do not describe a
+    /// probability (`denominator == 0`, or `numerator > denominator`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(noprop::Ratio::new(1, 3), Some(noprop::Ratio::ONE_THIRD));
+    /// assert_eq!(noprop::Ratio::new(1, 0), None);
+    /// assert_eq!(noprop::Ratio::new(2, 1), None);
+    /// ```
+    pub const fn new(numerator: u32, denominator: u32) -> Option<Self> {
+        if denominator != 0 && numerator <= denominator {
+            Some(Self {
+                numerator,
+                denominator,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Construct a ratio, clamping the probability into `[0, 1]`.
+    ///
+    /// - `numerator > denominator` clamps to 100% (`denominator / denominator`).
+    /// - a zero denominator with a positive numerator means "more than
+    ///   100%" and clamps to 100% (`1 / 1`).
+    /// - a zero numerator with a zero denominator is treated as 0%
+    ///   (`0 / 1`).
+    ///
+    /// This never fails, so it suits ratios computed from runtime
+    /// values (e.g. `Ratio::saturating_new(score, max_score)`) where
+    /// clamping to the extremes is the desired semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(noprop::Ratio::saturating_new(3, 2), noprop::Ratio::new(2, 2).unwrap());
+    /// assert_eq!(noprop::Ratio::saturating_new(1, 0), noprop::Ratio::new(1, 1).unwrap());
+    /// assert_eq!(noprop::Ratio::saturating_new(0, 0), noprop::Ratio::new(0, 1).unwrap());
+    /// ```
+    pub const fn saturating_new(numerator: u32, denominator: u32) -> Self {
+        if denominator == 0 {
+            if numerator == 0 {
+                Self {
+                    numerator: 0,
+                    denominator: 1,
+                }
+            } else {
+                Self {
+                    numerator: 1,
+                    denominator: 1,
+                }
+            }
+        } else if numerator > denominator {
+            Self {
+                numerator: denominator,
+                denominator,
+            }
+        } else {
+            Self {
+                numerator,
+                denominator,
+            }
+        }
+    }
+
+    /// 1/2.
+    pub const ONE_HALF: Self = match Self::new(1, 2) {
+        Some(ratio) => ratio,
+        None => panic!("Ratio::ONE_HALF: invalid constant"),
+    };
+
+    /// 1/3.
+    pub const ONE_THIRD: Self = match Self::new(1, 3) {
+        Some(ratio) => ratio,
+        None => panic!("Ratio::ONE_THIRD: invalid constant"),
+    };
+
+    /// 1/4.
+    pub const ONE_QUARTER: Self = match Self::new(1, 4) {
+        Some(ratio) => ratio,
+        None => panic!("Ratio::ONE_QUARTER: invalid constant"),
+    };
+
+    /// 1/10.
+    pub const ONE_TENTH: Self = match Self::new(1, 10) {
+        Some(ratio) => ratio,
+        None => panic!("Ratio::ONE_TENTH: invalid constant"),
+    };
+}
+
+/// Return `true` with probability `ratio`.
 ///
 /// The typical use is weighting a two-way branch by an exact rational
 /// probability instead of a floating-point one, so that
-/// e.g. `sample_ratio(ctx, 1, 3)` is exactly one-in-three, not
-/// `0.333…`-close.
-///
-/// # Panics
-///
-/// - Panics if `denominator == 0`.
-/// - Panics if `numerator > denominator`.
+/// e.g. `sample_ratio(ctx, Ratio::ONE_THIRD)` is exactly one-in-three,
+/// not `0.333…`-close.
 ///
 /// # Determinism note
 ///
@@ -465,32 +570,81 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
 /// ```
 /// let mut ctx = noprop::TestCaseContext::new(0);
 /// // 1 in 3 chance of true.
-/// let _b = noprop::sample_ratio(&mut ctx, 1, 3);
+/// let _b = noprop::sample_ratio(&mut ctx, noprop::Ratio::ONE_THIRD);
 /// // Always false; consumes no RNG.
-/// assert!(!noprop::sample_ratio(&mut ctx, 0, 5));
+/// assert!(!noprop::sample_ratio(&mut ctx, noprop::Ratio::new(0, 5).unwrap()));
 /// // Always true; consumes no RNG.
-/// assert!(noprop::sample_ratio(&mut ctx, 5, 5));
+/// assert!(noprop::sample_ratio(&mut ctx, noprop::Ratio::new(5, 5).unwrap()));
 /// ```
 #[track_caller]
-pub fn sample_ratio(ctx: &mut TestCaseContext, numerator: u32, denominator: u32) -> bool {
+pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
     let loc = Location::caller();
-    assert!(
-        denominator != 0,
-        "sample_ratio: denominator must be non-zero"
-    );
-    assert!(
-        numerator <= denominator,
-        "sample_ratio: numerator ({numerator}) must be <= denominator ({denominator})"
-    );
-    let v = if numerator == 0 {
+    let v = if ratio.numerator == 0 {
         false
-    } else if numerator == denominator {
+    } else if ratio.numerator == ratio.denominator {
         true
     } else {
-        sample_below(ctx, denominator as u64) < numerator as u64
+        sample_below(ctx, ratio.denominator as u64) < ratio.numerator as u64
     };
     ctx.record_generated(&v, loc);
     v
+}
+
+/// Return a value from `boundaries` with probability `ratio`, otherwise
+/// draw from `uniform`.
+///
+/// This packages the boundary-mixing recipe — an exact-ratio two-way
+/// branch between a fixed candidate list and a base generator — into
+/// one call. The distribution is readable from the arguments: with
+/// probability `ratio` the value is drawn uniformly from `boundaries`,
+/// and otherwise it is whatever `uniform` produces. The base generator
+/// stays untouched, so a `sample_u32`-based property continues to draw
+/// uniformly except for the explicitly requested boundary mass.
+///
+/// `boundaries` may carry domain-level values that an automatic
+/// type-level bias could not reach (e.g. an MP4 size field crossing
+/// `u32::MAX`, an MTU, a page size).
+///
+/// # Panics
+///
+/// Panics if `boundaries` is empty (via [`sample_choice`]).
+///
+/// # Determinism note
+///
+/// The draw order is fixed: the ratio branch first, then either the
+/// boundary choice or the `uniform` call. The ratio degenerates (0 or
+/// 100%) and a one-element boundary slice consume no RNG bytes, so this
+/// helper can replace a hand-written `if` recipe without shifting the
+/// choice sequence.
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+/// // 10% of the time a boundary value, otherwise uniform.
+/// let _x = noprop::sample_with_boundaries(
+///     &mut ctx,
+///     &[0, 1500, u32::MAX],
+///     noprop::Ratio::ONE_TENTH,
+///     noprop::sample_u32,
+/// );
+/// ```
+#[track_caller]
+pub fn sample_with_boundaries<T, F>(
+    ctx: &mut TestCaseContext,
+    boundaries: &[T],
+    ratio: Ratio,
+    uniform: F,
+) -> T
+where
+    T: Clone + std::fmt::Debug + 'static,
+    F: FnOnce(&mut TestCaseContext) -> T,
+{
+    if sample_ratio(ctx, ratio) {
+        sample_choice(ctx, boundaries)
+    } else {
+        uniform(ctx)
+    }
 }
 
 /// Pick an index from `weights` with probability proportional to each
@@ -1597,6 +1751,58 @@ mod tests {
         );
     }
 
+    // === Ratio ===
+
+    #[test]
+    fn ratio_new_accepts_valid() {
+        let ratio = Ratio::new(1, 3).expect("valid ratio");
+        assert_eq!(ratio.numerator, 1);
+        assert_eq!(ratio.denominator, 3);
+        assert_eq!(Ratio::new(0, 5).unwrap().numerator, 0);
+        assert_eq!(Ratio::new(5, 5).unwrap().denominator, 5);
+    }
+
+    #[test]
+    fn ratio_new_rejects_zero_denominator() {
+        assert_eq!(Ratio::new(0, 0), None);
+        assert_eq!(Ratio::new(1, 0), None);
+    }
+
+    #[test]
+    fn ratio_new_rejects_numerator_exceeding_denominator() {
+        assert_eq!(Ratio::new(2, 1), None);
+        assert_eq!(Ratio::new(11, 10), None);
+    }
+
+    #[test]
+    fn ratio_saturating_new_clamps_excess_numerator() {
+        assert_eq!(Ratio::saturating_new(3, 2), Ratio::new(2, 2).unwrap());
+        assert_eq!(Ratio::saturating_new(10, 7), Ratio::new(7, 7).unwrap());
+    }
+
+    #[test]
+    fn ratio_saturating_new_clamps_zero_denominator() {
+        // n > 0, d == 0: "more than 100%" clamps to 100%.
+        assert_eq!(Ratio::saturating_new(1, 0), Ratio::new(1, 1).unwrap());
+        assert_eq!(Ratio::saturating_new(5, 0), Ratio::new(1, 1).unwrap());
+        // n == 0, d == 0: 0%.
+        assert_eq!(Ratio::saturating_new(0, 0), Ratio::new(0, 1).unwrap());
+    }
+
+    #[test]
+    fn ratio_saturating_new_passes_valid_through() {
+        assert_eq!(Ratio::saturating_new(1, 3), Ratio::new(1, 3).unwrap());
+        assert_eq!(Ratio::saturating_new(7, 10), Ratio::new(7, 10).unwrap());
+    }
+
+    #[test]
+    fn ratio_constants_are_exact() {
+        assert_eq!(Ratio::ONE_HALF, Ratio::new(1, 2).unwrap());
+        assert_eq!(Ratio::ONE_THIRD, Ratio::new(1, 3).unwrap());
+        assert_eq!(Ratio::ONE_QUARTER, Ratio::new(1, 4).unwrap());
+        assert_eq!(Ratio::ONE_TENTH, Ratio::new(1, 10).unwrap());
+    }
+
     // === sample_ratio ===
 
     #[test]
@@ -1604,7 +1810,7 @@ mod tests {
         let mut ctx = TestCaseContext::new(1);
         let mut fresh = TestCaseContext::new(1);
         for _ in 0..64 {
-            assert!(!sample_ratio(&mut ctx, 0, 10));
+            assert!(!sample_ratio(&mut ctx, Ratio::new(0, 10).unwrap()));
         }
         // No RNG bytes consumed.
         assert_state_unadvanced(&mut ctx, &mut fresh);
@@ -1615,7 +1821,7 @@ mod tests {
         let mut ctx = TestCaseContext::new(1);
         let mut fresh = TestCaseContext::new(1);
         for _ in 0..64 {
-            assert!(sample_ratio(&mut ctx, 7, 7));
+            assert!(sample_ratio(&mut ctx, Ratio::new(7, 7).unwrap()));
         }
         assert_state_unadvanced(&mut ctx, &mut fresh);
     }
@@ -1625,7 +1831,7 @@ mod tests {
         let mut ctx = TestCaseContext::new(1);
         let (mut t, mut f) = (false, false);
         for _ in 0..256 {
-            match sample_ratio(&mut ctx, 1, 2) {
+            match sample_ratio(&mut ctx, Ratio::ONE_HALF) {
                 true => t = true,
                 false => f = true,
             }
@@ -1641,7 +1847,10 @@ mod tests {
         let mut a = TestCaseContext::new(999);
         let mut b = TestCaseContext::new(999);
         for _ in 0..64 {
-            assert_eq!(sample_ratio(&mut a, 3, 7), sample_ratio(&mut b, 3, 7));
+            assert_eq!(
+                sample_ratio(&mut a, Ratio::new(3, 7).unwrap()),
+                sample_ratio(&mut b, Ratio::new(3, 7).unwrap())
+            );
         }
     }
 
@@ -1652,7 +1861,7 @@ mod tests {
         let mut trues: usize = 0;
         let total: usize = 10_000;
         for _ in 0..total {
-            if sample_ratio(&mut ctx, 1, 10) {
+            if sample_ratio(&mut ctx, Ratio::ONE_TENTH) {
                 trues += 1;
             }
         }
@@ -1663,18 +1872,81 @@ mod tests {
         );
     }
 
+    // === sample_with_boundaries ===
+
     #[test]
-    #[should_panic(expected = "denominator must be non-zero")]
-    fn sample_ratio_panics_on_zero_denominator() {
-        let mut ctx = TestCaseContext::new(0);
-        let _ = sample_ratio(&mut ctx, 0, 0);
+    fn sample_with_boundaries_full_ratio_always_boundary() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..64 {
+            let v =
+                sample_with_boundaries(&mut ctx, &[7, 8], Ratio::new(2, 2).unwrap(), sample_u32);
+            assert!(v == 7 || v == 8, "unexpected value: {v}");
+        }
     }
 
     #[test]
-    #[should_panic(expected = "must be <= denominator")]
-    fn sample_ratio_panics_when_numerator_exceeds_denominator() {
+    fn sample_with_boundaries_zero_ratio_always_uniform() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..64 {
+            let v =
+                sample_with_boundaries(&mut ctx, &[7, 8], Ratio::new(0, 3).unwrap(), sample_u32);
+            assert!(v != 7 && v != 8, "unexpected boundary value: {v}");
+        }
+    }
+
+    #[test]
+    fn sample_with_boundaries_produces_both_paths() {
+        let mut ctx = TestCaseContext::new(1);
+        let (mut boundary, mut uniform) = (false, false);
+        for _ in 0..256 {
+            let v = sample_with_boundaries(&mut ctx, &[u32::MAX], Ratio::ONE_HALF, sample_u32);
+            if v == u32::MAX {
+                boundary = true;
+            } else {
+                uniform = true;
+            }
+            if boundary && uniform {
+                return;
+            }
+        }
+        panic!("sample_with_boundaries did not take both paths");
+    }
+
+    #[test]
+    fn sample_with_boundaries_is_deterministic() {
+        let mut a = TestCaseContext::new(1234);
+        let mut b = TestCaseContext::new(1234);
+        for _ in 0..64 {
+            assert_eq!(
+                sample_with_boundaries(&mut a, &[0, 1], Ratio::new(1, 4).unwrap(), sample_u64),
+                sample_with_boundaries(&mut b, &[0, 1], Ratio::new(1, 4).unwrap(), sample_u64)
+            );
+        }
+    }
+
+    #[test]
+    fn sample_with_boundaries_recipe_is_byte_equivalent() {
+        // The helper must reproduce the hand-written recipe from the
+        // boundary-bias evaluation exactly, so rewriting a generator
+        // with the helper does not shift the choice sequence.
+        let mut a = TestCaseContext::new(42);
+        let mut b = TestCaseContext::new(42);
+        for _ in 0..256 {
+            let hand_written = if sample_usize_in(&mut a, 0..10) == 0 {
+                0
+            } else {
+                sample_u32(&mut a)
+            };
+            let helper = sample_with_boundaries(&mut b, &[0], Ratio::ONE_TENTH, sample_u32);
+            assert_eq!(hand_written, helper, "streams diverged");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_choice: empty slice")]
+    fn sample_with_boundaries_panics_on_empty_boundaries() {
         let mut ctx = TestCaseContext::new(0);
-        let _ = sample_ratio(&mut ctx, 11, 10);
+        let _ = sample_with_boundaries(&mut ctx, &[] as &[u32], Ratio::ONE_HALF, sample_u32);
     }
 
     // === sample_weighted_index ===

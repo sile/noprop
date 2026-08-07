@@ -301,7 +301,7 @@ fn sample_usize_in_records_only_the_chosen_value() {
 #[test]
 fn sample_ratio_records_only_the_chosen_bool() {
     let result = noprop::Runner::new(5, 1).run(|ctx| {
-        let _b = noprop::sample_ratio(ctx, 1, 3);
+        let _b = noprop::sample_ratio(ctx, noprop::Ratio::ONE_THIRD);
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -335,7 +335,7 @@ fn selection_primitives_are_reproducible_across_runs() {
         noprop::Runner::new(seed, 64).run(|ctx| {
             let idx = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1]);
             let n = noprop::sample_usize_in(ctx, 0..=100);
-            let flip = noprop::sample_ratio(ctx, 1, 4);
+            let flip = noprop::sample_ratio(ctx, noprop::Ratio::new(1, 4).unwrap());
             // Fail on a pattern that is common enough to hit within 64
             // iterations but does not always fire, so the case index
             // matters.
