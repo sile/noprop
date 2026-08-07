@@ -13,14 +13,19 @@ fn process(x: u32, mutant: bool) -> Result<(), ()> {
     Ok(())
 }
 
-fn run(
-    sut_mutant: bool,
-    biased: bool,
-    ctx: &mut TestCaseContext,
-    _obs: &Observe,
-) -> Result<(), String> {
-    let x = if biased {
-        // 90% odd, 10% even: the failing half is over-represented.
+fn run(sut_mutant: bool, x: u32, ctx: &mut TestCaseContext, _obs: &Observe) -> Result<(), String> {
+    // Feedback: the mutant fails for odd x, so the priority rewards
+    // odd draws and the event observes which parity was reached. These
+    // calls draw no random bytes, so the generator stream is unchanged.
+    ctx.event(if x.is_multiple_of(2) { "even" } else { "odd" });
+    ctx.maximize(if x.is_multiple_of(2) { 0.0 } else { 1.0 });
+    process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
+}
+
+/// Draw one input value: 90% odd, 10% even when biased (the failing
+/// half is over-represented), otherwise uniform.
+fn draw(biased: bool, ctx: &mut TestCaseContext) -> u32 {
+    if biased {
         let odd = noprop::sample_usize_in(ctx, 0..10) < 9;
         let mut v = noprop::sample_u32(ctx);
         if odd {
@@ -31,13 +36,20 @@ fn run(
         v
     } else {
         noprop::sample_u32(ctx)
-    };
-    // Feedback: the mutant fails for odd x, so the priority rewards
-    // odd draws and the event observes which parity was reached. These
-    // calls draw no random bytes, so the generator stream is unchanged.
-    ctx.event(if x.is_multiple_of(2) { "even" } else { "odd" });
-    ctx.maximize(if x.is_multiple_of(2) { 0.0 } else { 1.0 });
-    process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
+    }
+}
+
+fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    run(false, draw(false, ctx), ctx, obs)
+}
+fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    run(true, draw(false, ctx), ctx, obs)
+}
+fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    run(true, draw(true, ctx), ctx, obs)
+}
+fn run_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    run(true, crate::bb::u32(ctx), ctx, obs)
 }
 
 pub(crate) const WORKLOAD: Workload = Workload {
@@ -48,15 +60,6 @@ pub(crate) const WORKLOAD: Workload = Workload {
         base: run_base,
         uniform: run_uniform,
         biased: run_biased,
+        bb: run_bb,
     }],
 };
-
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(false, false, ctx, obs)
-}
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(true, false, ctx, obs)
-}
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run(true, true, ctx, obs)
-}

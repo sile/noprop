@@ -9,7 +9,7 @@ use noprop::TestCaseContext;
 
 fn run_case(
     _sut_mutant: bool,
-    _biased: bool,
+    draw: fn(&mut TestCaseContext) -> u64,
     ctx: &mut TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
@@ -18,7 +18,7 @@ fn run_case(
     // without bound or abort the run. The per-case cap truncates the
     // reports and the global registry saturates.
     for _ in 0..64 {
-        let v = noprop::sample_u64(ctx);
+        let v = draw(ctx);
         ctx.bucket("noise", v);
     }
     ctx.maximize(0.5);
@@ -33,15 +33,19 @@ pub(crate) const WORKLOAD: Workload = Workload {
         base: run_case_base,
         uniform: run_case_uniform,
         biased: run_case_biased,
+        bb: run_case_bb,
     }],
 };
 
 fn run_case_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run_case(false, false, ctx, obs)
+    run_case(false, noprop::sample_u64, ctx, obs)
 }
 fn run_case_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run_case(true, false, ctx, obs)
+    run_case(true, noprop::sample_u64, ctx, obs)
 }
 fn run_case_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
-    run_case(true, true, ctx, obs)
+    run_case(true, noprop::sample_u64, ctx, obs)
+}
+fn run_case_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+    run_case(true, crate::bb::u64, ctx, obs)
 }

@@ -31,6 +31,8 @@ fn ensure_built() {
 const TASKS: &[(&str, &str)] = &[
     ("high-frequency", "fails_on_odd"),
     ("boundary", "fails_on_zero"),
+    ("boundary", "fails_on_domain_value"),
+    ("boundary", "fails_on_range_end"),
     ("combination", "fails_on_specific_pair"),
     ("dependent", "duration_field_misread"),
     ("bst", "insert_duplicate_key"),
@@ -45,6 +47,7 @@ const GUARD_TASKS: &[(&str, &str)] = &[("guard", "reports_unbounded_buckets")];
 const VARIANTS: &[&str] = &[
     "uniform",
     "biased",
+    "boundary-biased",
     "targeted",
     "semantic-only",
     "semantic-with-priority",

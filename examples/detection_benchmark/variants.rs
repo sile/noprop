@@ -30,6 +30,9 @@ pub(crate) enum Variant {
     /// Explicitly biased generation (`match` + weighted choice) under
     /// `Runner::run`.
     Biased,
+    /// Generic type-level boundary mix over the integer primitives
+    /// under `Runner::run`.
+    BoundaryBiased,
     /// Targeted search (`Runner::run_targeted`) over the scalar
     /// priority reported by the property.
     Targeted,
@@ -47,6 +50,7 @@ impl Variant {
             "base" => Some(Variant::Base),
             "uniform" => Some(Variant::Uniform),
             "biased" => Some(Variant::Biased),
+            "boundary-biased" => Some(Variant::BoundaryBiased),
             "targeted" => Some(Variant::Targeted),
             "semantic-only" => Some(Variant::SemanticOnly),
             "semantic-with-priority" => Some(Variant::SemanticWithPriority),
@@ -59,6 +63,7 @@ impl Variant {
             Variant::Base => "base",
             Variant::Uniform => "uniform",
             Variant::Biased => "biased",
+            Variant::BoundaryBiased => "boundary-biased",
             Variant::Targeted => "targeted",
             Variant::SemanticOnly => "semantic-only",
             Variant::SemanticWithPriority => "semantic-with-priority",
@@ -70,6 +75,7 @@ impl Variant {
 pub(crate) const VARIANTS: &[Variant] = &[
     Variant::Uniform,
     Variant::Biased,
+    Variant::BoundaryBiased,
     Variant::Targeted,
     Variant::SemanticOnly,
     Variant::SemanticWithPriority,
@@ -116,10 +122,10 @@ pub(crate) fn run_task(
 
 /// Drive the task's property under the variant's runner entry point.
 ///
-/// The uniform / biased variants use the task's base / biased
-/// properties (feedback-reporting under uniform / biased generation);
-/// the search variants reuse the uniform property, whose feedback
-/// methods are no-ops under `Runner::run`.
+/// The uniform / biased / boundary-biased variants use the task's
+/// uniform / biased / bb properties (feedback-reporting under the
+/// respective generation); the search variants reuse the uniform
+/// property, whose feedback methods are no-ops under `Runner::run`.
 fn run_variant(
     runner: &mut Runner,
     task: &Task,
@@ -129,11 +135,14 @@ fn run_variant(
     let property: Property = match variant {
         Variant::Base => task.base,
         Variant::Biased => task.biased,
+        Variant::BoundaryBiased => task.bb,
         _ => task.uniform,
     };
     let run = |ctx: &mut TestCaseContext| property(ctx, observe).map_err(Into::into);
     match variant {
-        Variant::Base | Variant::Uniform | Variant::Biased => runner.run(run),
+        Variant::Base | Variant::Uniform | Variant::Biased | Variant::BoundaryBiased => {
+            runner.run(run)
+        }
         Variant::Targeted => runner.run_targeted(run),
         Variant::SemanticOnly => {
             runner.run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, run)
