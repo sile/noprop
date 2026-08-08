@@ -505,7 +505,7 @@ pub(crate) struct IterationRejected;
 
 /// Diagnostic state saved by [`TestCaseContext::reject_case`] before it unwinds.
 /// Runner reads this after `catch_unwind` and reports it on
-/// [`TooManyRejections`](crate::Error) failures.
+/// [`TooManyRejections`](crate::RunError) failures.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RejectionState {
     pub location: &'static Location<'static>,
@@ -521,7 +521,7 @@ pub(crate) struct RejectionState {
 ///   [`value_repr`](Self::value_repr).
 /// - **Elision markers** stand in for a run of same-location entries
 ///   that were skipped to keep the trace compact. See the docs on
-///   [`Error::generated`](crate::Error::generated) for the elision
+///   [`RunError::generated`](crate::RunError::generated) for the elision
 ///   policy, and use [`elided_count`](Self::elided_count) to inspect.
 pub struct GeneratedValue {
     type_name: &'static str,

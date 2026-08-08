@@ -22,7 +22,7 @@ Example
 
 ```rust
 #[test]
-fn addition_is_commutative() -> noprop::Result<()> {
+fn addition_is_commutative() -> noprop::TestResult {
     noprop::Runner::new(0xDEAD_BEEF, 1024).run(|ctx| {
         let a = noprop::sample_u32(ctx);
         let b = noprop::sample_u32(ctx);

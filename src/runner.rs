@@ -7,7 +7,7 @@ use crate::rng::{
     ChoiceMeta, ChoiceSequence, Feature, FeedbackState, RejectionState, XoshiroState,
     is_iteration_rejected,
 };
-use crate::{Error, Result, TestCaseContext};
+use crate::{RunError, RunResult, TestCaseContext, TestResult};
 
 /// Maximum number of candidates kept in the semantic corpus.
 ///
@@ -59,7 +59,7 @@ pub struct Stats {
     /// a successful run, this equals
     /// `iterations`. On failure, it is
     /// the number of iterations that passed before the failing one
-    /// (equivalent to [`Error::case_index`](Error::case_index)).
+    /// (equivalent to [`RunError::case_index`](RunError::case_index)).
     pub accepted_iterations: usize,
     /// Total number of iterations discarded via
     /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case), including
@@ -98,7 +98,7 @@ pub struct Stats {
 /// Construct it with [`Runner::new`] and call [`run`](Runner::run):
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner::new(0xDEAD_BEEF, 16).run(|ctx| {
+/// let _: noprop::RunResult = noprop::Runner::new(0xDEAD_BEEF, 16).run(|ctx| {
 ///     let x = noprop::sample_u32(ctx);
 ///     assert_eq!(x, x);
 ///     Ok(())
@@ -128,20 +128,21 @@ pub struct Stats {
 /// standard lookups:
 ///
 /// ```
-/// # fn body() -> Result<(), Box<dyn std::error::Error>> {
+/// # fn body() -> noprop::TestResult {
 /// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
 /// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)?;
 /// noprop::Runner::new(seed, iterations).run(|_ctx| {
 ///     // property
 ///     Ok(())
 /// })?;
-/// # Ok(()) }
+/// Ok(())
+/// }
 /// # body().unwrap();
 /// ```
 ///
 /// The env var names shown above are project-specific placeholders;
 /// pick names that fit the calling project. Both helpers surface a
-/// [`ConfigError`](crate::ConfigError) — via `?` — when the variable
+/// boxed error — via `?` — when the variable
 /// is set to something that cannot be parsed, so a mistyped
 /// `MYAPP_SEED=hello` fails loudly instead of silently reverting to the
 /// clock-derived fallback.
@@ -151,13 +152,13 @@ pub struct Stats {
 /// The property closure signals success by returning `Ok(())`. A
 /// failure can be signalled either by returning `Err` or by panicking
 /// (typically via `assert!` / `assert_eq!`); both are captured into the
-/// resulting [`Error`] uniformly.
+/// resulting [`RunError`](crate::RunError) uniformly.
 ///
 /// The `Err` variant is `Box<dyn std::error::Error>`, so the `?`
 /// operator works for any error type that implements [`Error`]:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner::new(0, 1).run(|_ctx| {
+/// let _: noprop::RunResult = noprop::Runner::new(0, 1).run(|_ctx| {
 ///     let _n: u32 = "42".parse()?;   // ParseIntError -> Box<dyn Error>
 ///     Ok(())
 /// });
@@ -166,7 +167,7 @@ pub struct Stats {
 /// Ad-hoc messages work via `Into`:
 ///
 /// ```
-/// let _: noprop::Result<()> = noprop::Runner::new(0, 1).run(|_ctx| {
+/// let _: noprop::RunResult = noprop::Runner::new(0, 1).run(|_ctx| {
 ///     if false { return Err("something bad".into()); }
 ///     Ok(())
 /// });
@@ -275,9 +276,9 @@ impl Runner {
     ///     })
     ///     .expect("feedback-guided run must succeed");
     /// ```
-    pub fn run_feedback_guided<F>(&mut self, f: F) -> Result<()>
+    pub fn run_feedback_guided<F>(&mut self, f: F) -> RunResult
     where
-        F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
+        F: Fn(&mut TestCaseContext) -> TestResult,
     {
         self.stats = Stats::default();
         let mut search = CorpusGuidedSearch::new(self.seed);
@@ -352,7 +353,7 @@ impl Runner {
                             "run_feedback_guided enables corpus-guided mode before each case"
                         ),
                     };
-                    return Err(Error::from_panic(
+                    return Err(RunError::from_panic(
                         self.seed,
                         accepted,
                         self.iterations,
@@ -412,9 +413,9 @@ impl Runner {
     /// (`std::cell::Cell` / `std::cell::RefCell` / atomics) so the
     /// escape from purity is spelled out in the code rather than
     /// hidden behind an unassuming `let mut`.
-    pub fn run<F>(&mut self, f: F) -> Result<()>
+    pub fn run<F>(&mut self, f: F) -> RunResult
     where
-        F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
+        F: Fn(&mut TestCaseContext) -> TestResult,
     {
         self.stats = Stats::default();
         let mut ctx = TestCaseContext::new(self.seed);
@@ -431,7 +432,7 @@ impl Runner {
                     if rejected > rejection_cap {
                         record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
                         let generated = ctx.take_generated();
-                        return Err(Error::from_too_many_rejections(
+                        return Err(RunError::from_too_many_rejections(
                             self.seed,
                             accepted,
                             self.iterations,
@@ -451,7 +452,7 @@ impl Runner {
                 CaseVerdict::Completed(CaseOutcome::Failed(message)) => {
                     record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
                     let generated = ctx.take_generated();
-                    return Err(Error::from_panic(
+                    return Err(RunError::from_panic(
                         self.seed,
                         accepted,
                         self.iterations,
@@ -499,7 +500,7 @@ enum CaseVerdict {
 /// neither swallow rejection nor escalate it into a property failure.
 fn run_case<F>(f: &F, ctx: &mut TestCaseContext) -> CaseVerdict
 where
-    F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
+    F: Fn(&mut TestCaseContext) -> TestResult,
 {
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(ctx)));
     if let Some(state) = ctx.take_rejection() {
@@ -607,9 +608,9 @@ fn too_many_rejections(
     rejected: usize,
     location: &'static std::panic::Location<'static>,
     policy: SearchPolicy,
-) -> Error {
+) -> RunError {
     let generated = ctx.take_generated();
-    let err = Error::from_too_many_rejections(
+    let err = RunError::from_too_many_rejections(
         runner.seed,
         accepted,
         runner.iterations,

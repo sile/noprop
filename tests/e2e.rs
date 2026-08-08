@@ -6,13 +6,41 @@
 //! all noprop example code.
 
 #[test]
-fn run_returns_ok_when_property_holds() -> noprop::Result<()> {
+fn run_returns_ok_when_property_holds() -> noprop::TestResult {
     noprop::Runner::new(0xDEAD_BEEF, 16).run(|ctx| {
         let x = noprop::sample_u32(ctx);
         assert_eq!(x, x);
         Ok(())
     })?;
     Ok(())
+}
+
+#[test]
+fn test_result_propagates_config_and_run_failures() {
+    // A single `#[test] -> noprop::TestResult` must propagate the
+    // config-helper failure, the property-closure failure, and the
+    // runner failure through `?`. The config path is exercised with an
+    // unset variable (fallback) so no env mutation is needed; the
+    // property and runner paths fail deterministically.
+    let result: noprop::TestResult = (|| {
+        let seed = noprop::seed_from_env_or_time("NOPROP_E2E_ABSOLUTELY_UNSET_SEED_7C4A_1B2D")?;
+        let iterations =
+            noprop::iterations_from_env("NOPROP_E2E_ABSOLUTELY_UNSET_ITER_7C4A_1B2D", 4)?;
+        noprop::Runner::new(seed, iterations).run(|ctx| {
+            let x = noprop::sample_u32(ctx);
+            if x == u32::MAX {
+                // Practically unreachable, but keeps the closure
+                // fallible like a real property.
+                return Err("unexpected".into());
+            }
+            Ok(())
+        })?;
+        Ok(())
+    })();
+    assert!(
+        result.is_ok(),
+        "fallback config + passing property must succeed"
+    );
 }
 
 #[test]
@@ -27,6 +55,27 @@ fn run_returns_err_on_failed_assertion() {
     let err = result.expect_err("expected Err, got Ok");
     assert_eq!(err.seed(), 0x1234);
     assert!(err.case_index() < 64);
+    assert_eq!(
+        err.kind(),
+        noprop::RunErrorKind::PropertyFailure,
+        "a property failure must be classified as PropertyFailure"
+    );
+}
+
+#[test]
+fn too_many_rejections_is_classified_by_kind() {
+    // The runner gives up with TooManyRejections; `kind()` must report
+    // it without string-matching the Display output.
+    let err = noprop::Runner::new(1, 8)
+        .run(|ctx| {
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting property must hit the rejection cap");
+    assert_eq!(
+        err.kind(),
+        noprop::RunErrorKind::TooManyRejections,
+        "rejection-cap exhaustion must be classified as TooManyRejections"
+    );
 }
 
 #[test]
@@ -56,7 +105,7 @@ fn same_seed_reproduces_same_failure() {
 }
 
 #[test]
-fn zero_iterations_returns_ok_without_invoking_property() -> noprop::Result<()> {
+fn zero_iterations_returns_ok_without_invoking_property() -> noprop::TestResult {
     let invoked = std::cell::Cell::new(false);
     noprop::Runner::new(0, 0).run(|_ctx| {
         invoked.set(true);
@@ -394,7 +443,7 @@ fn selection_primitives_are_reproducible_across_runs() {
 // === bounded rejection sampling + iteration rejection ===
 
 #[test]
-fn sample_with_rejection_returns_first_accepted_value() -> noprop::Result<()> {
+fn sample_with_rejection_returns_first_accepted_value() -> noprop::TestResult {
     noprop::Runner::new(1, 8).run(|ctx| {
         let v = noprop::sample_with_rejection(ctx, 4, |ctx| {
             let x = noprop::sample_u32(ctx);
@@ -407,7 +456,7 @@ fn sample_with_rejection_returns_first_accepted_value() -> noprop::Result<()> {
 }
 
 #[test]
-fn reject_case_retries_iteration_without_counting_it() -> noprop::Result<()> {
+fn reject_case_retries_iteration_without_counting_it() -> noprop::TestResult {
     // Reject on the first N iterations then succeed forever. All N
     // rejections must not consume the iterations budget.
     let attempts = std::cell::Cell::new(0usize);
@@ -465,7 +514,7 @@ fn always_reject_is_reproducible_from_seed() {
 }
 
 #[test]
-fn rejection_state_overrides_user_catch_returning_ok() -> noprop::Result<()> {
+fn rejection_state_overrides_user_catch_returning_ok() -> noprop::TestResult {
     // User code catches the private marker and returns Ok(()) — the
     // runner must still treat the iteration as rejected.
     let attempts = std::cell::Cell::new(0usize);
@@ -488,7 +537,7 @@ fn rejection_state_overrides_user_catch_returning_ok() -> noprop::Result<()> {
 }
 
 #[test]
-fn rejection_state_overrides_user_catch_and_reraise() -> noprop::Result<()> {
+fn rejection_state_overrides_user_catch_and_reraise() -> noprop::TestResult {
     // User catches the marker then panics with a different payload —
     // the runner must still treat it as rejection, not property failure.
     let attempts = std::cell::Cell::new(0usize);
@@ -508,7 +557,7 @@ fn rejection_state_overrides_user_catch_and_reraise() -> noprop::Result<()> {
 }
 
 #[test]
-fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::Result<()> {
+fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::TestResult {
     // A closure that always returns None inside sample_with_rejection
     // exhausts and calls reject_case; the runner retries.
     let outer_attempts = std::cell::Cell::new(0usize);
@@ -646,7 +695,7 @@ fn failure_display_contains_reproduce_line_that_reproduces_the_same_failure() {
 // === Stats ===
 
 #[test]
-fn stats_success_reports_accepted_iterations_and_zero_rejections() -> noprop::Result<()> {
+fn stats_success_reports_accepted_iterations_and_zero_rejections() -> noprop::TestResult {
     let mut runner = noprop::Runner::new(0xDEAD_BEEF, 10);
     runner.run(|ctx| {
         // Two sample_* per iteration => total_samples = 2 * iterations for a
@@ -663,7 +712,7 @@ fn stats_success_reports_accepted_iterations_and_zero_rejections() -> noprop::Re
 }
 
 #[test]
-fn stats_counts_reject_case_unwinds() -> noprop::Result<()> {
+fn stats_counts_reject_case_unwinds() -> noprop::TestResult {
     use std::cell::Cell;
     let counter = Cell::new(0usize);
     let mut runner = noprop::Runner::new(1, 3);
@@ -710,7 +759,7 @@ fn stats_counts_sample_with_rejection_exhaustion_as_rejected_iteration() {
 }
 
 #[test]
-fn stats_is_deterministic_per_seed() -> noprop::Result<()> {
+fn stats_is_deterministic_per_seed() -> noprop::TestResult {
     let mut a = noprop::Runner::new(42, 5);
     a.run(|ctx| {
         let _ = noprop::sample_u32(ctx);

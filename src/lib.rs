@@ -10,8 +10,8 @@ mod runner;
 
 pub mod docs;
 
-pub use config::{ConfigError, iterations_from_env, seed_from_env_or_time};
-pub use error::{Error, Result};
+pub use config::{iterations_from_env, seed_from_env_or_time};
+pub use error::{RunError, RunErrorKind, RunResult, TestResult};
 pub use generator::{
     Ratio, sample_ascii_char, sample_ascii_printable_char, sample_ascii_printable_string,
     sample_ascii_string, sample_bool, sample_bytes, sample_bytes_vec, sample_char, sample_choice,

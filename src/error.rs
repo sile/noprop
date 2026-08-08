@@ -7,8 +7,22 @@ use crate::GeneratedValue;
 use crate::rng::Feature;
 use crate::runner::Stats;
 
-/// Result alias used across noprop's public API.
-pub type Result<T> = std::result::Result<T, Error>;
+/// Result alias for `#[test]` functions and property closures.
+///
+/// `T` defaults to `()`, so a plain `noprop::TestResult` is
+/// `Result<(), Box<dyn std::error::Error>>`. Every failure a test can
+/// hit — a [`RunError`] from the runner, or a config error from the
+/// env helpers — converts into the boxed error via `?`.
+pub type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Result alias for [`Runner::run`](crate::Runner::run) and
+/// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
+///
+/// Unlike [`TestResult`], the error stays type-safe: callers can
+/// inspect the seed, case index, generated-value trace, stats, and
+/// reproduce hint via [`RunError`]'s accessors and dispatch on the
+/// failure kind via [`RunError::kind`].
+pub type RunResult = std::result::Result<(), RunError>;
 
 /// Failure information from a [`Runner::run`](crate::Runner::run) or
 /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
@@ -62,7 +76,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// placeholder. In each case the original property closure must be
 /// supplied before rerunning; the re-run size never needs to be
 /// recomputed by hand.
-pub struct Error {
+pub struct RunError {
     seed: u64,
     case_index: usize,
     /// The iteration budget the failing run was given. The reproduce
@@ -72,10 +86,10 @@ pub struct Error {
     iterations: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
-    // Boxed to keep `Error` small: with the corpus stats fields
-    // inline, `Error` is exactly 128 bytes, which already triggers
+    // Boxed to keep `RunError` small: with the corpus stats fields
+    // inline, `RunError` is exactly 128 bytes, which already triggers
     // clippy's `result_large_err` (its threshold comparison is
-    // `>= 128`). Boxed, `Error` is 96 bytes — and its size no longer
+    // `>= 128`). Boxed, `RunError` is 96 bytes — and its size no longer
     // grows when `Stats` gains fields.
     stats: Box<Stats>,
     /// The runner entry point that produced this failure. Switches the
@@ -88,7 +102,7 @@ pub struct Error {
 
 /// Semantic details carried by a corpus-guided failure report.
 ///
-/// Boxed so `Error` stays small: the fields are only populated on the
+/// Boxed so `RunError` stays small: the fields are only populated on the
 /// corpus-guided failure path, and the uniform / targeted entry points
 /// never touch them.
 struct SemanticFailureReport {
@@ -99,7 +113,7 @@ struct SemanticFailureReport {
     candidate_index: usize,
 }
 
-/// The runner entry point that produced an [`Error`].
+/// The runner entry point that produced an [`RunError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchPolicy {
     /// [`Runner::run`](crate::Runner::run).
@@ -108,6 +122,27 @@ pub(crate) enum SearchPolicy {
     CorpusGuided,
 }
 
+/// The kind of a [`RunError`], for type-safe dispatch on the failure
+/// mode.
+///
+/// Field-less on purpose: the payload (e.g. the rejected-iteration
+/// count and last reject location of [`RunErrorKind::TooManyRejections`])
+/// stays on [`RunError`] itself, so the failure report keeps its full
+/// detail while the kind stays cheap to compare.
+///
+/// New kinds are added as breaking changes (no `#[non_exhaustive]`), so
+/// future failure axes — such as an unmet required-event coverage —
+/// extend this enum deliberately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunErrorKind {
+    /// The property closure returned `Err` or panicked in a case.
+    PropertyFailure,
+    /// The internal global rejection limit was reached before
+    /// `Runner::iterations` accepted iterations completed.
+    TooManyRejections,
+}
+
+/// The internal, payload-carrying failure mode of a [`RunError`].
 enum ErrorKind {
     /// The property closure panicked in this case (typically via
     /// `assert!` / `assert_eq!` or an explicit `panic!`).
@@ -124,7 +159,16 @@ enum ErrorKind {
     },
 }
 
-impl Error {
+impl RunErrorKind {
+    fn of(kind: &ErrorKind) -> Self {
+        match kind {
+            ErrorKind::Panic { .. } => RunErrorKind::PropertyFailure,
+            ErrorKind::TooManyRejections { .. } => RunErrorKind::TooManyRejections,
+        }
+    }
+}
+
+impl RunError {
     pub(crate) fn from_panic(
         seed: u64,
         case_index: usize,
@@ -233,9 +277,17 @@ impl Error {
     pub fn stats(&self) -> Stats {
         *self.stats
     }
+
+    /// The failure kind of this error, for type-safe dispatch.
+    ///
+    /// Prefer this over string-matching the `Display` / `Debug` output
+    /// when branching on the failure mode.
+    pub fn kind(&self) -> RunErrorKind {
+        RunErrorKind::of(&self.kind)
+    }
 }
 
-impl Error {
+impl RunError {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original iteration budget so reruns hit the same
@@ -254,9 +306,9 @@ impl Error {
     }
 }
 
-impl std::fmt::Debug for Error {
+impl std::fmt::Debug for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Error {{")?;
+        writeln!(f, "RunError {{")?;
         writeln!(f, "    seed: {:#018x},", self.seed)?;
         writeln!(f, "    case_index: {},", self.case_index)?;
         if let Some(report) = &self.semantic {
@@ -311,7 +363,7 @@ impl std::fmt::Debug for Error {
     }
 }
 
-impl std::fmt::Display for Error {
+impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
             ErrorKind::Panic { message } => {
@@ -364,4 +416,4 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for RunError {}
