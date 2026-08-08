@@ -170,9 +170,13 @@ impl RunErrorKind {
 }
 
 impl RunError {
+    /// Build a property-failure error from the recorded run stats.
+    ///
+    /// The case index is taken from `stats.accepted_cases`: the caller
+    /// must have recorded the progress counters (via `record_stats` /
+    /// `record_corpus_stats`) before constructing the error.
     pub(crate) fn from_panic(
         seed: u64,
-        case_index: usize,
         cases: usize,
         message: String,
         generated: Vec<GeneratedValue>,
@@ -181,7 +185,7 @@ impl RunError {
     ) -> Self {
         Self::new(
             seed,
-            case_index,
+            stats.accepted_cases,
             cases,
             ErrorKind::Panic { message },
             generated,
@@ -202,12 +206,15 @@ impl RunError {
         self
     }
 
-    #[expect(clippy::too_many_arguments)]
+    /// Build a too-many-rejections error from the recorded run stats.
+    ///
+    /// The accepted and rejected case counts are taken from
+    /// `stats.accepted_cases` / `stats.rejected_cases`: the caller must
+    /// have recorded the progress counters before constructing the
+    /// error.
     pub(crate) fn from_too_many_rejections(
         seed: u64,
-        case_index: usize,
         cases: usize,
-        rejected_cases: usize,
         last_reject_location: &'static Location<'static>,
         generated: Vec<GeneratedValue>,
         stats: Stats,
@@ -215,10 +222,10 @@ impl RunError {
     ) -> Self {
         Self::new(
             seed,
-            case_index,
+            stats.accepted_cases,
             cases,
             ErrorKind::TooManyRejections {
-                rejected_cases,
+                rejected_cases: stats.rejected_cases,
                 last_reject_location,
             },
             generated,

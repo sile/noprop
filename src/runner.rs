@@ -309,8 +309,6 @@ impl Runner {
                         return Err(too_many_rejections(
                             self,
                             &mut ctx,
-                            accepted,
-                            rejected,
                             state.location,
                             SearchPolicy::CorpusGuided,
                             cases,
@@ -357,7 +355,6 @@ impl Runner {
                     };
                     return Err(RunError::from_panic(
                         self.seed,
-                        accepted,
                         cases,
                         message,
                         generated,
@@ -437,9 +434,7 @@ impl Runner {
                         let generated = ctx.take_generated();
                         return Err(RunError::from_too_many_rejections(
                             self.seed,
-                            accepted,
                             cases,
-                            rejected,
                             state.location,
                             generated,
                             self.stats,
@@ -457,7 +452,6 @@ impl Runner {
                     let generated = ctx.take_generated();
                     return Err(RunError::from_panic(
                         self.seed,
-                        accepted,
                         cases,
                         message,
                         generated,
@@ -601,14 +595,11 @@ fn record_corpus_stats(
 ///
 /// For corpus-guided runs, the error additionally carries the semantic
 /// features of the last rejected case and its candidate index (the
-/// ordinal of the attempt that exceeded the cap: `accepted + rejected`;
-/// the caller checks the cap right after `rejected += 1`, so the
-/// ordinal is exact).
+/// ordinal of the attempt that exceeded the cap, derived from the
+/// recorded stats: `accepted + rejected`).
 fn too_many_rejections(
     runner: &mut Runner,
     ctx: &mut TestCaseContext,
-    accepted: usize,
-    rejected: usize,
     location: &'static std::panic::Location<'static>,
     policy: SearchPolicy,
     cases: usize,
@@ -616,9 +607,7 @@ fn too_many_rejections(
     let generated = ctx.take_generated();
     let err = RunError::from_too_many_rejections(
         runner.seed,
-        accepted,
         cases,
-        rejected,
         location,
         generated,
         runner.stats,
@@ -629,7 +618,8 @@ fn too_many_rejections(
             FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
             _ => Vec::new(),
         };
-        return err.with_semantic(features, accepted + rejected);
+        let last_candidate = runner.stats.accepted_cases + runner.stats.rejected_cases;
+        return err.with_semantic(features, last_candidate);
     }
     err
 }
