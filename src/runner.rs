@@ -42,7 +42,8 @@ const MAX_GLOBAL_FEATURES: usize = 1024;
 /// invocation.
 ///
 /// Read from a [`Runner`] after the run returns via
-/// [`Runner::stats`](Runner::stats), and also embedded in [`Error`] on
+/// [`Runner::stats`](Runner::stats), and also embedded in
+/// [`RunError`](crate::RunError) on
 /// failure so the caller can see how far the run progressed before it
 /// failed. All counters are cumulative over the whole run (across
 /// every case, accepted or rejected). The corpus fields
@@ -384,7 +385,8 @@ impl Runner {
     /// counts as a pass; a returned `Err` or a panic (via `assert!`,
     /// `assert_eq!`, or explicit `panic!`) counts as a failure. Panics
     /// are caught by `catch_unwind`. Either failure mode is wrapped in
-    /// an [`Error`] carrying the seed, the failing iteration's index,
+    /// a [`RunError`](crate::RunError) carrying the seed, the failing
+    /// iteration's index,
     /// the failure message, and the generated-value trace, and returned
     /// as `Err`. Subsequent iterations past the first failure are
     /// skipped.
