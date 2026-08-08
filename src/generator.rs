@@ -592,13 +592,13 @@ pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
 }
 
 /// Return a value from `boundaries` with probability `ratio`, otherwise
-/// draw from `uniform`.
+/// draw from `sample`.
 ///
 /// This packages the boundary-mixing recipe — an exact-ratio two-way
 /// branch between a fixed candidate list and a base generator — into
 /// one call. The distribution is readable from the arguments: with
 /// probability `ratio` the value is drawn uniformly from `boundaries`,
-/// and otherwise it is whatever `uniform` produces. The base generator
+/// and otherwise it is whatever `sample` produces. The base generator
 /// stays untouched, so a `sample_u32`-based property continues to draw
 /// uniformly except for the explicitly requested boundary mass.
 ///
@@ -613,7 +613,7 @@ pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
 /// # Determinism note
 ///
 /// The draw order is fixed: the ratio branch first, then either the
-/// boundary choice or the `uniform` call. A degenerate ratio (0% or
+/// boundary choice or the `sample` call. A degenerate ratio (0% or
 /// 100%) and a one-element boundary slice consume no RNG bytes, so a
 /// hand-written recipe built on `sample_usize_in` can be replaced with
 /// this helper without shifting the choice sequence. (A `sample_bool`-based
@@ -641,7 +641,7 @@ pub fn sample_with_boundaries<T, F>(
     ctx: &mut TestCaseContext,
     boundaries: &[T],
     ratio: Ratio,
-    uniform: F,
+    sample: F,
 ) -> T
 where
     T: Clone + std::fmt::Debug + 'static,
@@ -654,7 +654,7 @@ where
     if sample_ratio(ctx, ratio) {
         sample_choice(ctx, boundaries)
     } else {
-        uniform(ctx)
+        sample(ctx)
     }
 }
 
