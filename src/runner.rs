@@ -55,28 +55,28 @@ const MAX_GLOBAL_FEATURES: usize = 1024;
 /// breaks external struct-literal construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
-    /// Number of iterations whose closure completed without calling
+    /// Number of cases whose closure completed without calling
     /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case). On
     /// a successful run, this equals
-    /// `iterations`. On failure, it is
-    /// the number of iterations that passed before the failing one
+    /// `cases`. On failure, it is
+    /// the number of cases that passed before the failing one
     /// (equivalent to [`RunError::case_index`](RunError::case_index)).
-    pub accepted_iterations: usize,
-    /// Total number of iterations discarded via
+    pub accepted_cases: usize,
+    /// Total number of cases discarded via
     /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case), including
     /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
     /// helpers (they discard via `reject_case` internally, so the two
     /// origins share this single counter), and — under
     /// [`Runner::run_feedback_guided`](Runner::run_feedback_guided) — the
     /// exploratory-replay draw cap discards.
-    pub rejected_iterations: usize,
+    pub rejected_cases: usize,
     /// Total number of top-level `sample_*` invocations across every
     /// case that ran. Counted per call to the primitive generator
     /// (`sample_u32`, `sample_choice`, `sample_string`, …), not per
     /// underlying byte read or dedup entry — a `sample_char` invocation
     /// that internally retries its 21-bit mask still counts as one
-    /// sample. Includes samples produced by rejected iterations, since
-    /// those iterations still consumed generator budget.
+    /// sample. Includes samples produced by rejected cases, since
+    /// those cases still consumed generator budget.
     pub total_samples: usize,
     /// Number of distinct semantic features registered in the global
     /// observation set during a corpus-guided run, capped at 1024
@@ -99,7 +99,7 @@ pub struct Stats {
 /// Construct it with [`Runner::new`] and call [`run`](Runner::run):
 ///
 /// ```
-/// let _: noprop::RunResult = noprop::Runner::new(0xDEAD_BEEF, 16).run(|ctx| {
+/// let _: noprop::RunResult = noprop::Runner::new(0xDEAD_BEEF).run(16, |ctx| {
 ///     let x = noprop::sample_u32(ctx);
 ///     assert_eq!(x, x);
 ///     Ok(())
@@ -112,27 +112,24 @@ pub struct Stats {
 /// existing call sites. Observability data ([`Stats`]) is exposed via
 /// [`Runner::stats`] after `run` returns.
 ///
-/// Other PBT libraries call the iteration count `cases` (proptest),
+/// Other PBT libraries call the case count `cases` (proptest),
 /// `examples` (Hypothesis), or `tests` (QuickCheck). noprop uses
-/// `iterations` for a direct match with the Rust `Iterator` /
-/// benchmark vocabulary and to avoid visual confusion with `#[test]`.
+/// `cases` to stay consistent with [`RunError::case_index`] and
+/// [`Stats::accepted_cases`].
 ///
-/// # Configuring seed and iterations
+/// # Configuring the seed
 ///
-/// [`Runner::new`] takes `seed` and `iterations` as required arguments and
-/// does not prescribe how to obtain them. A common setup reads both
-/// from project-specific environment variables so that failures are
-/// reproducible from a failure report (via the seed) and the iteration
-/// count can differ between local and CI runs. Use
-/// [`seed_from_env_or_time`](crate::seed_from_env_or_time) and
-/// [`iterations_from_env`](crate::iterations_from_env) for the two
-/// standard lookups:
+/// [`Runner::new`] takes `seed` as a required argument and
+/// does not prescribe how to obtain it. A common setup reads it
+/// from a project-specific environment variable so that failures are
+/// reproducible from a failure report (via the seed). Use
+/// [`seed_from_env_or_time`](crate::seed_from_env_or_time) for the
+/// standard lookup:
 ///
 /// ```
 /// # fn body() -> noprop::TestResult {
 /// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
-/// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)?;
-/// noprop::Runner::new(seed, iterations).run(|_ctx| {
+/// noprop::Runner::new(seed).run(256, |_ctx| {
 ///     // property
 ///     Ok(())
 /// })?;
@@ -141,12 +138,12 @@ pub struct Stats {
 /// # body().unwrap();
 /// ```
 ///
-/// The env var names shown above are project-specific placeholders;
-/// pick names that fit the calling project. Both helpers accept
+/// The env var name shown above is a project-specific placeholder;
+/// pick a name that fits the calling project. The helper accepts
 /// decimal values as well as `0x` / `0b` / `0o` prefixed values with
 /// optional `_` separators, so the hex seed printed by a failure
-/// report can be pasted into the environment variable directly. Both
-/// helpers surface a
+/// report can be pasted into the environment variable directly. The
+/// helper surfaces a
 /// boxed error — via `?` — when the variable
 /// is set to something that cannot be parsed, so a mistyped
 /// `MYAPP_SEED=hello` fails loudly instead of silently reverting to the
@@ -163,7 +160,7 @@ pub struct Stats {
 /// operator works for any error type that implements [`Error`]:
 ///
 /// ```
-/// let _: noprop::RunResult = noprop::Runner::new(0, 1).run(|_ctx| {
+/// let _: noprop::RunResult = noprop::Runner::new(0).run(1, |_ctx| {
 ///     let _n: u32 = "42".parse()?;   // ParseIntError -> Box<dyn Error>
 ///     Ok(())
 /// });
@@ -172,7 +169,7 @@ pub struct Stats {
 /// Ad-hoc messages work via `Into`:
 ///
 /// ```
-/// let _: noprop::RunResult = noprop::Runner::new(0, 1).run(|_ctx| {
+/// let _: noprop::RunResult = noprop::Runner::new(0).run(1, |_ctx| {
 ///     if false { return Err("something bad".into()); }
 ///     Ok(())
 /// });
@@ -181,7 +178,6 @@ pub struct Stats {
 /// [`Error`]: std::error::Error
 pub struct Runner {
     seed: u64,
-    iterations: usize,
     stats: Stats,
 }
 
@@ -189,45 +185,45 @@ pub struct Runner {
 /// [`Runner::run_feedback_guided`](Runner::run_feedback_guided)
 /// invocation.
 ///
-/// Total rejected iterations (across all iteration indices) are capped
+/// Total rejected cases (across all case indices) are capped
 /// so that a generator which always calls
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) still terminates in
 /// finite time with a `TooManyRejections` failure.
 ///
-/// Scaled with `iterations` so that a generous iteration budget also
+/// Scaled with `cases` so that a generous case budget also
 /// gets a generous rejection budget, with a floor for very small
-/// `iterations` (including `0`). The concrete formula and floor are
+/// `cases` (including `0`). The concrete formula and floor are
 /// deliberately kept crate-private; both are subject to change once
 /// real-world usage produces measurement data.
-fn rejection_limit(iterations: usize) -> usize {
+fn rejection_limit(cases: usize) -> usize {
     const FLOOR: usize = 1024;
-    FLOOR.max(iterations.saturating_mul(10))
+    FLOOR.max(cases.saturating_mul(10))
 }
 
 impl Runner {
-    /// Construct a runner that invokes the property closure `iterations`
-    /// times against a [`TestCaseContext`] seeded with `seed`.
+    /// Construct a runner that invokes the property closure against a
+    /// [`TestCaseContext`] seeded with `seed`.
     ///
-    /// The number of *accepted* iterations to invoke the closure for.
+    /// The number of *accepted* cases to invoke the closure for is
+    /// given per run, via [`run`](Runner::run) / [`run_feedback_guided`](Runner::run_feedback_guided).
     ///
-    /// An iteration is "accepted" when the closure reaches a verdict
+    /// A case is "accepted" when the closure reaches a verdict
     /// (`Ok(())` / `Err` / panic) without calling
     /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case)
     /// (directly or via
     /// [`sample_with_rejection`](crate::sample_with_rejection)). Rejected
-    /// iterations are retried and are *not* counted toward this budget.
+    /// cases are retried and are *not* counted toward the budget.
     ///
-    /// Rejected iterations are still bounded — the runner enforces an
+    /// Rejected cases are still bounded — the runner enforces an
     /// internal global limit on the total number of rejections it will
     /// tolerate across the whole [`run`](Runner::run) invocation, so a
     /// generator that always rejects still terminates with a
     /// `TooManyRejections` failure instead of looping forever. The
     /// initial limit is a crate-private constant that scales with
-    /// `iterations`; there is no public knob for it yet.
-    pub fn new(seed: u64, iterations: usize) -> Self {
+    /// `cases`; there is no public knob for it yet.
+    pub fn new(seed: u64) -> Self {
         Self {
             seed,
-            iterations,
             stats: Stats::default(),
         }
     }
@@ -264,15 +260,15 @@ impl Runner {
     /// instead, so the search can escape local optima.
     ///
     /// The rejection semantics (global rejection cap, `Stats`, and the
-    /// `Runner::iterations` budget counting only accepted cases) match
+    /// `cases` budget counting only accepted cases) match
     /// [`run`](Runner::run).
     ///
     /// # Example
     ///
     /// ```
-    /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
+    /// let mut runner = noprop::Runner::new(0xDEAD_BEEF);
     /// runner
-    ///     .run_feedback_guided(|ctx| {
+    ///     .run_feedback_guided(16, |ctx| {
     ///         let x = noprop::sample_u32(ctx);
     ///         if x == 0 {
     ///             ctx.event("zero");
@@ -281,18 +277,18 @@ impl Runner {
     ///     })
     ///     .expect("feedback-guided run must succeed");
     /// ```
-    pub fn run_feedback_guided<F>(&mut self, f: F) -> RunResult
+    pub fn run_feedback_guided<F>(&mut self, cases: usize, f: F) -> RunResult
     where
         F: Fn(&mut TestCaseContext) -> TestResult,
     {
         self.stats = Stats::default();
         let mut search = CorpusGuidedSearch::new(self.seed);
-        let rejection_cap = rejection_limit(self.iterations);
+        let rejection_cap = rejection_limit(cases);
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
         let mut total_samples: usize = 0;
 
-        while accepted < self.iterations {
+        while accepted < cases {
             // Each iteration gets a fresh context (recording or
             // exploratory), so there is no per-case state to clear.
             let mut ctx = search.next_context();
@@ -317,6 +313,7 @@ impl Runner {
                             rejected,
                             state.location,
                             SearchPolicy::CorpusGuided,
+                            cases,
                         ));
                     }
                     // A rejected case may still register novel features
@@ -361,7 +358,7 @@ impl Runner {
                     return Err(RunError::from_panic(
                         self.seed,
                         accepted,
-                        self.iterations,
+                        cases,
                         message,
                         generated,
                         self.stats,
@@ -382,36 +379,36 @@ impl Runner {
         Ok(())
     }
 
-    /// Invoke `f(&mut ctx)` up to `iterations` times against a shared
+    /// Invoke `f(&mut ctx)` up to `cases` times against a shared
     /// [`TestCaseContext`] seeded with `seed`.
     ///
-    /// Each invocation is one property "iteration". A returned `Ok(())`
+    /// Each invocation is one property case. A returned `Ok(())`
     /// counts as a pass; a returned `Err` or a panic (via `assert!`,
     /// `assert_eq!`, or explicit `panic!`) counts as a failure. Panics
     /// are caught by `catch_unwind`. Either failure mode is wrapped in
     /// a [`RunError`](crate::RunError) carrying the seed, the failing
-    /// iteration's index,
+    /// case's index,
     /// the failure message, and the generated-value trace, and returned
-    /// as `Err`. Subsequent iterations past the first failure are
+    /// as `Err`. Subsequent cases past the first failure are
     /// skipped.
     ///
     /// A call to [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) (either
     /// directly or via
     /// [`sample_with_rejection`](crate::sample_with_rejection)
-    /// exhaustion) discards the current iteration, does not count it
-    /// toward `iterations`, and retries. A stored rejection state
+    /// exhaustion) discards the current case, does not count it
+    /// toward `cases`, and retries. A stored rejection state
     /// wins over the closure's own `Ok` / `Err` / non-marker panic
     /// outcome, so user code cannot swallow rejection by catching the
     /// private control-flow marker and returning normally. Total
     /// rejections are bounded — see
-    /// `iterations`.
+    /// `cases`.
     ///
     /// # Property purity
     ///
     /// The closure is bound as `Fn`, not `FnMut`, so it cannot capture
     /// enclosing variables by mutable reference. Property tests are
     /// meant to be pure functions of the `TestCaseContext`-derived input: keeping
-    /// mutation off the closure's captures makes each iteration
+    /// mutation off the closure's captures makes each case
     /// independent and each failure reproducible from the seed alone.
     ///
     /// If a test genuinely needs shared state (a debug counter, a
@@ -419,18 +416,18 @@ impl Runner {
     /// (`std::cell::Cell` / `std::cell::RefCell` / atomics) so the
     /// escape from purity is spelled out in the code rather than
     /// hidden behind an unassuming `let mut`.
-    pub fn run<F>(&mut self, f: F) -> RunResult
+    pub fn run<F>(&mut self, cases: usize, f: F) -> RunResult
     where
         F: Fn(&mut TestCaseContext) -> TestResult,
     {
         self.stats = Stats::default();
         let mut ctx = TestCaseContext::new(self.seed);
         ctx.set_inside_runner();
-        let rejection_cap = rejection_limit(self.iterations);
+        let rejection_cap = rejection_limit(cases);
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
 
-        while accepted < self.iterations {
+        while accepted < cases {
             ctx.clear_generated();
             match run_case(&f, &mut ctx) {
                 CaseVerdict::Rejected(state) => {
@@ -441,7 +438,7 @@ impl Runner {
                         return Err(RunError::from_too_many_rejections(
                             self.seed,
                             accepted,
-                            self.iterations,
+                            cases,
                             rejected,
                             state.location,
                             generated,
@@ -461,7 +458,7 @@ impl Runner {
                     return Err(RunError::from_panic(
                         self.seed,
                         accepted,
-                        self.iterations,
+                        cases,
                         message,
                         generated,
                         self.stats,
@@ -559,8 +556,8 @@ fn record_stats(
     max_corpus_size: usize,
 ) {
     runner.stats = Stats {
-        accepted_iterations: accepted,
-        rejected_iterations: rejected,
+        accepted_cases: accepted,
+        rejected_cases: rejected,
         total_samples,
         discovered_features,
         max_corpus_size,
@@ -614,12 +611,13 @@ fn too_many_rejections(
     rejected: usize,
     location: &'static std::panic::Location<'static>,
     policy: SearchPolicy,
+    cases: usize,
 ) -> RunError {
     let generated = ctx.take_generated();
     let err = RunError::from_too_many_rejections(
         runner.seed,
         accepted,
-        runner.iterations,
+        cases,
         rejected,
         location,
         generated,
@@ -1254,9 +1252,9 @@ fn mutation_rewrites_upper_bytes_of_16_byte_integer_draw() {
 
 #[test]
 fn stats_corpus_fields_are_zero_for_uniform() {
-    let mut runner = Runner::new(1, 4);
+    let mut runner = Runner::new(1);
     runner
-        .run(|ctx| {
+        .run(4, |ctx| {
             crate::sample_u32(ctx);
             Ok(())
         })
@@ -1266,14 +1264,16 @@ fn stats_corpus_fields_are_zero_for_uniform() {
     assert_eq!(stats.max_corpus_size, 0);
 
     // The corpus fields stay 0 on failure paths too.
-    let err = Runner::new(1, 4)
-        .run(|_ctx| Err::<(), Box<dyn std::error::Error>>("boom".into()))
+    let err = Runner::new(1)
+        .run(4, |_ctx| {
+            Err::<(), Box<dyn std::error::Error>>("boom".into())
+        })
         .expect_err("returned Err must fail the run");
     assert_eq!(err.stats().discovered_features, 0);
     assert_eq!(err.stats().max_corpus_size, 0);
 
-    let err = Runner::new(1, 4)
-        .run(|ctx| {
+    let err = Runner::new(1)
+        .run(4, |ctx| {
             crate::sample_u32(ctx);
             panic!("boom");
         })
@@ -1286,9 +1286,9 @@ fn stats_corpus_fields_are_zero_for_uniform() {
 fn stats_corpus_fields_reflect_observed_features() {
     // Every case reports the same feature, so exactly one feature is
     // observed and exactly one entry is admitted.
-    let mut runner = Runner::new(1, 4);
+    let mut runner = Runner::new(1);
     runner
-        .run_feedback_guided(|ctx| {
+        .run_feedback_guided(4, |ctx| {
             ctx.bucket("b", 1);
             Ok(())
         })
@@ -1306,9 +1306,9 @@ fn stats_corpus_fields_respect_corpus_cap() {
     // the closure), so 100 accepted cases register exactly 100
     // features.
     let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1, 100);
+    let mut runner = Runner::new(1);
     runner
-        .run_feedback_guided(|ctx| {
+        .run_feedback_guided(100, |ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
@@ -1327,14 +1327,14 @@ fn stats_corpus_fields_respect_corpus_cap() {
 fn stats_corpus_fields_on_too_many_rejections() {
     // Every case rejects, so the run ends with too-many-rejections
     // after the rejection cap. Each rejected case reports a fresh
-    // feature before rejecting: with 103 iterations the rejection cap
+    // feature before rejecting: with 103 cases the rejection cap
     // (1030) exceeds `MAX_GLOBAL_FEATURES`, so the observation set
     // saturates at the cap and the rejected queue fills to
     // `CORPUS_SIZE`; the error must carry both.
     let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1, 103);
+    let mut runner = Runner::new(1);
     let err = runner
-        .run_feedback_guided(|ctx| {
+        .run_feedback_guided(103, |ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
@@ -1342,7 +1342,7 @@ fn stats_corpus_fields_on_too_many_rejections() {
         })
         .expect_err("rejecting every case must hit the rejection cap");
     let stats = err.stats();
-    assert_eq!(stats.rejected_iterations, rejection_limit(103) + 1);
+    assert_eq!(stats.rejected_cases, rejection_limit(103) + 1);
     assert_eq!(stats.discovered_features, MAX_GLOBAL_FEATURES);
     assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
 }
@@ -1386,9 +1386,9 @@ fn stats_corpus_fields_include_rejected_case_features() {
     // set. Later cases report the same (now observed) feature and are
     // not admitted.
     let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1, 8);
+    let mut runner = Runner::new(1);
     runner
-        .run_feedback_guided(|ctx| {
+        .run_feedback_guided(8, |ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", 1);
@@ -1399,18 +1399,18 @@ fn stats_corpus_fields_include_rejected_case_features() {
         })
         .expect("run must succeed");
     let stats = runner.stats();
-    assert_eq!(stats.rejected_iterations, 1);
+    assert_eq!(stats.rejected_cases, 1);
     assert_eq!(stats.discovered_features, 1);
     assert_eq!(stats.max_corpus_size, 1);
 }
 
 #[test]
-fn stats_corpus_fields_zero_iterations() {
-    let mut runner = Runner::new(1, 0);
+fn stats_corpus_fields_zero_cases() {
+    let mut runner = Runner::new(1);
     runner
-        .run_feedback_guided(|_ctx| {
-            panic!("closure must not be invoked with zero iterations");
+        .run_feedback_guided(0, |_ctx| {
+            panic!("closure must not be invoked with zero cases");
         })
-        .expect("zero iterations must succeed");
+        .expect("zero cases must succeed");
     assert_eq!(runner.stats(), Stats::default());
 }

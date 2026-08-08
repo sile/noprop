@@ -37,7 +37,7 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// A `TooManyRejections` failure — raised when
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
 /// the internal global limit is reached — reports the number of
-/// accepted iterations that completed before the runner gave up as
+/// accepted cases that completed before the runner gave up as
 /// `case_index()`, so the same seed and iteration budget reproduce the
 /// same exit.
 ///
@@ -45,7 +45,7 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// features the failing case reported and a one-based candidate index.
 /// The candidate index counts every attempt — accepted, rejected, and
 /// the failing case itself — so it relates to the zero-based
-/// `case_index()` (accepted iterations only) as
+/// `case_index()` (accepted cases only) as
 /// `candidate_index = case_index + 1 + rejections before the failure`.
 /// For `TooManyRejections`, the candidate index is the ordinal of the
 /// last rejected attempt (`accepted + rejected`) and the semantic
@@ -79,11 +79,11 @@ pub type RunResult = std::result::Result<(), RunError>;
 pub struct RunError {
     seed: u64,
     case_index: usize,
-    /// The iteration budget the failing run was given. The reproduce
+    /// The case budget the failing run was given. The reproduce
     /// hint reuses it so reruns hit the same rejection cap (a
     /// `case_index + 1` hint would shrink the cap and turn the failure
     /// into `TooManyRejections`).
-    iterations: usize,
+    cases: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
     // Boxed to keep `RunError` small: with the corpus stats fields
@@ -138,7 +138,7 @@ pub enum RunErrorKind {
     /// The property closure returned `Err` or panicked in a case.
     PropertyFailure,
     /// The internal global rejection limit was reached before
-    /// `Runner::iterations` accepted iterations completed.
+    /// `Runner::run`'s `cases` budget of accepted cases completed.
     TooManyRejections,
 }
 
@@ -148,13 +148,14 @@ enum ErrorKind {
     /// `assert!` / `assert_eq!` or an explicit `panic!`).
     Panic { message: String },
     /// The internal global rejection limit was reached before
-    /// `Runner::iterations` accepted iterations completed. Rejected
-    /// iterations do not count toward `Runner::iterations`, but the
+    /// `Runner::run`'s `cases` budget of accepted cases completed.
+    /// Rejected
+    /// cases do not count toward the budget, but the
     /// runner keeps track of total attempts (accepted + rejected) via
     /// a crate-private constant so a generator that always rejects
     /// still terminates.
     TooManyRejections {
-        rejected_iterations: usize,
+        rejected_cases: usize,
         last_reject_location: &'static Location<'static>,
     },
 }
@@ -172,7 +173,7 @@ impl RunError {
     pub(crate) fn from_panic(
         seed: u64,
         case_index: usize,
-        iterations: usize,
+        cases: usize,
         message: String,
         generated: Vec<GeneratedValue>,
         stats: Stats,
@@ -181,7 +182,7 @@ impl RunError {
         Self::new(
             seed,
             case_index,
-            iterations,
+            cases,
             ErrorKind::Panic { message },
             generated,
             stats,
@@ -205,8 +206,8 @@ impl RunError {
     pub(crate) fn from_too_many_rejections(
         seed: u64,
         case_index: usize,
-        iterations: usize,
-        rejected_iterations: usize,
+        cases: usize,
+        rejected_cases: usize,
         last_reject_location: &'static Location<'static>,
         generated: Vec<GeneratedValue>,
         stats: Stats,
@@ -215,9 +216,9 @@ impl RunError {
         Self::new(
             seed,
             case_index,
-            iterations,
+            cases,
             ErrorKind::TooManyRejections {
-                rejected_iterations,
+                rejected_cases,
                 last_reject_location,
             },
             generated,
@@ -229,7 +230,7 @@ impl RunError {
     fn new(
         seed: u64,
         case_index: usize,
-        iterations: usize,
+        cases: usize,
         kind: ErrorKind,
         generated: Vec<GeneratedValue>,
         stats: Stats,
@@ -238,7 +239,7 @@ impl RunError {
         Self {
             seed,
             case_index,
-            iterations,
+            cases,
             kind,
             generated,
             stats: Box::new(stats),
@@ -256,7 +257,7 @@ impl RunError {
     /// The zero-based index of the accepted iteration this failure is
     /// tied to. For a property panic / returned `Err`, this is the
     /// index of the failing iteration. For `TooManyRejections`, this
-    /// is the count of accepted iterations that ran before the runner
+    /// is the count of accepted cases that ran before the runner
     /// gave up (i.e. the index of the iteration that could not be
     /// accepted).
     pub fn case_index(&self) -> usize {
@@ -270,7 +271,7 @@ impl RunError {
     }
 
     /// Observability counters accumulated up to (and including) the
-    /// failing case. `accepted_iterations` matches
+    /// failing case. `accepted_cases` matches
     /// [`case_index`](Self::case_index). The corpus fields
     /// (`discovered_features` / `max_corpus_size`) do not include the
     /// failing case's features (the failing case is not admitted).
@@ -290,18 +291,20 @@ impl RunError {
 impl RunError {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
-    /// Reuses the original iteration budget so reruns hit the same
+    /// Reuses the original case budget so reruns hit the same
     /// rejection cap. In corpus-guided mode the closure body
     /// is a placeholder: the caller substitutes the original property
     /// closure.
     fn reproduce_command(&self) -> String {
-        let base = format!(
-            "noprop::Runner::new({:#018x}, {})",
-            self.seed, self.iterations
-        );
         match self.policy {
-            SearchPolicy::Uniform => base,
-            SearchPolicy::CorpusGuided => format!("{base}.run_feedback_guided(|ctx| ...)"),
+            SearchPolicy::Uniform => format!(
+                "noprop::Runner::new({:#018x}).run({}, |ctx| ...)",
+                self.seed, self.cases
+            ),
+            SearchPolicy::CorpusGuided => format!(
+                "noprop::Runner::new({:#018x}).run_feedback_guided({}, |ctx| ...)",
+                self.seed, self.cases
+            ),
         }
     }
 }
@@ -320,12 +323,12 @@ impl std::fmt::Debug for RunError {
                 writeln!(f, "    panic: {message:?},")?;
             }
             ErrorKind::TooManyRejections {
-                rejected_iterations,
+                rejected_cases,
                 last_reject_location,
             } => {
                 writeln!(
                     f,
-                    "    too_many_rejections: {{ rejected: {rejected_iterations}, last_reject_at: {}:{} }},",
+                    "    too_many_rejections: {{ rejected: {rejected_cases}, last_reject_at: {}:{} }},",
                     last_reject_location.file(),
                     last_reject_location.line(),
                 )?;
@@ -335,8 +338,8 @@ impl std::fmt::Debug for RunError {
         writeln!(
             f,
             "    stats: {{ accepted: {}, rejected: {}, total_samples: {}, discovered_features: {}, max_corpus_size: {} }},",
-            self.stats.accepted_iterations,
-            self.stats.rejected_iterations,
+            self.stats.accepted_cases,
+            self.stats.rejected_cases,
             self.stats.total_samples,
             self.stats.discovered_features,
             self.stats.max_corpus_size,
@@ -374,13 +377,13 @@ impl std::fmt::Display for RunError {
                 )?;
             }
             ErrorKind::TooManyRejections {
-                rejected_iterations,
+                rejected_cases,
                 last_reject_location,
             } => {
                 writeln!(
                     f,
                     "noprop too many rejections at case {} (seed={:#018x}): \
-                     {rejected_iterations} rejected iteration(s), last reject at {}:{}",
+                     {rejected_cases} rejected case(s), last reject at {}:{}",
                     self.case_index,
                     self.seed,
                     last_reject_location.file(),
@@ -392,8 +395,8 @@ impl std::fmt::Display for RunError {
         writeln!(
             f,
             "stats: accepted={}, rejected={}, total_samples={}, discovered_features={}, max_corpus_size={}",
-            self.stats.accepted_iterations,
-            self.stats.rejected_iterations,
+            self.stats.accepted_cases,
+            self.stats.rejected_cases,
             self.stats.total_samples,
             self.stats.discovered_features,
             self.stats.max_corpus_size,

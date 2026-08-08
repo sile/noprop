@@ -100,7 +100,7 @@ fn run_task(workload: &str, mutant: &str, variant: &str, seed: u64) -> String {
         variant,
         "--seed",
         &seed.to_string(),
-        "--iterations",
+        "--cases",
         "100",
     ])
 }
@@ -180,7 +180,7 @@ fn guard_completes_under_every_variant() {
 #[test]
 fn summary_regenerates_from_raw_results() {
     let seeds = "0,1,2";
-    let raw = run(&["run-all", "--iterations", "50", "--seeds", seeds]);
+    let raw = run(&["run-all", "--cases", "50", "--seeds", seeds]);
     let groups = run_with_stdin(&["summary"], Some(&raw));
     // run-all prints one JSON line per (workload, mutant, variant, seed);
     // summary prints one line per (variant, workload, mutant) group.

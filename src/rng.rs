@@ -723,14 +723,14 @@ impl TestCaseContext {
     /// Prefer
     /// [`sample_with_rejection`](crate::sample_with_rejection) as the
     /// high-level bounded-retry helper. Reach for `reject_case`
-    /// directly only when the whole iteration turns out to be an
+    /// directly only when the whole case turns out to be an
     /// unsuitable candidate *after* sampling has finished and the
     /// helper cannot express the exit.
     ///
-    /// The runner discards the current iteration's generated-value
-    /// trace and tries the next iteration. Rejected iterations are not
+    /// The runner discards the current case's generated-value
+    /// trace and tries the next case. Rejected cases are not
     /// counted toward
-    /// `iterations`; rejected +
+    /// `cases`; rejected +
     /// accepted attempts together are bounded by an internal global
     /// limit so a generator that always rejects still terminates.
     #[track_caller]

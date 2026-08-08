@@ -115,7 +115,7 @@
 //! it.
 //!
 //! ```
-//! # let _: noprop::RunResult = noprop::Runner::new(0, 1).run(|ctx| {
+//! # let _: noprop::RunResult = noprop::Runner::new(0).run(1, |ctx| {
 //! use std::num::NonZeroU32;
 //! let n = noprop::sample_with_rejection(ctx, 64, |ctx| {
 //!     NonZeroU32::new(noprop::sample_u32(ctx))
@@ -232,7 +232,7 @@ pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
 /// # Examples
 ///
 /// ```
-/// # let _: noprop::RunResult = noprop::Runner::new(0, 1).run(|ctx| {
+/// # let _: noprop::RunResult = noprop::Runner::new(0).run(1, |ctx| {
 /// // Sample an even u32 in at most 8 attempts. If all 8 attempts are
 /// // odd (probability 1/256), the iteration is rejected and Runner
 /// // tries the next one.

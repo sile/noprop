@@ -21,7 +21,7 @@ fn main() -> Result<(), Error> {
     let mut args = raw_args();
     args.metadata_mut().app_name = "noprop-detection-benchmark";
     args.metadata_mut().app_description =
-        "Measure detection rate and iterations-to-detection of noprop generators.";
+        "Measure detection rate and cases-to-detection of noprop generators.";
 
     if noargs::VERSION_FLAG.take(&mut args).is_present() {
         println!("noprop-detection-benchmark {}", env!("CARGO_PKG_VERSION"));
@@ -73,16 +73,16 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         .example("0")
         .take(args)
         .then(|o| o.value().parse())?;
-    let iterations: usize = opt("iterations")
+    let cases: usize = opt("cases")
         .ty("N")
-        .doc("Accepted iteration budget")
+        .doc("Accepted case budget")
         .default("1000")
         .take(args)
         .then(|o| o.value().parse())?;
-    if iterations == 0 {
+    if cases == 0 {
         return Err(Error::other(
             args,
-            "iterations must be at least 1 (a zero budget produces a vacuous result)",
+            "cases must be at least 1 (a zero budget produces a vacuous result)",
         ));
     }
 
@@ -113,7 +113,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         )
     })?;
 
-    let result = variants::run_task(workload.name, task, variant, seed, iterations);
+    let result = variants::run_task(workload.name, task, variant, seed, cases);
     println!("{}", nojson::Json(&result));
     Ok(true)
 }
@@ -127,16 +127,16 @@ fn run_all_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         return Ok(false);
     }
 
-    let iterations: usize = opt("iterations")
+    let cases: usize = opt("cases")
         .ty("N")
-        .doc("Accepted iteration budget")
+        .doc("Accepted case budget")
         .default("1000")
         .take(args)
         .then(|o| o.value().parse())?;
-    if iterations == 0 {
+    if cases == 0 {
         return Err(Error::other(
             args,
-            "iterations must be at least 1 (a zero budget produces a vacuous result)",
+            "cases must be at least 1 (a zero budget produces a vacuous result)",
         ));
     }
     let seeds_text: String = opt("seeds")
@@ -162,8 +162,7 @@ fn run_all_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         for task in workload.tasks {
             for variant in variants::VARIANTS {
                 for &seed in &seeds {
-                    let result =
-                        variants::run_task(workload.name, task, *variant, seed, iterations);
+                    let result = variants::run_task(workload.name, task, *variant, seed, cases);
                     println!("{}", nojson::Json(&result));
                 }
             }

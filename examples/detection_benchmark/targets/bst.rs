@@ -5,9 +5,9 @@
 //! multiplicity breaks the equality with the model).
 //!
 //! Uniform generation over a wide key range draws a duplicate only
-//! after many iterations, so the mutant is detected late (or not at
+//! after many cases, so the mutant is detected late (or not at
 //! all with a small budget); the biased variant narrows the key range
-//! so duplicates appear within the first iterations.
+//! so duplicates appear within the first cases.
 
 use super::{Observe, Task, Workload};
 use noprop::TestCaseContext;
