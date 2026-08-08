@@ -35,10 +35,10 @@ record the mutated case's draws and features
            ────────► repeat
 ```
 
-`Runner::run_corpus_guided(closure)` is the entry point. The closure
+`Runner::run_feedback_guided(closure)` is the entry point. The closure
 receives the same `&mut TestCaseContext` as `Runner::run`, so the same
 property runs under both. See the
-[`run_corpus_guided`](crate::Runner::run_corpus_guided) documentation
+[`run_feedback_guided`](crate::Runner::run_feedback_guided) documentation
 for a runnable example.
 
 ## Feedback Protocol
@@ -157,7 +157,7 @@ sequence of cases and mutations.
 
 A failure report's reproduce hint reruns the exact failing seed with
 the original iteration budget and names
-`run_corpus_guided(|ctx| ...)`, so the rerun reproduces the same
+`run_feedback_guided(|ctx| ...)`, so the rerun reproduces the same
 failure. The report also carries the failing case's candidate index
 (across accepted and rejected cases) and the semantic features the
 failing case reported, so the interesting input region is visible

@@ -716,7 +716,7 @@ impl TestCaseContext {
 
     /// Reject the current iteration and unwind out of the property
     /// closure. Only valid inside [`Runner::run`](crate::Runner::run) or
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided);
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided);
     /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
@@ -737,9 +737,8 @@ impl TestCaseContext {
     pub fn reject_case(&mut self) -> ! {
         if !self.inside_runner {
             panic!(
-                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run, \
-                 Runner::run_corpus_guided or \
-                 Runner::run_corpus_guided_with_policy property closure. Constructing a \
+                "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run or \
+                 Runner::run_feedback_guided property closure. Constructing a \
                  TestCaseContext directly via TestCaseContext::new does not create a Runner boundary."
             );
         }
@@ -1018,7 +1017,7 @@ impl TestCaseContext {
     /// Consume and return any pending rejection state saved by
     /// [`TestCaseContext::reject_case`]. Called by
     /// [`Runner::run`](crate::Runner::run) and
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) after each case boundary so
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided) after each case boundary so
     /// a set state wins over the closure's own `Ok` / `Err` / non-marker
     /// panic outcome.
     pub(crate) fn take_rejection(&mut self) -> Option<RejectionState> {
@@ -1117,7 +1116,7 @@ impl TestCaseContext {
     /// Enable the Runner-only guard on
     /// [`TestCaseContext::reject_case`]. Called by
     /// [`Runner::run`](crate::Runner::run) or
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) immediately after
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided) immediately after
     /// constructing its `TestCaseContext`.
     pub(crate) fn set_inside_runner(&mut self) {
         self.inside_runner = true;
@@ -1125,8 +1124,8 @@ impl TestCaseContext {
 
     /// Report reaching a finite event for the current case.
     ///
-    /// Only meaningful in corpus-guided mode:
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// Only meaningful in feedback-guided mode:
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
     /// switches the context into that mode before running its case
     /// loop. In the default mode (plain [`Runner::run`](crate::Runner::run)
     /// or a directly constructed context) this is an allocation-free
@@ -1147,7 +1146,7 @@ impl TestCaseContext {
     /// caller; unbounded values (timestamps, sequence numbers, byte
     /// counts) defeat the corpus's stability and size bounds.
     ///
-    /// Only meaningful in corpus-guided mode; a no-op otherwise.
+    /// Only meaningful in feedback-guided mode; a no-op otherwise.
     /// Reporting the same `(label, value)` pair again within one case
     /// is deduplicated.
     pub fn bucket(&mut self, label: &'static str, value: u64) {
@@ -1160,7 +1159,7 @@ impl TestCaseContext {
     /// stateful test's model moved from `from` to `to` under the
     /// command named by `label`.
     ///
-    /// Only meaningful in corpus-guided mode; a no-op otherwise.
+    /// Only meaningful in feedback-guided mode; a no-op otherwise.
     /// Reporting the same transition again within one case is
     /// deduplicated.
     pub fn transition(&mut self, label: &'static str, from: u64, to: u64) {
@@ -1171,7 +1170,7 @@ impl TestCaseContext {
 
     /// Switch the context into corpus-guided feedback mode for the
     /// upcoming case. Called by
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
     /// before each case; the case-local feedback is drained via
     /// [`take_feedback`](Self::take_feedback) at the case boundary.
     pub(crate) fn enable_corpus_guided(&mut self) {
@@ -1199,7 +1198,7 @@ impl TestCaseContext {
     /// Total number of top-level `sample_*` invocations observed on this
     /// context across every case that has run so far. Consumed by
     /// [`Runner::run`](crate::Runner::run) and
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) when they build
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided) when they build
     /// [`Stats`](crate::Stats).
     pub(crate) fn total_samples(&self) -> usize {
         self.total_samples

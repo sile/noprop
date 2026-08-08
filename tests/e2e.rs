@@ -748,31 +748,31 @@ fn stats_on_failure_reports_progress_up_to_failing_case() {
     assert_eq!(err.case_index(), stats.accepted_iterations);
 }
 
-// === Corpus-guided PBT (Runner::run_corpus_guided / event / bucket / transition) ===
+// === Feedback-guided PBT (Runner::run_feedback_guided / event / bucket / transition) ===
 
 #[test]
-fn run_corpus_guided_succeeds_with_features() {
+fn run_feedback_guided_succeeds_with_features() {
     let mut runner = noprop::Runner::new(42, 64);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let x = noprop::sample_u32(ctx);
             if x.is_multiple_of(4) {
                 ctx.event("multiple-of-four");
             }
             Ok(())
         })
-        .expect("corpus-guided run with semantic feedback must succeed");
+        .expect("feedback-guided run with semantic feedback must succeed");
     let stats = runner.stats();
     assert_eq!(stats.accepted_iterations, 64);
 }
 
 #[test]
-fn run_corpus_guided_without_features_succeeds() {
-    // Corpus-guided mode does not require feedback: a property that
+fn run_feedback_guided_without_features_succeeds() {
+    // Feedback-guided mode does not require feedback: a property that
     // never reports a feature just yields no interesting cases.
     let mut runner = noprop::Runner::new(1, 8);
     runner
-        .run_corpus_guided(|_ctx| Ok(()))
+        .run_feedback_guided(|_ctx| Ok(()))
         .expect("a property without semantic feedback must not fail");
     let stats = runner.stats();
     assert_eq!(stats.accepted_iterations, 8);
@@ -780,11 +780,94 @@ fn run_corpus_guided_without_features_succeeds() {
 }
 
 #[test]
-fn run_corpus_guided_zero_iterations_does_not_invoke_closure() {
+fn feedback_reported_from_the_first_case_drives_the_search() {
+    // Every case reports a feature, so the corpus is non-empty from
+    // the first case: exploratory candidates replay the admitted
+    // draws, and the run stays deterministic per seed.
+    use std::cell::Cell;
+    fn run(seed: u64) -> Vec<u32> {
+        let observed: Cell<Vec<u32>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 64)
+            .run_feedback_guided(|ctx| {
+                let x = noprop::sample_u32(ctx);
+                let mut v = observed.take();
+                v.push(x);
+                observed.set(v);
+                ctx.event("always");
+                Ok(())
+            })
+            .expect("run must succeed");
+        observed.into_inner()
+    }
+    let a = run(42);
+    let b = run(42);
+    assert_eq!(a, b, "the candidate stream must be reproducible");
+}
+
+#[test]
+fn feedback_reported_late_is_captured_from_the_case_start() {
+    // The property reports a feature only after several draws: the
+    // feedback-guided runner records the whole case from its start, so
+    // the draws made before the report are part of the admitted
+    // sequence and the run must not fail or lose determinism.
+    use std::cell::Cell;
+    fn run(seed: u64) -> Vec<usize> {
+        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
+        noprop::Runner::new(seed, 64)
+            .run_feedback_guided(|ctx| {
+                let mut low = 0usize;
+                let mut high = 0usize;
+                for _ in 0..4 {
+                    let x = noprop::sample_u32(ctx);
+                    if x < u32::MAX / 2 {
+                        low += 1;
+                    } else {
+                        high += 1;
+                    }
+                }
+                if high > low {
+                    ctx.event("high-dominant");
+                }
+                let mut v = observed.take();
+                v.push(high);
+                observed.set(v);
+                Ok(())
+            })
+            .expect("run must succeed");
+        observed.into_inner()
+    }
+    let seed = 0xC0FFEE;
+    assert_eq!(run(seed), run(seed), "late feedback must stay reproducible");
+    assert!(
+        run(seed).iter().any(|&high| high > 2),
+        "the feature region must be explored: {:?}",
+        run(seed)
+    );
+}
+
+#[test]
+fn feedback_never_reported_is_a_valid_run() {
+    // A property that never calls a feedback method is a valid
+    // feedback-guided run: it just yields no interesting cases.
+    let mut runner = noprop::Runner::new(7, 32);
+    runner
+        .run_feedback_guided(|ctx| {
+            let _ = noprop::sample_u32(ctx);
+            Ok(())
+        })
+        .expect("a run without feedback must not fail");
+    let stats = runner.stats();
+    assert_eq!(stats.accepted_iterations, 32);
+    assert_eq!(stats.discovered_features, 0);
+    assert_eq!(stats.max_corpus_size, 0);
+}
+
+#[test]
+fn run_feedback_guided_zero_iterations_does_not_invoke_closure() {
     let invoked = std::cell::Cell::new(0usize);
     let mut runner = noprop::Runner::new(1, 0);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             invoked.set(invoked.get() + 1);
             ctx.event("e");
             Ok(())
@@ -807,9 +890,9 @@ fn semantic_methods_are_noop_under_plain_run() {
 }
 
 #[test]
-fn run_corpus_guided_reports_property_failure() {
+fn run_feedback_guided_reports_property_failure() {
     let err = noprop::Runner::new(1, 32)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.event("before-failure");
             panic!("deterministic failure");
         })
@@ -817,7 +900,7 @@ fn run_corpus_guided_reports_property_failure() {
     let display = format!("{err}");
     assert!(display.contains("deterministic failure"), "{display}");
     assert!(
-        display.contains("run_corpus_guided(|ctx| ...)"),
+        display.contains("run_feedback_guided(|ctx| ...)"),
         "{display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
@@ -826,13 +909,13 @@ fn run_corpus_guided_reports_property_failure() {
 }
 
 #[test]
-fn run_corpus_guided_candidate_index_is_one_based() {
+fn run_feedback_guided_candidate_index_is_one_based() {
     // The candidate index counts every attempt (accepted, rejected,
     // and the failing case itself) and is one-based, unlike the
     // zero-based accepted-iteration `case_index`.
     let attempts = std::cell::Cell::new(0usize);
     let err = noprop::Runner::new(1, 8)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             attempts.set(attempts.get() + 1);
             ctx.event("e");
             panic!("fail on first attempt");
@@ -848,13 +931,13 @@ fn run_corpus_guided_candidate_index_is_one_based() {
 }
 
 #[test]
-fn run_corpus_guided_candidate_index_counts_rejected_attempts() {
+fn run_feedback_guided_candidate_index_counts_rejected_attempts() {
     // A rejected attempt still advances the candidate index, so the
     // failing second attempt is candidate 2 while `case_index` stays 0
     // (no accepted iteration ran).
     let attempts = std::cell::Cell::new(0usize);
     let err = noprop::Runner::new(7, 8)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let n = attempts.get();
             attempts.set(n + 1);
             ctx.event("e");
@@ -874,9 +957,9 @@ fn run_corpus_guided_candidate_index_counts_rejected_attempts() {
 }
 
 #[test]
-fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
+fn run_feedback_guided_reports_err_closure_failure_with_semantics() {
     let err = noprop::Runner::new(1, 8)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.event("before-error");
             Err("corpus error".into())
         })
@@ -884,7 +967,7 @@ fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
     let display = format!("{err}");
     assert!(display.contains("corpus error"), "{display}");
     assert!(
-        display.contains("run_corpus_guided(|ctx| ...)"),
+        display.contains("run_feedback_guided(|ctx| ...)"),
         "{display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
@@ -894,10 +977,10 @@ fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
 }
 
 #[test]
-fn run_corpus_guided_counts_rejections() {
+fn run_feedback_guided_counts_rejections() {
     let mut runner = noprop::Runner::new(3, 16);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let x = noprop::sample_u32(ctx);
             if x.is_multiple_of(2) {
                 ctx.reject_case();
@@ -912,14 +995,14 @@ fn run_corpus_guided_counts_rejections() {
 }
 
 #[test]
-fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
+fn run_feedback_guided_too_many_rejections_reports_last_rejected_semantics() {
     // The rejection-cap failure must carry the semantic features of
     // the last rejected case and its candidate index (every attempt
     // was rejected, so the index equals the rejected count). This
     // guards against the report silently dropping to "candidate_index:
     // 0" on this path.
     let err = noprop::Runner::new(1, 8)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.event("always-reject");
             ctx.reject_case();
         })
@@ -943,21 +1026,21 @@ fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
     let display = format!("{err}");
     assert!(display.contains("too many rejections"), "{display}");
     assert!(
-        display.contains("run_corpus_guided(|ctx| ...)"),
+        display.contains("run_feedback_guided(|ctx| ...)"),
         "{display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
 }
 
 #[test]
-fn corpus_guided_tmr_error_pins_hint_stats_and_features() {
-    // The too-many-rejections report must carry the corpus-guided
+fn feedback_guided_tmr_error_pins_hint_stats_and_features() {
+    // The too-many-rejections report must carry the feedback-guided
     // reproduce hint (so the rerun reproduces the same exit), the
     // corpus stats fields, and the last rejected case's semantic
     // features. The existing tests only substring-match the hint; this
     // pins the full hint and the corpus fields.
     let err = noprop::Runner::new(7, 8)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.event("always-reject");
             ctx.reject_case();
         })
@@ -965,10 +1048,10 @@ fn corpus_guided_tmr_error_pins_hint_stats_and_features() {
     let display = format!("{err}");
     assert!(
         display.contains(&format!(
-            "reproduce with: noprop::Runner::new({:#018x}, 8).run_corpus_guided(|ctx| ...)",
+            "reproduce with: noprop::Runner::new({:#018x}, 8).run_feedback_guided(|ctx| ...)",
             err.seed()
         )),
-        "the hint must name the corpus-guided entry point: {display}"
+        "the hint must name the feedback-guided entry point: {display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
     assert!(display.contains("event(\"always-reject\")"), "{display}");
@@ -988,7 +1071,7 @@ fn corpus_guided_tmr_error_pins_hint_stats_and_features() {
 }
 
 #[test]
-fn run_corpus_guided_bounds_high_cardinality_features() {
+fn run_feedback_guided_bounds_high_cardinality_features() {
     // A property that reports effectively unbounded bucket values must
     // not crash or grow memory without bound. This is a smoke test:
     // with 64 iterations × 3 buckets it stays far below the per-case
@@ -998,7 +1081,7 @@ fn run_corpus_guided_bounds_high_cardinality_features() {
     // the point.
     let mut runner = noprop::Runner::new(5, 64);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let x = noprop::sample_u64(ctx);
             ctx.bucket("unbounded", x);
             ctx.bucket("also-unbounded", x.wrapping_add(1));
@@ -1011,7 +1094,7 @@ fn run_corpus_guided_bounds_high_cardinality_features() {
 }
 
 #[test]
-fn run_corpus_guided_rejected_cases_register_features() {
+fn run_feedback_guided_rejected_cases_register_features() {
     // A rejected case that reported a novel feature before rejecting
     // must be admitted into the rejected queue (low-energy
     // scaffolding), so its features count toward the global registry.
@@ -1019,7 +1102,7 @@ fn run_corpus_guided_rejected_cases_register_features() {
     // reported later by an accepted case is no longer novel.
     let mut runner = noprop::Runner::new(11, 32);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let x = noprop::sample_u32(ctx);
             ctx.event("shared-feature");
             if x.is_multiple_of(2) {
@@ -1034,13 +1117,13 @@ fn run_corpus_guided_rejected_cases_register_features() {
 }
 
 #[test]
-fn run_corpus_guided_is_reproducible_from_seed() {
+fn run_feedback_guided_is_reproducible_from_seed() {
     let seed = 0xABCD_EF01_2345_6789;
 
     fn run(seed: u64) -> Vec<u32> {
         let observed = std::cell::Cell::new(Vec::new());
         noprop::Runner::new(seed, 64)
-            .run_corpus_guided(|ctx| {
+            .run_feedback_guided(|ctx| {
                 let x = noprop::sample_u32(ctx);
                 let mut v = observed.take();
                 v.push(x);
@@ -1050,7 +1133,7 @@ fn run_corpus_guided_is_reproducible_from_seed() {
                 }
                 Ok(())
             })
-            .expect("corpus-guided run must succeed");
+            .expect("feedback-guided run must succeed");
         observed.into_inner()
     }
 
@@ -1058,7 +1141,7 @@ fn run_corpus_guided_is_reproducible_from_seed() {
 }
 
 #[test]
-fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
+fn run_feedback_guided_with_rejections_is_reproducible_from_seed() {
     // The plain reproducibility test never rejects, so the
     // rejected-queue pick path (and the PRNG rolls it consumes) stays
     // unexercised. This property rejects a fraction of candidates so
@@ -1069,7 +1152,7 @@ fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
     fn run(seed: u64) -> Vec<u32> {
         let observed: Cell<Vec<u32>> = Cell::new(Vec::new());
         noprop::Runner::new(seed, 64)
-            .run_corpus_guided(|ctx| {
+            .run_feedback_guided(|ctx| {
                 let x = noprop::sample_u32(ctx);
                 let mut v = observed.take();
                 v.push(x);
@@ -1082,7 +1165,7 @@ fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
                 }
                 Ok(())
             })
-            .expect("corpus-guided run must succeed");
+            .expect("feedback-guided run must succeed");
         observed.into_inner()
     }
 
@@ -1097,7 +1180,7 @@ fn run_corpus_guided_with_rejections_is_reproducible_from_seed() {
 }
 
 #[test]
-fn run_corpus_guided_stats_count_rejected_attempt_samples() {
+fn run_feedback_guided_stats_count_rejected_attempt_samples() {
     // `total_samples` must include samples produced by rejected
     // attempts (they consumed generator budget), and
     // `rejected_iterations` must count every `reject_case`.
@@ -1106,7 +1189,7 @@ fn run_corpus_guided_stats_count_rejected_attempt_samples() {
     let attempts = Cell::new(0usize);
     let mut runner = noprop::Runner::new(1, 4);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             attempts.set(attempts.get() + 1);
             ctx.event("e");
             let _ = noprop::sample_u32(ctx);
@@ -1126,7 +1209,7 @@ fn run_corpus_guided_stats_count_rejected_attempt_samples() {
 }
 
 #[test]
-fn run_corpus_guided_replays_rejected_candidates() {
+fn run_feedback_guided_replays_rejected_candidates() {
     // The rejected queue is a mutation parent: an early rejected case
     // with a novel feature enters the rejected queue and — while the
     // accepted queue stays empty — it is the only source for
@@ -1137,7 +1220,7 @@ fn run_corpus_guided_replays_rejected_candidates() {
 
     let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
     noprop::Runner::new(1, 256)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let x = noprop::sample_usize_in(ctx, 0..1000);
             let mut v = observed.take();
             v.push(x);
@@ -1159,7 +1242,7 @@ fn run_corpus_guided_replays_rejected_candidates() {
 }
 
 #[test]
-fn run_corpus_guided_steers_candidates_by_novel_features() {
+fn run_feedback_guided_steers_candidates_by_novel_features() {
     // The corpus must concentrate the search on the interesting input
     // region: the first case that reaches the "high" feature is
     // admitted and replayed (unmutated with probability 3/4) as the
@@ -1171,7 +1254,7 @@ fn run_corpus_guided_steers_candidates_by_novel_features() {
 
     let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
     noprop::Runner::new(7, 256)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let x = noprop::sample_usize_in(ctx, 0..1000);
             let mut v = observed.take();
             v.push(x);
@@ -1181,7 +1264,7 @@ fn run_corpus_guided_steers_candidates_by_novel_features() {
             }
             Ok(())
         })
-        .expect("corpus-guided run must succeed");
+        .expect("feedback-guided run must succeed");
     let mut second_half: Vec<usize> = observed.into_inner()[128..].to_vec();
     second_half.sort_unstable();
     let second_half_median = second_half[second_half.len() / 2];
@@ -1193,7 +1276,7 @@ fn run_corpus_guided_steers_candidates_by_novel_features() {
 }
 
 #[test]
-fn run_corpus_guided_steers_stateful_transitions() {
+fn run_feedback_guided_steers_stateful_transitions() {
     // A stateful-style target: the property advances an abstract state
     // machine and reports each transition. The corpus must explore
     // deeper transition chains than uniform sampling. The mean depth of
@@ -1222,8 +1305,8 @@ fn run_corpus_guided_steers_stateful_transitions() {
         };
         if corpus_guided {
             runner
-                .run_corpus_guided(property)
-                .expect("corpus-guided run must succeed");
+                .run_feedback_guided(property)
+                .expect("feedback-guided run must succeed");
         } else {
             runner.run(property).expect("uniform run must succeed");
         }
@@ -1244,32 +1327,32 @@ fn run_corpus_guided_steers_stateful_transitions() {
 }
 
 #[test]
-fn run_corpus_guided_reports_corpus_fields() {
-    // The corpus fields are non-zero for corpus-guided runs. The exact
+fn run_feedback_guided_reports_corpus_fields() {
+    // The corpus fields are non-zero for feedback-guided runs. The exact
     // values and the caps (feature set 1024, corpus 64) are verified
     // in unit tests; e2e only checks the 0 / non-zero distinction.
     let case = std::cell::Cell::new(0u64);
     let mut runner = noprop::Runner::new(1, 128);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
             Ok(())
         })
-        .expect("corpus-guided run must succeed");
+        .expect("feedback-guided run must succeed");
     let stats = runner.stats();
     assert!(stats.discovered_features > 0);
     assert!(stats.max_corpus_size > 0);
 }
 
 #[test]
-fn run_corpus_guided_failure_error_carries_corpus_stats() {
+fn run_feedback_guided_failure_error_carries_corpus_stats() {
     // A property failure must embed the corpus stats in the error. The
     // failing case's feature is not admitted, so on a first-case
     // failure the corpus fields are 0 (see `Stats` docs).
     let err = noprop::Runner::new(1, 32)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.event("before-failure");
             panic!("deterministic failure");
         })
@@ -1286,7 +1369,7 @@ fn run_corpus_guided_failure_error_carries_corpus_stats() {
     // counted.
     let case = std::cell::Cell::new(0u64);
     let err = noprop::Runner::new(1, 32)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
@@ -1307,18 +1390,18 @@ fn run_corpus_guided_failure_error_carries_corpus_stats() {
 }
 
 #[test]
-fn corpus_guided_failure_hint_names_the_entry_point() {
-    // A corpus-guided failure must carry a reproduce hint that names
-    // `run_corpus_guided`, so the rerun reproduces the failure.
+fn feedback_guided_failure_hint_names_the_entry_point() {
+    // A feedback-guided failure must carry a reproduce hint that names
+    // `run_feedback_guided`, so the rerun reproduces the failure.
     let err = noprop::Runner::new(1, 8)
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.event("e");
             panic!("deterministic failure");
         })
         .expect_err("panicking closure must fail the run");
     let display = format!("{err}");
     assert!(
-        display.contains("run_corpus_guided(|ctx| ...)"),
-        "Display must name the corpus-guided entry point in the hint, got:\n{display}"
+        display.contains("run_feedback_guided(|ctx| ...)"),
+        "Display must name the feedback-guided entry point in the hint, got:\n{display}"
     );
 }

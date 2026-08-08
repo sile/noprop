@@ -1,5 +1,5 @@
 //! Error and result types for [`Runner::run`](crate::Runner::run) and
-//! [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+//! [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
 
 use std::panic::Location;
 
@@ -11,7 +11,7 @@ use crate::runner::Stats;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Failure information from a [`Runner::run`](crate::Runner::run) or
-/// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+/// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
 /// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
@@ -27,7 +27,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `case_index()`, so the same seed and iteration budget reproduce the
 /// same exit.
 ///
-/// A corpus-guided failure report additionally carries the semantic
+/// A feedback-guided failure report additionally carries the semantic
 /// features the failing case reported and a one-based candidate index.
 /// The candidate index counts every attempt — accepted, rejected, and
 /// the failing case itself — so it relates to the zero-based
@@ -56,8 +56,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// The hint reuses the original iteration budget and names the failing
 /// entry point: `run`'s hint prints the bare constructor, while the
-/// corpus-guided hint appends
-/// `run_corpus_guided(|ctx| ...)`
+/// feedback-guided hint appends
+/// `run_feedback_guided(|ctx| ...)`
 /// with the closure body left as a
 /// placeholder. In each case the original property closure must be
 /// supplied before rerunning; the re-run size never needs to be
@@ -104,7 +104,7 @@ struct SemanticFailureReport {
 pub(crate) enum SearchPolicy {
     /// [`Runner::run`](crate::Runner::run).
     Uniform,
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
     CorpusGuided,
 }
 
@@ -147,7 +147,7 @@ impl Error {
 
     /// Attach the semantic features and candidate index of a failing
     /// corpus-guided case. Used by
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
     /// and the too-many-rejections exit path.
     pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
         self.semantic = Some(Box::new(SemanticFailureReport {
@@ -249,7 +249,7 @@ impl Error {
         );
         match self.policy {
             SearchPolicy::Uniform => base,
-            SearchPolicy::CorpusGuided => format!("{base}.run_corpus_guided(|ctx| ...)"),
+            SearchPolicy::CorpusGuided => format!("{base}.run_feedback_guided(|ctx| ...)"),
         }
     }
 }
