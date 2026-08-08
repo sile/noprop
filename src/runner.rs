@@ -92,6 +92,12 @@ pub struct Stats {
     /// overshoot just before eviction is not counted (admission
     /// pushes, then trims only when over the cap).
     pub max_corpus_size: usize,
+    /// Number of times the event declared via
+    /// [`Runner::require_event`](Runner::require_event) was reported
+    /// across the whole run (every case, accepted or rejected). 0 when
+    /// no required event was declared, or when the declared event was
+    /// never reported.
+    pub required_event_hits: usize,
 }
 
 /// A property-based test runner.
@@ -179,6 +185,11 @@ pub struct Stats {
 pub struct Runner {
     seed: u64,
     stats: Stats,
+    /// The event label that must be reported at least once during the
+    /// next [`run`](Runner::run) / [`run_feedback_guided`](Runner::run_feedback_guided),
+    /// declared via [`require_event`](Runner::require_event). `None`
+    /// when no required event is active.
+    required_event_label: Option<&'static str>,
 }
 
 /// Global rejection limit for a single [`Runner::run`](Runner::run) or
@@ -225,7 +236,41 @@ impl Runner {
         Self {
             seed,
             stats: Stats::default(),
+            required_event_label: None,
         }
+    }
+
+    /// Declare the event label that must be reported at least once
+    /// during the next [`run`](Runner::run) /
+    /// [`run_feedback_guided`](Runner::run_feedback_guided). When the
+    /// run completes successfully without a single report of `label`
+    /// via [`TestCaseContext::event`](crate::TestCaseContext::event),
+    /// the run fails with
+    /// [`RunErrorKind::RequiredEventNotReached`](crate::RunErrorKind::RequiredEventNotReached).
+    ///
+    /// Only one required event can be active: re-declaring the same
+    /// label is idempotent, while declaring a different label is a
+    /// programming error and panics — a silently overwritten
+    /// declaration would make the first requirement silently disappear,
+    /// exactly the vacuous pass this API exists to prevent. The
+    /// declaration is kept on the runner across runs; only the hit
+    /// counting resets per run.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `label` differs from an already-declared required
+    /// event.
+    pub fn require_event(&mut self, label: &'static str) {
+        if let Some(existing) = self.required_event_label
+            && existing != label
+        {
+            panic!(
+                "noprop::Runner::require_event called with a different label: \
+                 `{label}` was requested after `{existing}` was already declared; \
+                 a required event can only be declared once"
+            );
+        }
+        self.required_event_label = Some(label);
     }
 
     /// Observability counters from the most recent
@@ -287,6 +332,8 @@ impl Runner {
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
         let mut total_samples: usize = 0;
+        let mut required_event_hits: usize = 0;
+        let required_event_label = self.required_event_label;
 
         while accepted < cases {
             // Each iteration gets a fresh context (recording or
@@ -294,8 +341,12 @@ impl Runner {
             let mut ctx = search.next_context();
             ctx.set_inside_runner();
             ctx.enable_corpus_guided();
+            if required_event_label.is_some() {
+                ctx.set_required_event_label(required_event_label);
+            }
             let verdict = run_case(&f, &mut ctx);
             total_samples = total_samples.saturating_add(ctx.total_samples());
+            required_event_hits += ctx.take_required_event_hits();
             match verdict {
                 CaseVerdict::Rejected(state) => {
                     rejected += 1;
@@ -305,7 +356,14 @@ impl Runner {
                         // rejected case's semantic features and
                         // candidate index (drained inside
                         // `too_many_rejections`).
-                        record_corpus_stats(self, &search, accepted, rejected, total_samples);
+                        record_corpus_stats(
+                            self,
+                            &search,
+                            accepted,
+                            rejected,
+                            total_samples,
+                            required_event_hits,
+                        );
                         return Err(too_many_rejections(
                             self,
                             &mut ctx,
@@ -344,7 +402,14 @@ impl Runner {
                     continue;
                 }
                 CaseVerdict::Completed(CaseOutcome::Failed(message)) => {
-                    record_corpus_stats(self, &search, accepted, rejected, total_samples);
+                    record_corpus_stats(
+                        self,
+                        &search,
+                        accepted,
+                        rejected,
+                        total_samples,
+                        required_event_hits,
+                    );
                     let generated = ctx.take_generated();
                     let feedback = ctx.take_feedback();
                     let semantic_features = match feedback {
@@ -372,7 +437,28 @@ impl Runner {
                 }
             }
         }
-        record_corpus_stats(self, &search, accepted, rejected, total_samples);
+        record_corpus_stats(
+            self,
+            &search,
+            accepted,
+            rejected,
+            total_samples,
+            required_event_hits,
+        );
+        // A required event must have been reported at least once for
+        // the run to pass; property failures and rejection-cap exits
+        // above already took priority.
+        if let Some(label) = required_event_label
+            && required_event_hits == 0
+        {
+            return Err(RunError::from_required_event_not_reached(
+                self.seed,
+                cases,
+                label,
+                self.stats,
+                SearchPolicy::CorpusGuided,
+            ));
+        }
         Ok(())
     }
 
@@ -420,17 +506,31 @@ impl Runner {
         self.stats = Stats::default();
         let mut ctx = TestCaseContext::new(self.seed);
         ctx.set_inside_runner();
+        let required_event_label = self.required_event_label;
+        if required_event_label.is_some() {
+            ctx.set_required_event_label(required_event_label);
+        }
         let rejection_cap = rejection_limit(cases);
         let mut accepted: usize = 0;
         let mut rejected: usize = 0;
+        let mut required_event_hits: usize = 0;
 
         while accepted < cases {
             ctx.clear_generated();
             match run_case(&f, &mut ctx) {
                 CaseVerdict::Rejected(state) => {
+                    required_event_hits += ctx.take_required_event_hits();
                     rejected += 1;
                     if rejected > rejection_cap {
-                        record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
+                        record_stats(
+                            self,
+                            accepted,
+                            rejected,
+                            ctx.total_samples(),
+                            0,
+                            0,
+                            required_event_hits,
+                        );
                         let generated = ctx.take_generated();
                         return Err(RunError::from_too_many_rejections(
                             self.seed,
@@ -444,11 +544,20 @@ impl Runner {
                     continue;
                 }
                 CaseVerdict::Completed(CaseOutcome::Passed) => {
+                    required_event_hits += ctx.take_required_event_hits();
                     accepted += 1;
                     continue;
                 }
                 CaseVerdict::Completed(CaseOutcome::Failed(message)) => {
-                    record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
+                    record_stats(
+                        self,
+                        accepted,
+                        rejected,
+                        ctx.total_samples(),
+                        0,
+                        0,
+                        required_event_hits,
+                    );
                     let generated = ctx.take_generated();
                     return Err(RunError::from_panic(
                         self.seed,
@@ -461,7 +570,29 @@ impl Runner {
                 }
             }
         }
-        record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
+        record_stats(
+            self,
+            accepted,
+            rejected,
+            ctx.total_samples(),
+            0,
+            0,
+            required_event_hits,
+        );
+        // A required event must have been reported at least once for
+        // the run to pass; property failures and rejection-cap exits
+        // above already took priority.
+        if let Some(label) = required_event_label
+            && required_event_hits == 0
+        {
+            return Err(RunError::from_required_event_not_reached(
+                self.seed,
+                cases,
+                label,
+                self.stats,
+                SearchPolicy::Uniform,
+            ));
+        }
         Ok(())
     }
 }
@@ -548,6 +679,7 @@ fn record_stats(
     total_samples: usize,
     discovered_features: usize,
     max_corpus_size: usize,
+    required_event_hits: usize,
 ) {
     runner.stats = Stats {
         accepted_cases: accepted,
@@ -555,6 +687,7 @@ fn record_stats(
         total_samples,
         discovered_features,
         max_corpus_size,
+        required_event_hits,
     };
 }
 
@@ -576,6 +709,7 @@ fn record_corpus_stats(
     accepted: usize,
     rejected: usize,
     total_samples: usize,
+    required_event_hits: usize,
 ) {
     let (discovered_features, max_corpus_size) = corpus_stats(search);
     record_stats(
@@ -585,6 +719,7 @@ fn record_corpus_stats(
         total_samples,
         discovered_features,
         max_corpus_size,
+        required_event_hits,
     );
 }
 
