@@ -49,11 +49,7 @@ fn run(
 ) -> Result<(), String> {
     let x = if biased {
         // 10% exactly zero, 90% uniform.
-        if noprop::sample_usize_in(ctx, 0..10) == 0 {
-            0
-        } else {
-            noprop::sample_u32(ctx)
-        }
+        noprop::sample_with_boundaries(ctx, &[0], noprop::Ratio::ONE_TENTH, noprop::sample_u32)
     } else {
         noprop::sample_u32(ctx)
     };
@@ -83,11 +79,7 @@ fn run_domain(
 ) -> Result<(), String> {
     let x = if biased {
         // 10% the domain value, 90% uniform.
-        if noprop::sample_usize_in(ctx, 0..10) == 0 {
-            1500
-        } else {
-            noprop::sample_u32(ctx)
-        }
+        noprop::sample_with_boundaries(ctx, &[1500], noprop::Ratio::ONE_TENTH, noprop::sample_u32)
     } else {
         noprop::sample_u32(ctx)
     };
@@ -121,11 +113,9 @@ fn run_range(
 ) -> Result<(), String> {
     let v = if biased {
         // 10% the range end, 90% the rest of the range.
-        if noprop::sample_usize_in(ctx, 0..10) == 0 {
-            1023
-        } else {
-            noprop::sample_usize_in(ctx, 0..1023)
-        }
+        noprop::sample_with_boundaries(ctx, &[1023], noprop::Ratio::ONE_TENTH, |c| {
+            noprop::sample_usize_in(c, 0..1023)
+        })
     } else {
         noprop::sample_usize_in(ctx, 0..1024)
     };
