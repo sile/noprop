@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use noprop::{Error, Runner, Stats, TestCaseContext};
+use noprop::{RunErrorKind, RunResult, Runner, Stats, TestCaseContext};
 
 use crate::raw::{RawResult, Status};
 use crate::targets::{Observe, Property, Task};
@@ -114,12 +114,7 @@ pub(crate) fn run_task(
 /// respective generation); the corpus-guided variant reuses the
 /// uniform property, whose feedback methods are no-ops under
 /// `Runner::run`.
-fn run_variant(
-    runner: &mut Runner,
-    task: &Task,
-    variant: Variant,
-    observe: &Observe,
-) -> Result<(), Error> {
+fn run_variant(runner: &mut Runner, task: &Task, variant: Variant, observe: &Observe) -> RunResult {
     let property: Property = match variant {
         Variant::Base => task.base,
         Variant::Biased => task.biased,
@@ -137,22 +132,16 @@ fn run_variant(
 
 /// Classify the run outcome: property failure (found), rejection-cap
 /// exhaustion (gave_up), or a clean pass (not_found).
-///
-/// `ErrorKind` is crate-private, so the classification relies on the
-/// stable `Display` wording of the failure kinds (pinned by the e2e
-/// tests).
-fn classify(outcome: &Result<(), Error>) -> (Status, Option<usize>) {
+fn classify(outcome: &RunResult) -> (Status, Option<usize>) {
     match outcome {
         Ok(()) => (Status::NotFound, None),
-        Err(err) => {
-            let display = format!("{err}");
-            if display.contains("too many rejections") {
-                (Status::GaveUp, None)
-            } else {
+        Err(err) => match err.kind() {
+            RunErrorKind::TooManyRejections => (Status::GaveUp, None),
+            RunErrorKind::PropertyFailure => {
                 // `case_index` is the accepted case that failed; the
                 // iterations-to-detection count includes it.
                 (Status::Found, Some(err.case_index() + 1))
             }
-        }
+        },
     }
 }
