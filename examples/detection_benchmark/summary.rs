@@ -55,7 +55,7 @@ pub(crate) struct TaskSummary {
     pub detection_buckets: [usize; 4],
     /// Candidate executions-to-detection across `found` trials
     /// (accepted + rejected + the failing case). One-based; excludes
-    /// the search warm-up cost from the iterations metric by counting
+    /// the search warm-up cost from the cases metric by counting
     /// every candidate.
     pub candidate_times: Vec<usize>,
     /// Candidate-count bucket counts (index = `bucket_of`).
@@ -80,7 +80,7 @@ impl TaskSummary {
         median_of(&self.detection_times)
     }
 
-    /// 25th / 75th percentiles of iterations-to-detection (nearest-rank
+    /// 25th / 75th percentiles of cases-to-detection (nearest-rank
     /// with the upper median, i.e. index `p * n` of the sorted values).
     pub fn quartiles(&self) -> Option<(usize, usize)> {
         quartiles_of(&self.detection_times)
@@ -132,7 +132,7 @@ pub(crate) fn accumulate(summaries: &mut Summaries, raw: &ParsedRaw) {
             // is neither accepted nor rejected). The run stops at the
             // failure, so the run-end stats equal the detection-point
             // stats.
-            let candidates = raw.accepted_iterations + raw.rejected_iterations + 1;
+            let candidates = raw.accepted_cases + raw.rejected_cases + 1;
             entry.candidate_times.push(candidates);
             entry.candidate_buckets[bucket_of(candidates)] += 1;
         }
@@ -152,8 +152,8 @@ pub(crate) struct ParsedRaw {
     pub mutant: String,
     pub status: Status,
     pub detected_at: Option<usize>,
-    pub accepted_iterations: usize,
-    pub rejected_iterations: usize,
+    pub accepted_cases: usize,
+    pub rejected_cases: usize,
     pub discovered_features: usize,
     pub max_corpus_size: usize,
 }
@@ -209,7 +209,7 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<ParsedRaw>, String> {
     // `detected_at` is either a number (found) or null (other statuses).
     // A missing field is malformed; a `found` line without a numeric
     // value would otherwise be aggregated as if detected in zero
-    // iterations.
+    // cases.
     let member = value
         .to_member("detected_at")
         .map_err(|e: nojson::JsonParseError| format!("field \"detected_at\": {e}"))?;
@@ -235,8 +235,8 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<ParsedRaw>, String> {
         mutant: get_str("mutant")?,
         status,
         detected_at,
-        accepted_iterations: get_u64("accepted_iterations")? as usize,
-        rejected_iterations: get_u64("rejected_iterations")? as usize,
+        accepted_cases: get_u64("accepted_cases")? as usize,
+        rejected_cases: get_u64("rejected_cases")? as usize,
         discovered_features: get_u64("discovered_features")? as usize,
         max_corpus_size: get_u64("max_corpus_size")? as usize,
     }))
@@ -275,7 +275,7 @@ mod tests {
     /// Minimal raw-result line for `parse_line` unit tests.
     fn line(status: &str, detected_at: &str) -> String {
         format!(
-            r#"{{"format_version":2,"workload":"w","mutant":"m","variant":"v","status":"{status}","detected_at":{detected_at},"accepted_iterations":3,"rejected_iterations":2,"discovered_features":1,"max_corpus_size":1}}"#
+            r#"{{"format_version":3,"workload":"w","mutant":"m","variant":"v","status":"{status}","detected_at":{detected_at},"accepted_cases":3,"rejected_cases":2,"discovered_features":1,"max_corpus_size":1}}"#
         )
     }
 
@@ -286,8 +286,8 @@ mod tests {
             .expect("non-blank");
         assert!(matches!(raw.status, Status::Found));
         assert_eq!(raw.detected_at, Some(7));
-        assert_eq!(raw.accepted_iterations, 3);
-        assert_eq!(raw.rejected_iterations, 2);
+        assert_eq!(raw.accepted_cases, 3);
+        assert_eq!(raw.rejected_cases, 2);
         assert_eq!(raw.discovered_features, 1);
         assert_eq!(raw.max_corpus_size, 1);
     }
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn parse_line_rejects_wrong_format_version() {
-        let line = line("found", "7").replace("\"format_version\":2", "\"format_version\":99");
+        let line = line("found", "7").replace("\"format_version\":3", "\"format_version\":99");
         let err = parse_line(&line).expect_err("wrong format version must be rejected");
         assert!(err.contains("unsupported format_version 99"), "{err}");
     }
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn parse_line_rejects_missing_required_fields() {
         let input =
-            r#"{"format_version":2,"workload":"w","mutant":"m","status":"found","detected_at":1}"#;
+            r#"{"format_version":3,"workload":"w","mutant":"m","status":"found","detected_at":1}"#;
         let err = parse_line(input).expect_err("missing variant must be rejected");
         assert!(err.contains("variant"), "{err}");
     }
@@ -364,8 +364,8 @@ mod tests {
             mutant: "fails_on_zero".to_string(),
             status: Status::NotFound,
             detected_at: None,
-            accepted_iterations: 100,
-            rejected_iterations: 0,
+            accepted_cases: 100,
+            rejected_cases: 0,
             discovered_features: 0,
             max_corpus_size: 0,
         };
@@ -392,8 +392,8 @@ mod tests {
             mutant: "m".to_string(),
             status: Status::Found,
             detected_at: Some(4),
-            accepted_iterations: 4,
-            rejected_iterations: 7,
+            accepted_cases: 4,
+            rejected_cases: 7,
             discovered_features: 1,
             max_corpus_size: 1,
         };

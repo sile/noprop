@@ -69,19 +69,19 @@ pub(crate) const VARIANTS: &[Variant] = &[
 ];
 
 /// Run one task (workload x mutant x variant) for a fixed seed and
-/// iteration budget, returning the raw result.
+/// case budget, returning the raw result.
 pub(crate) fn run_task(
     workload: &'static str,
     task: &Task,
     variant: Variant,
     seed: u64,
-    iterations: usize,
+    cases: usize,
 ) -> RawResult {
     let observe = Observe::default();
 
     let start = Instant::now();
-    let mut runner = Runner::new(seed, iterations);
-    let outcome = run_variant(&mut runner, task, variant, &observe);
+    let mut runner = Runner::new(seed);
+    let outcome = run_variant(&mut runner, task, variant, &observe, cases);
     let wall_clock_ns = start.elapsed().as_nanos();
     let stats: Stats = runner.stats();
     let observations = observe.take();
@@ -94,11 +94,11 @@ pub(crate) fn run_task(
         mutant: task.mutant,
         variant: variant.as_str(),
         seed,
-        iterations,
+        cases,
         status,
         detected_at,
-        accepted_iterations: stats.accepted_iterations,
-        rejected_iterations: stats.rejected_iterations,
+        accepted_cases: stats.accepted_cases,
+        rejected_cases: stats.rejected_cases,
         total_samples: stats.total_samples,
         discovered_features: stats.discovered_features,
         max_corpus_size: stats.max_corpus_size,
@@ -114,7 +114,13 @@ pub(crate) fn run_task(
 /// respective generation); the corpus-guided variant reuses the
 /// uniform property, whose feedback methods are no-ops under
 /// `Runner::run`.
-fn run_variant(runner: &mut Runner, task: &Task, variant: Variant, observe: &Observe) -> RunResult {
+fn run_variant(
+    runner: &mut Runner,
+    task: &Task,
+    variant: Variant,
+    observe: &Observe,
+    cases: usize,
+) -> RunResult {
     let property: Property = match variant {
         Variant::Base => task.base,
         Variant::Biased => task.biased,
@@ -124,9 +130,9 @@ fn run_variant(runner: &mut Runner, task: &Task, variant: Variant, observe: &Obs
     let run = |ctx: &mut TestCaseContext| property(ctx, observe).map_err(Into::into);
     match variant {
         Variant::Base | Variant::Uniform | Variant::Biased | Variant::BoundaryBiased => {
-            runner.run(run)
+            runner.run(cases, run)
         }
-        Variant::CorpusGuided => runner.run_feedback_guided(run),
+        Variant::CorpusGuided => runner.run_feedback_guided(cases, run),
     }
 }
 
@@ -139,7 +145,7 @@ fn classify(outcome: &RunResult) -> (Status, Option<usize>) {
             RunErrorKind::TooManyRejections => (Status::GaveUp, None),
             RunErrorKind::PropertyFailure => {
                 // `case_index` is the accepted case that failed; the
-                // iterations-to-detection count includes it.
+                // cases-to-detection count includes it.
                 (Status::Found, Some(err.case_index() + 1))
             }
         },

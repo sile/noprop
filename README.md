@@ -23,7 +23,7 @@ Example
 ```rust
 #[test]
 fn addition_is_commutative() -> noprop::TestResult {
-    noprop::Runner::new(0xDEAD_BEEF, 1024).run(|ctx| {
+    noprop::Runner::new(0xDEAD_BEEF).run(1024, |ctx| {
         let a = noprop::sample_u32(ctx);
         let b = noprop::sample_u32(ctx);
         assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
@@ -55,7 +55,7 @@ Early development (`v0.0.x`). API is unstable and may change without notice.
 Detection benchmark
 -------------------
 
-`examples/detection_benchmark` measures how many iterations noprop
+`examples/detection_benchmark` measures how many cases noprop
 needs to detect known mutants of small workloads (high-frequency,
 boundary, combination, dependent, bst, stepping, stateful) under
 different generator variants, and how broad the generated inputs are
@@ -70,7 +70,7 @@ cargo run --example detection_benchmark -- run \
 
 # Run every task over a seed cohort: one raw-result JSON line per trial.
 cargo run --example detection_benchmark -- run-all \
-    --iterations 1000 --seeds 0,1,2,3,4,5,6,7 > raw.jsonl
+    --cases 1000 --seeds 0,1,2,3,4,5,6,7 > raw.jsonl
 
 # Regenerate the bucket summary from raw results.
 cargo run --example detection_benchmark -- summary < raw.jsonl
@@ -84,6 +84,6 @@ regenerated from a saved cohort. Smoke tests live in
 `tests/detection_benchmark.rs`.
 
 These numbers measure only the chosen workloads, mutants, seed
-cohort, and iteration budget. They are not a complete measure of
+cohort, and case budget. They are not a complete measure of
 generator quality: a generator that wins on one target may lose on
 another, and detection speed says nothing about shrinking quality.

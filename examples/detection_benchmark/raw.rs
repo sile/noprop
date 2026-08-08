@@ -4,7 +4,7 @@ use nojson::DisplayJson;
 
 /// Version of the raw-result format. Bump when the meaning of any field
 /// changes so old artifacts are not silently reinterpreted.
-pub(crate) const FORMAT_VERSION: u32 = 2;
+pub(crate) const FORMAT_VERSION: u32 = 3;
 
 /// Terminal state of one task trial.
 #[derive(Debug, Clone, Copy)]
@@ -42,15 +42,15 @@ pub(crate) struct RawResult {
     pub mutant: &'static str,
     pub variant: &'static str,
     pub seed: u64,
-    pub iterations: usize,
+    pub cases: usize,
     pub status: Status,
-    /// Iterations-to-detection: the zero-based accepted case index of
+    /// Cases-to-detection: the zero-based accepted case index of
     /// the failing case plus one (i.e. the number of accepted cases
     /// before the failure, including the failing one). `None` unless
     /// `status` is `Found`.
     pub detected_at: Option<usize>,
-    pub accepted_iterations: usize,
-    pub rejected_iterations: usize,
+    pub accepted_cases: usize,
+    pub rejected_cases: usize,
     pub total_samples: usize,
     /// Distinct semantic features registered in the global observation
     /// set (corpus-guided variants only; 0 otherwise).
@@ -72,11 +72,11 @@ impl DisplayJson for RawResult {
             f.member("mutant", self.mutant)?;
             f.member("variant", self.variant)?;
             f.member("seed", self.seed)?;
-            f.member("iterations", self.iterations)?;
+            f.member("cases", self.cases)?;
             f.member("status", self.status.as_str())?;
             f.member("detected_at", self.detected_at)?;
-            f.member("accepted_iterations", self.accepted_iterations)?;
-            f.member("rejected_iterations", self.rejected_iterations)?;
+            f.member("accepted_cases", self.accepted_cases)?;
+            f.member("rejected_cases", self.rejected_cases)?;
             f.member("total_samples", self.total_samples)?;
             f.member("discovered_features", self.discovered_features)?;
             f.member("max_corpus_size", self.max_corpus_size)?;

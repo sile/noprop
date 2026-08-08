@@ -1,5 +1,4 @@
-//! Environment-variable helpers for populating [`Runner::seed`] and
-//! `iterations`.
+//! Environment-variable helpers for populating [`Runner::seed`].
 //!
 //! The helpers are opt-in and are read only when the caller invokes
 //! them, so the "no implicit I/O" contract of the rest of the crate is
@@ -70,46 +69,12 @@ where
 /// ```
 /// let seed = noprop::seed_from_env_or_time("MYAPP_SEED")
 ///     .expect("MYAPP_SEED, if set, must parse as u64");
-/// let _ = noprop::Runner::new(seed, 256);
+/// let _ = noprop::Runner::new(seed);
 /// ```
 pub fn seed_from_env_or_time(var: &str) -> TestResult<u64> {
     match env::var(var) {
         Ok(raw) => parse_number(var, &raw),
         Err(env::VarError::NotPresent) => Ok(time_seed()),
-        Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("environment variable {var:?} is not valid UTF-8"),
-        )
-        .into()),
-    }
-}
-
-/// Read `var` as a `usize` iteration count, or return `default` when it
-/// is not set.
-///
-/// Behavior:
-///
-/// - `var` unset (`NotPresent`) — returns `default`.
-/// - `var` set to a valid `usize` (decimal, or `0x` / `0b` / `0o`
-///   prefixed, with optional `_` separators) — returns that value.
-/// - `var` set to a value that fails to parse — returns a boxed
-///   [`io::Error`] naming the variable, the raw value, and the parse
-///   error. `default` is **not** silently substituted;
-///   misconfiguration surfaces as an error.
-/// - `var` set to a non-Unicode value — returns a boxed [`io::Error`]
-///   naming the variable.
-///
-/// # Examples
-///
-/// ```
-/// let iterations = noprop::iterations_from_env("MYAPP_ITERATIONS", 256)
-///     .expect("MYAPP_ITERATIONS, if set, must parse as usize");
-/// let _ = noprop::Runner::new(0, iterations);
-/// ```
-pub fn iterations_from_env(var: &str, default: usize) -> TestResult<usize> {
-    match env::var(var) {
-        Ok(raw) => parse_number(var, &raw),
-        Err(env::VarError::NotPresent) => Ok(default),
         Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("environment variable {var:?} is not valid UTF-8"),
@@ -235,12 +200,5 @@ mod tests {
         // depending on clock resolution). Non-zero-ness of at least one
         // is what we care about.
         assert!(a != 0 || b != 0);
-    }
-
-    #[test]
-    fn iterations_from_env_uses_default_when_variable_unset() {
-        let name = "NOPROP_CONFIG_TESTS_ABSOLUTELY_UNSET_ITER_9F3A_2E7B";
-        let v = iterations_from_env(name, 512).expect("unset var must use default");
-        assert_eq!(v, 512);
     }
 }
