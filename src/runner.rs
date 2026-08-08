@@ -142,7 +142,11 @@ pub struct Stats {
 /// ```
 ///
 /// The env var names shown above are project-specific placeholders;
-/// pick names that fit the calling project. Both helpers surface a
+/// pick names that fit the calling project. Both helpers accept
+/// decimal values as well as `0x` / `0b` / `0o` prefixed values with
+/// optional `_` separators, so the hex seed printed by a failure
+/// report can be pasted into the environment variable directly. Both
+/// helpers surface a
 /// boxed error — via `?` — when the variable
 /// is set to something that cannot be parsed, so a mistyped
 /// `MYAPP_SEED=hello` fails loudly instead of silently reverting to the
