@@ -606,6 +606,20 @@ pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
 /// type-level bias could not reach (e.g. an MP4 size field crossing
 /// `u32::MAX`, an MTU, a page size).
 ///
+/// This call is a convenience wrapper for the equivalent plain-Rust
+/// form
+///
+/// ```text
+/// if sample_ratio(ctx, ratio) {
+///     sample_choice(ctx, boundaries)
+/// } else {
+///     sample(ctx)
+/// }
+/// ```
+///
+/// — provided so the boundary-mix recipe fits in one call. The two
+/// forms consume the same bytes for the same seed (see the example).
+///
 /// # Panics
 ///
 /// Panics if `boundaries` is empty, before any RNG bytes are drawn.
@@ -629,12 +643,23 @@ pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
 /// ```
 /// let mut ctx = noprop::TestCaseContext::new(0);
 /// // 10% of the time a boundary value, otherwise uniform.
-/// let _x = noprop::sample_with_boundaries(
+/// let helper = noprop::sample_with_boundaries(
 ///     &mut ctx,
 ///     &[0, 1500, u32::MAX],
 ///     noprop::Ratio::ONE_TENTH,
 ///     noprop::sample_u32,
 /// );
+///
+/// // The helper is exactly the plain-Rust `if` form below: the same
+/// // seed draws the same bytes, so the values agree.
+/// let mut hand_ctx = noprop::TestCaseContext::new(0);
+/// let hand_written =
+///     if noprop::sample_ratio(&mut hand_ctx, noprop::Ratio::ONE_TENTH) {
+///         noprop::sample_choice(&mut hand_ctx, &[0, 1500, u32::MAX])
+///     } else {
+///         noprop::sample_u32(&mut hand_ctx)
+///     };
+/// assert_eq!(helper, hand_written);
 /// ```
 #[track_caller]
 pub fn sample_with_boundaries<T, F>(
