@@ -311,6 +311,49 @@ fn sample_ratio_records_only_the_chosen_bool() {
 }
 
 #[test]
+fn sample_with_boundaries_records_bool_and_value() {
+    // One call records two trace entries: the ratio's bool and the
+    // chosen value, in that order, on either branch.
+    let result = noprop::Runner::new(5, 1).run(|ctx| {
+        let _v = noprop::sample_with_boundaries(
+            ctx,
+            &[0, 1500, u32::MAX],
+            noprop::Ratio::ONE_TENTH,
+            noprop::sample_u32,
+        );
+        panic!("stop");
+    });
+    let err = result.expect_err("expected Err");
+    let generated = err.generated();
+    assert_eq!(generated.len(), 2, "generated: {generated:?}");
+    assert_eq!(generated[0].type_name(), "bool");
+    assert_eq!(generated[1].type_name(), "u32");
+}
+
+#[test]
+fn sample_with_boundaries_is_reproducible_across_runs() {
+    // Two independent Runner invocations with the same seed must
+    // produce the same failure case index: the boundary hit occurs
+    // with probability 1/2, so the case index matters.
+    let seed = 0xBAD_CAFE_1234_5678u64;
+    let run = || {
+        noprop::Runner::new(seed, 64).run(|ctx| {
+            let v = noprop::sample_with_boundaries(
+                ctx,
+                &[u32::MAX],
+                noprop::Ratio::ONE_HALF,
+                noprop::sample_u32,
+            );
+            assert!(v != u32::MAX, "hit boundary");
+            Ok(())
+        })
+    };
+    let a = run().expect_err("expected Err");
+    let b = run().expect_err("expected Err");
+    assert_eq!(a.case_index(), b.case_index());
+}
+
+#[test]
 fn sample_weighted_index_records_only_the_chosen_index() {
     let result = noprop::Runner::new(5, 1).run(|ctx| {
         let _idx = noprop::sample_weighted_index(ctx, &[1, 2, 3, 4]);
@@ -335,7 +378,7 @@ fn selection_primitives_are_reproducible_across_runs() {
         noprop::Runner::new(seed, 64).run(|ctx| {
             let idx = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1]);
             let n = noprop::sample_usize_in(ctx, 0..=100);
-            let flip = noprop::sample_ratio(ctx, noprop::Ratio::new(1, 4).unwrap());
+            let flip = noprop::sample_ratio(ctx, noprop::Ratio::ONE_QUARTER);
             // Fail on a pattern that is common enough to hit within 64
             // iterations but does not always fire, so the case index
             // matters.
