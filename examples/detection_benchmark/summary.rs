@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn parse_line_rejects_wrong_format_version() {
-        let line = line("found", "7").replace("\"format_version\":2", "\"format_version\":99");
+        let line = line("found", "7").replace("\"format_version\":3", "\"format_version\":99");
         let err = parse_line(&line).expect_err("wrong format version must be rejected");
         assert!(err.contains("unsupported format_version 99"), "{err}");
     }
