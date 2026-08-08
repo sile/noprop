@@ -14,10 +14,8 @@ An imperative property-based testing library for Rust.
 - No implicit I/O — seeds are always caller-supplied, so every run is fully reproducible
 - Imperative API — properties are plain `Fn(&mut TestCaseContext) -> Result<(), Box<dyn Error>>` closures that use ordinary Rust control flow (`if` / `match` / `for`) instead of combinator DSLs
 - Automatic value trace — each `noprop::sample_*` call is recorded at its source location and surfaced on failure, so the failing input is visible without extra plumbing
-
-Targeted search (`Runner::run_targeted`) is available behind the same
-imperative API; its design is documented in
-[docs/targeted-search.md](https://github.com/sile/noprop/blob/main/docs/targeted-search.md).
+- Corpus-guided search (`Runner::run_corpus_guided`) over semantic feedback (`event` / `bucket` / `transition`); its design is documented in
+  [docs/corpus-guided-search.md](https://github.com/sile/noprop/blob/main/docs/corpus-guided-search.md)
 
 Example
 -------
@@ -80,10 +78,10 @@ cargo run --example detection_benchmark -- summary < raw.jsonl
 
 The `base` variant (ground-truth SUT) completes every property and is
 used to verify the workloads; the comparison variants are `uniform`,
-`biased`, `boundary-biased`, `targeted`, `semantic-only`, and
-`semantic-with-priority`. Raw results are written as format-versioned
-JSON lines, so summaries can always be regenerated from a saved cohort.
-Smoke tests live in `tests/detection_benchmark.rs`.
+`biased`, `boundary-biased`, and `corpus-guided`. Raw results are
+written as format-versioned JSON lines, so summaries can always be
+regenerated from a saved cohort. Smoke tests live in
+`tests/detection_benchmark.rs`.
 
 These numbers measure only the chosen workloads, mutants, seed
 cohort, and iteration budget. They are not a complete measure of

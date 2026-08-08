@@ -44,14 +44,7 @@ const TASKS: &[(&str, &str)] = &[
 const GUARD_TASKS: &[(&str, &str)] = &[("guard", "reports_unbounded_buckets")];
 
 /// Comparison variants run by `run-all`.
-const VARIANTS: &[&str] = &[
-    "uniform",
-    "biased",
-    "boundary-biased",
-    "targeted",
-    "semantic-only",
-    "semantic-with-priority",
-];
+const VARIANTS: &[&str] = &["uniform", "biased", "boundary-biased", "corpus-guided"];
 
 fn run(args: &[&str]) -> String {
     run_with_stdin(args, None)
@@ -168,9 +161,7 @@ fn same_seed_is_deterministic() {
 }
 
 /// Every variant must complete the guard workload without aborting
-/// (the missing / invalid feedback classification is pinned here: a
-/// property failure would surface as `found`, a feedback failure as
-/// `aborted`).
+/// (a property failure would surface as `found`).
 #[test]
 fn guard_completes_under_every_variant() {
     for (workload, mutant) in GUARD_TASKS {
@@ -181,20 +172,6 @@ fn guard_completes_under_every_variant() {
                 "guard {workload}/{mutant} under {variant} must complete: {line}"
             );
         }
-    }
-}
-
-/// Every mutant task must report a scalar priority: targeted mode
-/// fails a case that never calls `maximize`, which the harness must
-/// classify as `aborted` rather than as a detection.
-#[test]
-fn targeted_variant_never_aborts_on_missing_feedback() {
-    for (workload, mutant) in TASKS {
-        let line = run_task(workload, mutant, "targeted", 1);
-        assert!(
-            !line.contains("\"status\":\"aborted\""),
-            "{workload}/{mutant} under targeted must report a priority: {line}"
-        );
     }
 }
 

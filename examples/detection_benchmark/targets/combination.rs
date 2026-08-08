@@ -31,12 +31,10 @@ fn run(
     _obs: &Observe,
 ) -> Result<(), String> {
     // Feedback: the mutant fails for the exact pair (1, 2), so the
-    // priority rewards each draw landing on its witness value and the
     // events observe the two conditions separately. These calls draw
     // no random bytes, so the generator stream is unchanged.
     ctx.event(if x == 1 { "x_witness" } else { "x_other" });
     ctx.event(if y == 2 { "y_witness" } else { "y_other" });
-    ctx.maximize((if x == 1 { 0.5 } else { 0.0 }) + (if y == 2 { 0.5 } else { 0.0 }));
     process(x, y, sut_mutant).map_err(|_| format!("process failed for ({x}, {y})"))
 }
 

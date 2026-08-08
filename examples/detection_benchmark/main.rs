@@ -63,7 +63,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         .then(|o| o.value().parse())?;
     let variant_name: String = opt("variant")
         .ty("NAME")
-        .doc("Search variant: uniform | biased | boundary-biased | targeted | semantic-only | semantic-with-priority (or base for the ground-truth SUT)")
+        .doc("Search variant: uniform | biased | boundary-biased | corpus-guided (or base for the ground-truth SUT)")
         .example("uniform")
         .take(args)
         .then(|o| o.value().parse())?;
@@ -108,7 +108,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
             args,
             format!(
                 "unknown variant {variant_name:?}; available: base, uniform, biased, \
-                 boundary-biased, targeted, semantic-only, semantic-with-priority"
+                 boundary-biased, corpus-guided"
             ),
         )
     })?;

@@ -748,447 +748,6 @@ fn stats_on_failure_reports_progress_up_to_failing_case() {
     assert_eq!(err.case_index(), stats.accepted_iterations);
 }
 
-// === Targeted PBT (Runner::run_targeted / TestCaseContext::maximize) ===
-
-#[test]
-fn run_targeted_succeeds_when_feedback_is_reported() {
-    let mut runner = noprop::Runner::new(42, 64);
-    runner
-        .run_targeted(|ctx| {
-            let x = noprop::sample_u32(ctx);
-            ctx.maximize((x as f64) / u32::MAX as f64);
-            Ok(())
-        })
-        .expect("targeted run with valid feedback must succeed");
-    let stats = runner.stats();
-    assert_eq!(stats.accepted_iterations, 64);
-}
-
-#[test]
-fn run_targeted_missing_feedback_is_reported() {
-    let err = noprop::Runner::new(1, 8)
-        .run_targeted(|ctx| {
-            let _ = noprop::sample_u32(ctx);
-            // Deliberately no maximize call.
-            Ok(())
-        })
-        .expect_err("accepted case without feedback must fail");
-    let display = format!("{err}");
-    assert!(
-        display.contains("missing feedback"),
-        "unexpected message: {display}"
-    );
-    assert!(
-        display.contains("run_targeted"),
-        "reproduce hint must name the targeted entry point: {display}"
-    );
-}
-
-#[test]
-fn run_targeted_invalid_feedback_is_reported() {
-    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        let err = noprop::Runner::new(1, 8)
-            .run_targeted(|ctx| {
-                ctx.maximize(bad);
-                Ok(())
-            })
-            .expect_err("NaN / infinity feedback must fail");
-        let display = format!("{err}");
-        assert!(
-            display.contains("invalid feedback"),
-            "unexpected message: {display}"
-        );
-    }
-}
-
-#[test]
-fn maximize_is_noop_under_plain_run() {
-    noprop::Runner::new(1, 8)
-        .run(|ctx| {
-            let x = noprop::sample_u32(ctx);
-            ctx.maximize((x as f64) / u32::MAX as f64);
-            Ok(())
-        })
-        .expect("maximize must be ignored by the plain runner");
-}
-
-#[test]
-fn run_targeted_reports_property_failure() {
-    let err = noprop::Runner::new(1, 32)
-        .run_targeted(|_ctx| {
-            panic!("deterministic failure");
-        })
-        .expect_err("panicking closure must fail the run");
-    let display = format!("{err}");
-    assert!(display.contains("deterministic failure"), "{display}");
-    assert!(display.contains("run_targeted"), "{display}");
-    assert_eq!(err.case_index(), 0);
-}
-
-#[test]
-fn run_targeted_counts_rejections() {
-    let mut runner = noprop::Runner::new(3, 16);
-    runner
-        .run_targeted(|ctx| {
-            if noprop::sample_bool(ctx) {
-                ctx.reject_case();
-            }
-            ctx.maximize(0.5);
-            Ok(())
-        })
-        .expect("rejections must be retried like the plain runner");
-    let stats = runner.stats();
-    assert_eq!(stats.accepted_iterations, 16);
-    assert!(stats.rejected_iterations > 0);
-}
-
-#[test]
-fn run_targeted_with_span_based_generator_does_not_reject_everything() {
-    let mut runner = noprop::Runner::new(11, 64);
-    runner
-        .run_targeted(|ctx| {
-            let x = noprop::sample_usize_in(ctx, 0..10);
-            ctx.maximize(x as f64 / 10.0);
-            Ok(())
-        })
-        .expect("span-based generators must work under targeted search");
-    let stats = runner.stats();
-    assert_eq!(stats.accepted_iterations, 64);
-    assert!(
-        stats.rejected_iterations < 64,
-        "exploratory candidates must not all be discarded: rejected={}",
-        stats.rejected_iterations
-    );
-}
-
-#[test]
-fn run_targeted_with_choice_generator() {
-    let mut runner = noprop::Runner::new(5, 64);
-    runner
-        .run_targeted(|ctx| {
-            let idx = noprop::sample_choice(ctx, &[0usize, 1, 2, 3, 4]);
-            ctx.maximize(idx as f64 / 4.0);
-            Ok(())
-        })
-        .expect("choice-based generators must work under targeted search");
-    let stats = runner.stats();
-    assert_eq!(stats.accepted_iterations, 64);
-    assert!(
-        stats.rejected_iterations < 64,
-        "choice candidates must not all be discarded: rejected={}",
-        stats.rejected_iterations
-    );
-}
-
-#[test]
-fn run_targeted_stops_after_too_many_rejections() {
-    let err = noprop::Runner::new(1, 8)
-        .run_targeted(|ctx| {
-            ctx.reject_case();
-        })
-        .expect_err("always-rejecting property must hit the rejection cap");
-    let display = format!("{err}");
-    assert!(display.contains("too many rejections"), "{display}");
-    assert!(display.contains("run_targeted"), "{display}");
-    let stats = err.stats();
-    assert!(stats.rejected_iterations > 0);
-}
-
-#[test]
-fn run_targeted_too_many_rejections_reproduces_with_the_hint_budget() {
-    // The reproduce hint reuses the original iteration budget so the
-    // rerun hits the same rejection cap and exits the same way.
-    let seed = 0xBAD_CAFEu64;
-    let run = || {
-        noprop::Runner::new(seed, 16).run_targeted(|ctx| {
-            ctx.reject_case();
-        })
-    };
-    let err = run().expect_err("always-rejecting property must hit the rejection cap");
-    let display = format!("{err}");
-    assert!(display.contains("too many rejections"), "{display}");
-    let replayed = run().expect_err("same seed and budget must reproduce the failure");
-    assert_eq!(replayed.seed(), err.seed());
-    assert_eq!(replayed.case_index(), err.case_index());
-    assert_eq!(replayed.stats(), err.stats());
-}
-
-#[test]
-fn run_targeted_reproduces_same_candidate_sequence() {
-    use std::cell::Cell;
-    let collect = |runner: &mut noprop::Runner| {
-        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
-        runner
-            .run_targeted(|ctx| {
-                let x = noprop::sample_usize_in(ctx, 0..1000);
-                let mut v = observed.take();
-                v.push(x);
-                observed.set(v);
-                ctx.maximize(x as f64 / 1000.0);
-                Ok(())
-            })
-            .expect("targeted run");
-        observed.into_inner()
-    };
-    let a = collect(&mut noprop::Runner::new(7, 64));
-    let b = collect(&mut noprop::Runner::new(7, 64));
-    assert_eq!(
-        a, b,
-        "candidate sequences must be reproducible from the seed"
-    );
-}
-
-#[test]
-fn run_targeted_reports_err_closure_failure() {
-    let err = noprop::Runner::new(1, 32)
-        .run_targeted(|ctx| {
-            ctx.maximize(0.5);
-            Err("application error".into())
-        })
-        .expect_err("returned Err must fail the run");
-    let display = format!("{err}");
-    assert!(display.contains("application error"), "{display}");
-    assert!(display.contains("run_targeted"), "{display}");
-}
-
-#[test]
-fn run_targeted_debug_output_reports_missing_feedback() {
-    let err = noprop::Runner::new(1, 8)
-        .run_targeted(|ctx| {
-            let _ = noprop::sample_u32(ctx);
-            Ok(())
-        })
-        .expect_err("missing feedback must fail");
-    let debug = format!("{err:?}");
-    assert!(debug.contains("missing_feedback: true"), "{debug}");
-    assert!(debug.contains("run_targeted"), "{debug}");
-}
-
-#[test]
-fn run_targeted_missing_feedback_reports_progress() {
-    let err = noprop::Runner::new(1, 8)
-        .run_targeted(|ctx| {
-            let _ = noprop::sample_u32(ctx);
-            Ok(())
-        })
-        .expect_err("missing feedback must fail");
-    let stats = err.stats();
-    assert_eq!(stats.accepted_iterations, 0);
-    assert_eq!(stats.rejected_iterations, 0);
-    assert_eq!(
-        stats.total_samples, 1,
-        "one sample before the missing report"
-    );
-    assert_eq!(err.case_index(), stats.accepted_iterations);
-    assert!(
-        !err.generated().is_empty(),
-        "the failing case's generated trace must be recorded"
-    );
-}
-
-#[test]
-fn run_targeted_zero_iterations_does_not_invoke_closure() {
-    use std::cell::Cell;
-    let invoked = Cell::new(0usize);
-    noprop::Runner::new(1, 0)
-        .run_targeted(|ctx| {
-            invoked.set(invoked.get() + 1);
-            ctx.maximize(1.0);
-            Ok(())
-        })
-        .expect("zero iterations must succeed");
-    assert_eq!(invoked.get(), 0, "the closure must not be invoked");
-}
-
-#[test]
-fn run_targeted_reproduce_hint_reproduces_the_same_failure() {
-    // The failure condition (x >= 900, probability 0.1) must be found
-    // within the budget for the hint test to be meaningful; 512
-    // iterations leaves ample headroom even if the search constants
-    // are retuned. The hint must reuse this exact budget.
-    let seed = 0x5EED_1EAD_BEEF_C0DEu64;
-    let iterations = 512;
-    let run = || {
-        noprop::Runner::new(seed, iterations).run_targeted(|ctx| {
-            let x = noprop::sample_usize_in(ctx, 0..1000);
-            ctx.maximize(x as f64 / 1000.0);
-            if x >= 900 {
-                panic!("boom at x = {x}");
-            }
-            Ok(())
-        })
-    };
-
-    let err = run().expect_err("a large x must fail the run");
-    let display = format!("{err}");
-    let hint = format!(
-        "reproduce with: noprop::Runner::new({:#018x}, {iterations}).run_targeted(|ctx| ...)",
-        err.seed(),
-    );
-    assert!(
-        display.contains(&hint),
-        "Display should contain the targeted reproduce hint {hint:?}, got:\n{display}"
-    );
-
-    // Using the hint's budget verbatim reproduces the same failure.
-    let replayed = run().expect_err("same seed and budget must reproduce the failure");
-    assert_eq!(replayed.seed(), err.seed());
-    assert_eq!(replayed.case_index(), err.case_index());
-}
-
-#[test]
-fn run_targeted_failure_beats_invalid_feedback() {
-    let err = noprop::Runner::new(1, 8)
-        .run_targeted(|ctx| {
-            ctx.maximize(f64::NAN);
-            panic!("real failure");
-        })
-        .expect_err("property failure must win over invalid feedback");
-    let display = format!("{err}");
-    assert!(display.contains("real failure"), "{display}");
-    assert!(!display.contains("invalid feedback"), "{display}");
-}
-
-#[test]
-fn run_targeted_discards_score_of_rejected_cases() {
-    let err = noprop::Runner::new(3, 8)
-        .run_targeted(|ctx| {
-            ctx.maximize(1.0);
-            ctx.reject_case();
-        })
-        .expect_err("always-rejecting must hit the rejection cap, not missing feedback");
-    let display = format!("{err}");
-    assert!(display.contains("too many rejections"), "{display}");
-    assert!(!display.contains("missing feedback"), "{display}");
-}
-
-fn shared_property(ctx: &mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> {
-    let x = noprop::sample_usize_in(ctx, 0..1000);
-    ctx.maximize(x as f64 / 1000.0);
-    Ok(())
-}
-
-#[test]
-fn same_property_runs_under_both_policies() {
-    noprop::Runner::new(1, 16)
-        .run(shared_property)
-        .expect("uniform run must succeed");
-    noprop::Runner::new(1, 16)
-        .run_targeted(shared_property)
-        .expect("targeted run must succeed");
-}
-
-#[test]
-fn run_targeted_requires_feedback_after_rejected_case() {
-    // A rejected case does not satisfy the accepted-case feedback
-    // requirement: the next accepted case must still call maximize.
-    // The seed makes the first case reject (asserted below) and a
-    // later case reach the verdict without feedback, so the exit is
-    // MissingFeedback — not TooManyRejections and not a silent Ok.
-    let err = noprop::Runner::new(6, 8)
-        .run_targeted(|ctx| {
-            let x = noprop::sample_usize_in(ctx, 0..2);
-            if x == 0 {
-                ctx.reject_case();
-            }
-            Ok(())
-        })
-        .expect_err("accepted case without maximize must end in MissingFeedback");
-    let display = format!("{err}");
-    assert!(display.contains("missing feedback"), "{display}");
-    assert!(
-        err.stats().rejected_iterations >= 1,
-        "the rejection path must be exercised before the accepted case: {:?}",
-        err.stats()
-    );
-}
-
-#[test]
-fn run_targeted_counts_exploratory_draw_cap_excess_as_rejection() {
-    // An exploratory case that draws past the recorded sequence
-    // exceeds the generated-draw cap and is rejected; the run
-    // continues and counts the rejection in the stats. The first
-    // (recording) case draws once with this seed — asserted below —
-    // so the recorded sequence stays one draw long; a later case
-    // whose mutated draw is nonzero asks for 4100 draws (beyond
-    // MAX_CHOICES_PER_CASE = 4096), of which only the first replays —
-    // the rest must be generated, blowing past the cap. reject_case
-    // is never called, so every counted rejection comes from the draw
-    // cap.
-    //
-    // The first-case draw and the mutation behavior are fixed by the
-    // seed and the search constants (MUTATION_DENOM, RANDOM_RESTART_
-    // DENOM); re-selecting the seed is expected when tuning them.
-    use std::cell::Cell;
-    let mut runner = noprop::Runner::new(282, 8);
-    let first_x: Cell<Option<u8>> = Cell::new(None);
-    let result = runner.run_targeted(|ctx| {
-        let x = noprop::sample_u8(ctx);
-        if first_x.get().is_none() {
-            first_x.set(Some(x));
-        }
-        ctx.maximize(x as f64 / u8::MAX as f64);
-        if x != 0 {
-            for _ in 0..4100 {
-                noprop::sample_u8(ctx);
-            }
-        }
-        Ok(())
-    });
-    assert!(
-        result.is_ok(),
-        "draw-cap rejections must not fail the run: {result:?}"
-    );
-    assert_eq!(
-        first_x.get(),
-        Some(0),
-        "the recording case must draw zero so the recorded sequence stays short"
-    );
-    assert!(
-        runner.stats().rejected_iterations >= 1,
-        "draw-cap excess must count toward rejected_iterations"
-    );
-}
-
-#[test]
-fn run_targeted_steers_candidates_by_score() {
-    // If the score were ignored (for example, a bug admitted every
-    // case with a constant score), the observed candidate stream would
-    // not depend on which end of the domain maximize rewards. It must:
-    // rewarding large x keeps the search in the high end, rewarding
-    // small x pins it to the low end, so the best observed candidate
-    // in the second half of the run differs between the two.
-    use std::cell::Cell;
-
-    fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
-        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
-        noprop::Runner::new(seed, 256)
-            .run_targeted(|ctx| {
-                let x = noprop::sample_usize_in(ctx, 0..1000);
-                let mut v = observed.take();
-                v.push(x);
-                observed.set(v);
-                ctx.maximize(score_of(x));
-                Ok(())
-            })
-            .expect("targeted run must succeed");
-        observed.into_inner()
-    }
-
-    let second_half_max = |xs: &[usize]| xs[128..].iter().max().copied().unwrap_or(0);
-
-    let reward_high = observe(6, |x| x as f64 / 1000.0);
-    let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
-
-    let high_max = second_half_max(&reward_high);
-    let low_max = second_half_max(&reward_low);
-    assert!(
-        high_max > low_max,
-        "the score must steer the search toward the rewarded end: \
-         rewarding high reached {high_max}, rewarding low reached {low_max}"
-    );
-}
-
 // === Corpus-guided PBT (Runner::run_corpus_guided / event / bucket / transition) ===
 
 #[test]
@@ -1236,38 +795,12 @@ fn run_corpus_guided_zero_iterations_does_not_invoke_closure() {
 }
 
 #[test]
-fn run_corpus_guided_without_priority_succeeds() {
-    // maximize is optional in corpus-guided mode; missing feedback is
-    // not an error (unlike targeted mode).
-    noprop::Runner::new(1, 8)
-        .run_corpus_guided(|ctx| {
-            let _ = noprop::sample_u32(ctx);
-            ctx.event("e");
-            Ok(())
-        })
-        .expect("a case without maximize must not fail corpus-guided mode");
-}
-
-#[test]
-fn run_corpus_guided_invalid_priority_is_tolerated() {
-    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        noprop::Runner::new(1, 8)
-            .run_corpus_guided(|ctx| {
-                ctx.maximize(bad);
-                Ok(())
-            })
-            .expect("NaN / infinity priority must not fail corpus-guided mode");
-    }
-}
-
-#[test]
 fn semantic_methods_are_noop_under_plain_run() {
     noprop::Runner::new(1, 8)
         .run(|ctx| {
             ctx.event("e");
             ctx.bucket("b", 1);
             ctx.transition("t", 0, 1);
-            ctx.maximize(1.0);
             Ok(())
         })
         .expect("semantic methods must be ignored by the plain runner");
@@ -1284,8 +817,7 @@ fn run_corpus_guided_reports_property_failure() {
     let display = format!("{err}");
     assert!(display.contains("deterministic failure"), "{display}");
     assert!(
-        display
-            .contains("run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority"),
+        display.contains("run_corpus_guided(|ctx| ...)"),
         "{display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
@@ -1352,8 +884,7 @@ fn run_corpus_guided_reports_err_closure_failure_with_semantics() {
     let display = format!("{err}");
     assert!(display.contains("corpus error"), "{display}");
     assert!(
-        display
-            .contains("run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority"),
+        display.contains("run_corpus_guided(|ctx| ...)"),
         "{display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
@@ -1412,8 +943,7 @@ fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
     let display = format!("{err}");
     assert!(display.contains("too many rejections"), "{display}");
     assert!(
-        display
-            .contains("run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticWithPriority"),
+        display.contains("run_corpus_guided(|ctx| ...)"),
         "{display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
@@ -1421,13 +951,13 @@ fn run_corpus_guided_too_many_rejections_reports_last_rejected_semantics() {
 
 #[test]
 fn corpus_guided_tmr_error_pins_hint_stats_and_features() {
-    // The too-many-rejections report must carry the corpus policy in
-    // its reproduce hint (so the rerun reproduces the same exit), the
-    // new corpus stats fields, and the last rejected case's semantic
+    // The too-many-rejections report must carry the corpus-guided
+    // reproduce hint (so the rerun reproduces the same exit), the
+    // corpus stats fields, and the last rejected case's semantic
     // features. The existing tests only substring-match the hint; this
-    // pins the full policy-carrying hint and the corpus fields.
+    // pins the full hint and the corpus fields.
     let err = noprop::Runner::new(7, 8)
-        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+        .run_corpus_guided(|ctx| {
             ctx.event("always-reject");
             ctx.reject_case();
         })
@@ -1435,11 +965,10 @@ fn corpus_guided_tmr_error_pins_hint_stats_and_features() {
     let display = format!("{err}");
     assert!(
         display.contains(&format!(
-            "reproduce with: noprop::Runner::new({:#018x}, 8).run_corpus_guided_with_policy(\
-             noprop::CorpusPolicy::SemanticOnly, |ctx| ...)",
+            "reproduce with: noprop::Runner::new({:#018x}, 8).run_corpus_guided(|ctx| ...)",
             err.seed()
         )),
-        "the hint must reuse the corpus policy: {display}"
+        "the hint must name the corpus-guided entry point: {display}"
     );
     assert!(display.contains("Semantic features:"), "{display}");
     assert!(display.contains("event(\"always-reject\")"), "{display}");
@@ -1664,104 +1193,6 @@ fn run_corpus_guided_steers_candidates_by_novel_features() {
 }
 
 #[test]
-fn run_corpus_guided_steers_candidates_by_priority() {
-    // With scalar priority enabled, a case that reports no novel
-    // feature can still be admitted by outscoring its feature group, so
-    // rewarding large x must keep the search in the high end and
-    // rewarding small x must pin it to the low end. The absolute
-    // medians are asserted (not a max comparison) so the test cannot
-    // pass on uniform-restart noise alone.
-    use std::cell::Cell;
-
-    fn observe(seed: u64, score_of: fn(usize) -> f64) -> Vec<usize> {
-        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
-        noprop::Runner::new(seed, 256)
-            .run_corpus_guided(|ctx| {
-                let x = noprop::sample_usize_in(ctx, 0..1000);
-                let mut v = observed.take();
-                v.push(x);
-                observed.set(v);
-                ctx.event("covered");
-                ctx.maximize(score_of(x));
-                Ok(())
-            })
-            .expect("corpus-guided run must succeed");
-        observed.into_inner()
-    }
-
-    fn median(xs: &[usize]) -> usize {
-        let mut sorted: Vec<usize> = xs[128..].to_vec();
-        sorted.sort_unstable();
-        sorted[sorted.len() / 2]
-    }
-
-    let reward_high = observe(6, |x| x as f64 / 1000.0);
-    let reward_low = observe(6, |x| 1.0 - x as f64 / 1000.0);
-
-    let high_med = median(&reward_high);
-    let low_med = median(&reward_low);
-    assert!(
-        high_med > 850,
-        "rewarding high must keep the search in the high end: high median {high_med}"
-    );
-    assert!(
-        low_med < 150,
-        "rewarding low must pin the search to the low end: low median {low_med}"
-    );
-}
-
-#[test]
-fn run_corpus_guided_with_policy_steering_depends_on_policy() {
-    // The policy argument must reach the search: `SemanticWithPriority`
-    // lets `maximize` steer admission and eviction, so rewarding large
-    // x keeps the search in the high end; under `SemanticOnly` the
-    // priority is ignored for admission and eviction, so the same
-    // property must not steer. A bug that ignores the argument
-    // (always running one policy) fails one of the two assertions.
-    // Medians are asserted (not a max comparison) so the test cannot
-    // pass on uniform-restart noise alone.
-    use std::cell::Cell;
-
-    fn observe(seed: u64, policy: noprop::CorpusPolicy, score_of: fn(usize) -> f64) -> Vec<usize> {
-        let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
-        noprop::Runner::new(seed, 256)
-            .run_corpus_guided_with_policy(policy, |ctx| {
-                let x = noprop::sample_usize_in(ctx, 0..1000);
-                let mut v = observed.take();
-                v.push(x);
-                observed.set(v);
-                ctx.event("covered");
-                ctx.maximize(score_of(x));
-                Ok(())
-            })
-            .expect("corpus-guided run must succeed");
-        observed.into_inner()
-    }
-
-    fn median(xs: &[usize]) -> usize {
-        let mut sorted: Vec<usize> = xs[128..].to_vec();
-        sorted.sort_unstable();
-        sorted[sorted.len() / 2]
-    }
-
-    let reward_high: fn(usize) -> f64 = |x| x as f64 / 1000.0;
-    let with_priority = median(&observe(
-        6,
-        noprop::CorpusPolicy::SemanticWithPriority,
-        reward_high,
-    ));
-    let semantic_only = median(&observe(6, noprop::CorpusPolicy::SemanticOnly, reward_high));
-    assert!(
-        with_priority > 850,
-        "SemanticWithPriority must keep the search in the high end: median {with_priority}"
-    );
-    assert!(
-        semantic_only < 850,
-        "SemanticOnly must not steer by priority: median {semantic_only}"
-    );
-}
-
-#[test]
 fn run_corpus_guided_steers_stateful_transitions() {
     // A stateful-style target: the property advances an abstract state
     // machine and reports each transition. The corpus must explore
@@ -1812,75 +1243,21 @@ fn run_corpus_guided_steers_stateful_transitions() {
     );
 }
 
-/// Build a property whose case counter panics at `fail_at` (when set),
-/// reporting semantic features for the accepted cases before that.
-fn make_corpus_property(
-    case: &std::cell::Cell<usize>,
-    fail_at: Option<usize>,
-) -> impl Fn(&mut noprop::TestCaseContext) -> Result<(), Box<dyn std::error::Error>> + '_ {
-    move |ctx| {
-        let n = case.get();
-        case.set(n + 1);
-        if fail_at.is_some_and(|t| n >= t) {
-            panic!("deterministic failure at case {n}");
-        }
-        let x = noprop::sample_u32(ctx);
-        if x.is_multiple_of(2) {
-            ctx.event("even");
-            ctx.bucket("low-byte", (x & 0xFF) as u64);
-        }
-        Ok(())
-    }
-}
-
 #[test]
-fn run_corpus_guided_with_policy_matches_plain_corpus_guided() {
-    // The plain entry point must delegate to the policy-taking one with
-    // `SemanticWithPriority`, so identical seeds produce identical
-    // results. Each (seed, iterations) pair runs twice: a clean pass
-    // and a deterministic failure (the case counter panics at
-    // `iterations - 16`), comparing stats and failure reports.
-    for (seed, iterations) in [(1u64, 64usize), (7, 128), (99, 32)] {
-        for fail_at in [None, Some(iterations - 16)] {
-            // The counter must be reset before each run: a shared
-            // counter would make the second run start mid-sequence.
-            let case = std::cell::Cell::new(0usize);
-            let mut plain = noprop::Runner::new(seed, iterations);
-            let plain_outcome = plain.run_corpus_guided(make_corpus_property(&case, fail_at));
-            case.set(0);
-            let mut policy = noprop::Runner::new(seed, iterations);
-            let policy_outcome = policy.run_corpus_guided_with_policy(
-                noprop::CorpusPolicy::SemanticWithPriority,
-                make_corpus_property(&case, fail_at),
-            );
-            assert_eq!(
-                policy_outcome.is_ok(),
-                plain_outcome.is_ok(),
-                "same success/failure (fail_at={fail_at:?})"
-            );
-            assert_eq!(plain.stats(), policy.stats(), "stats must match exactly");
-            let plain_err = plain_outcome.err().map(|e| format!("{e}"));
-            let policy_err = policy_outcome.err().map(|e| format!("{e}"));
-            assert_eq!(policy_err, plain_err, "failure reports must match exactly");
-        }
-    }
-}
-
-#[test]
-fn run_corpus_guided_semantic_only_runs_and_reports_corpus_fields() {
+fn run_corpus_guided_reports_corpus_fields() {
     // The corpus fields are non-zero for corpus-guided runs. The exact
     // values and the caps (feature set 1024, corpus 64) are verified
     // in unit tests; e2e only checks the 0 / non-zero distinction.
     let case = std::cell::Cell::new(0u64);
     let mut runner = noprop::Runner::new(1, 128);
     runner
-        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+        .run_corpus_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
             Ok(())
         })
-        .expect("semantic-only run must succeed");
+        .expect("corpus-guided run must succeed");
     let stats = runner.stats();
     assert!(stats.discovered_features > 0);
     assert!(stats.max_corpus_size > 0);
@@ -1892,7 +1269,7 @@ fn run_corpus_guided_failure_error_carries_corpus_stats() {
     // failing case's feature is not admitted, so on a first-case
     // failure the corpus fields are 0 (see `Stats` docs).
     let err = noprop::Runner::new(1, 32)
-        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+        .run_corpus_guided(|ctx| {
             ctx.event("before-failure");
             panic!("deterministic failure");
         })
@@ -1909,7 +1286,7 @@ fn run_corpus_guided_failure_error_carries_corpus_stats() {
     // counted.
     let case = std::cell::Cell::new(0u64);
     let err = noprop::Runner::new(1, 32)
-        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+        .run_corpus_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
@@ -1930,20 +1307,18 @@ fn run_corpus_guided_failure_error_carries_corpus_stats() {
 }
 
 #[test]
-fn corpus_guided_failure_hint_includes_corpus_policy() {
-    // A SemanticOnly failure must carry a reproduce hint that reuses
-    // the same policy, so the rerun reproduces the failure.
+fn corpus_guided_failure_hint_names_the_entry_point() {
+    // A corpus-guided failure must carry a reproduce hint that names
+    // `run_corpus_guided`, so the rerun reproduces the failure.
     let err = noprop::Runner::new(1, 8)
-        .run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| {
+        .run_corpus_guided(|ctx| {
             ctx.event("e");
             panic!("deterministic failure");
         })
         .expect_err("panicking closure must fail the run");
     let display = format!("{err}");
     assert!(
-        display.contains(
-            "run_corpus_guided_with_policy(noprop::CorpusPolicy::SemanticOnly, |ctx| ...)"
-        ),
-        "Display must carry the corpus policy in the hint, got:\n{display}"
+        display.contains("run_corpus_guided(|ctx| ...)"),
+        "Display must name the corpus-guided entry point in the hint, got:\n{display}"
     );
 }

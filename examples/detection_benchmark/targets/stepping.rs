@@ -31,12 +31,10 @@ fn run(
         }
         progress += 1;
     }
-    // Feedback: the mutant fails at full progress, so the priority
-    // rewards the progress and the bucket observes it in finite steps.
-    // These calls draw no random bytes, so the generator stream is
-    // unchanged.
+    // Feedback: the mutant fails at full progress, so the bucket
+    // observes the progress in finite steps. This call draws no random
+    // bytes, so the generator stream is unchanged.
     ctx.bucket("progress", progress);
-    ctx.maximize(progress as f64 / 5.0);
     if sut_mutant && progress == 5 {
         return Err("all five consecutive draws were zero".to_string());
     }

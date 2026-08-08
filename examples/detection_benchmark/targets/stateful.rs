@@ -32,9 +32,6 @@ fn run(
             return Err(format!("state reached {state}"));
         }
     }
-    // Feedback: the mutant fails at state 7, so the priority rewards
-    // the current state. This call draws no random bytes.
-    ctx.maximize(state as f64 / 7.0);
     Ok(())
 }
 

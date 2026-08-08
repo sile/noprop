@@ -1,21 +1,17 @@
-//! Error and result types for [`Runner::run`](crate::Runner::run),
-//! [`Runner::run_targeted`](crate::Runner::run_targeted),
-//! [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) and
-//! [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy).
+//! Error and result types for [`Runner::run`](crate::Runner::run) and
+//! [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
 
 use std::panic::Location;
 
 use crate::GeneratedValue;
 use crate::rng::Feature;
-use crate::runner::{CorpusPolicy, Stats};
+use crate::runner::Stats;
 
 /// Result alias used across noprop's public API.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Failure information from a [`Runner::run`](crate::Runner::run),
-/// [`Runner::run_targeted`](crate::Runner::run_targeted),
-/// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) or
-/// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
+/// Failure information from a [`Runner::run`](crate::Runner::run) or
+/// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
 /// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
@@ -31,8 +27,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `case_index()`, so the same seed and iteration budget reproduce the
 /// same exit.
 ///
-/// A corpus-guided failure report (`run_corpus_guided` /
-/// `run_corpus_guided_with_policy`) additionally carries the semantic
+/// A corpus-guided failure report additionally carries the semantic
 /// features the failing case reported and a one-based candidate index.
 /// The candidate index counts every attempt — accepted, rejected, and
 /// the failing case itself — so it relates to the zero-based
@@ -61,10 +56,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// The hint reuses the original iteration budget and names the failing
 /// entry point: `run`'s hint prints the bare constructor, while the
-/// targeted hint appends `run_targeted(|ctx| ...)` and the
 /// corpus-guided hint appends
-/// `run_corpus_guided_with_policy(noprop::CorpusPolicy::…, |ctx| ...)`
-/// (reusing the run's corpus policy) with the closure body left as a
+/// `run_corpus_guided(|ctx| ...)`
+/// with the closure body left as a
 /// placeholder. In each case the original property closure must be
 /// supplied before rerunning; the re-run size never needs to be
 /// recomputed by hand.
@@ -110,11 +104,8 @@ struct SemanticFailureReport {
 pub(crate) enum SearchPolicy {
     /// [`Runner::run`](crate::Runner::run).
     Uniform,
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted).
-    Targeted,
-    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy),
-    /// carrying the corpus policy so the reproduce hint reuses it.
-    CorpusGuided(CorpusPolicy),
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided).
+    CorpusGuided,
 }
 
 enum ErrorKind {
@@ -131,12 +122,6 @@ enum ErrorKind {
         rejected_iterations: usize,
         last_reject_location: &'static Location<'static>,
     },
-    /// An accepted targeted case finished without calling
-    /// [`TestCaseContext::maximize`](crate::TestCaseContext::maximize).
-    MissingFeedback,
-    /// An accepted targeted case reported `NaN` or infinity via
-    /// [`TestCaseContext::maximize`](crate::TestCaseContext::maximize).
-    InvalidFeedback,
 }
 
 impl Error {
@@ -162,7 +147,7 @@ impl Error {
 
     /// Attach the semantic features and candidate index of a failing
     /// corpus-guided case. Used by
-    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
     /// and the too-many-rejections exit path.
     pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
         self.semantic = Some(Box::new(SemanticFailureReport {
@@ -194,42 +179,6 @@ impl Error {
             generated,
             stats,
             policy,
-        )
-    }
-
-    pub(crate) fn from_missing_feedback(
-        seed: u64,
-        case_index: usize,
-        iterations: usize,
-        generated: Vec<GeneratedValue>,
-        stats: Stats,
-    ) -> Self {
-        Self::new(
-            seed,
-            case_index,
-            iterations,
-            ErrorKind::MissingFeedback,
-            generated,
-            stats,
-            SearchPolicy::Targeted,
-        )
-    }
-
-    pub(crate) fn from_invalid_feedback(
-        seed: u64,
-        case_index: usize,
-        iterations: usize,
-        generated: Vec<GeneratedValue>,
-        stats: Stats,
-    ) -> Self {
-        Self::new(
-            seed,
-            case_index,
-            iterations,
-            ErrorKind::InvalidFeedback,
-            generated,
-            stats,
-            SearchPolicy::Targeted,
         )
     }
 
@@ -265,10 +214,7 @@ impl Error {
     /// index of the failing iteration. For `TooManyRejections`, this
     /// is the count of accepted iterations that ran before the runner
     /// gave up (i.e. the index of the iteration that could not be
-    /// accepted). For `MissingFeedback` / `InvalidFeedback`, this is
-    /// the index of the accepted case whose feedback failed
-    /// validation. That case completed without rejection but is not
-    /// counted in `Stats::accepted_iterations`.
+    /// accepted).
     pub fn case_index(&self) -> usize {
         self.case_index
     }
@@ -293,7 +239,7 @@ impl Error {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original iteration budget so reruns hit the same
-    /// rejection cap. In targeted / corpus-guided mode the closure body
+    /// rejection cap. In corpus-guided mode the closure body
     /// is a placeholder: the caller substitutes the original property
     /// closure.
     fn reproduce_command(&self) -> String {
@@ -303,12 +249,7 @@ impl Error {
         );
         match self.policy {
             SearchPolicy::Uniform => base,
-            SearchPolicy::Targeted => format!("{base}.run_targeted(|ctx| ...)"),
-            SearchPolicy::CorpusGuided(policy) => {
-                format!(
-                    "{base}.run_corpus_guided_with_policy(noprop::CorpusPolicy::{policy:?}, |ctx| ...)"
-                )
-            }
+            SearchPolicy::CorpusGuided => format!("{base}.run_corpus_guided(|ctx| ...)"),
         }
     }
 }
@@ -336,12 +277,6 @@ impl std::fmt::Debug for Error {
                     last_reject_location.file(),
                     last_reject_location.line(),
                 )?;
-            }
-            ErrorKind::MissingFeedback => {
-                writeln!(f, "    missing_feedback: true,")?;
-            }
-            ErrorKind::InvalidFeedback => {
-                writeln!(f, "    invalid_feedback: true,")?;
             }
         }
         writeln!(f, "    reproduce: {},", self.reproduce_command())?;
@@ -398,22 +333,6 @@ impl std::fmt::Display for Error {
                     self.seed,
                     last_reject_location.file(),
                     last_reject_location.line(),
-                )?;
-            }
-            ErrorKind::MissingFeedback => {
-                writeln!(
-                    f,
-                    "noprop missing feedback at case {} (seed={:#018x}): \
-                     an accepted targeted case never called TestCaseContext::maximize",
-                    self.case_index, self.seed,
-                )?;
-            }
-            ErrorKind::InvalidFeedback => {
-                writeln!(
-                    f,
-                    "noprop invalid feedback at case {} (seed={:#018x}): \
-                     TestCaseContext::maximize received NaN or infinity",
-                    self.case_index, self.seed,
                 )?;
             }
         }
