@@ -21,7 +21,6 @@ fn run_case(
         let v = draw(ctx);
         ctx.bucket("noise", v);
     }
-    ctx.maximize(0.5);
     Ok(())
 }
 

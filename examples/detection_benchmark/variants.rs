@@ -5,15 +5,14 @@
 //! ground-truth check, not a comparison variant.)
 //!
 //! The uniform / biased properties report semantic feedback (`event` /
-//! `bucket` / `transition`) and a scalar priority (`maximize`) so the
-//! same property runs under every search policy; in uniform mode the
-//! feedback methods are allocation-free no-ops, so the uniform /
-//! biased results match the recorded baseline (the feedback calls draw
-//! no random bytes).
+//! `bucket` / `transition`) so the same property runs under the
+//! corpus-guided search; in uniform mode the feedback methods are
+//! allocation-free no-ops, so the uniform / biased results match the
+//! recorded baseline (the feedback calls draw no random bytes).
 
 use std::time::Instant;
 
-use noprop::{CorpusPolicy, Error, Runner, Stats, TestCaseContext};
+use noprop::{Error, Runner, Stats, TestCaseContext};
 
 use crate::raw::{RawResult, Status};
 use crate::targets::{Observe, Property, Task};
@@ -33,15 +32,9 @@ pub(crate) enum Variant {
     /// Generic type-level boundary mix over the integer primitives
     /// under `Runner::run`.
     BoundaryBiased,
-    /// Targeted search (`Runner::run_targeted`) over the scalar
-    /// priority reported by the property.
-    Targeted,
     /// Corpus-guided search admitting purely on feature novelty
-    /// (`run_corpus_guided_with_policy(SemanticOnly)`).
-    SemanticOnly,
-    /// Integrated search: semantic corpus plus scalar priority
-    /// (`Runner::run_corpus_guided`, i.e. `SemanticWithPriority`).
-    SemanticWithPriority,
+    /// (`Runner::run_corpus_guided`).
+    CorpusGuided,
 }
 
 impl Variant {
@@ -51,9 +44,7 @@ impl Variant {
             "uniform" => Some(Variant::Uniform),
             "biased" => Some(Variant::Biased),
             "boundary-biased" => Some(Variant::BoundaryBiased),
-            "targeted" => Some(Variant::Targeted),
-            "semantic-only" => Some(Variant::SemanticOnly),
-            "semantic-with-priority" => Some(Variant::SemanticWithPriority),
+            "corpus-guided" => Some(Variant::CorpusGuided),
             _ => None,
         }
     }
@@ -64,9 +55,7 @@ impl Variant {
             Variant::Uniform => "uniform",
             Variant::Biased => "biased",
             Variant::BoundaryBiased => "boundary-biased",
-            Variant::Targeted => "targeted",
-            Variant::SemanticOnly => "semantic-only",
-            Variant::SemanticWithPriority => "semantic-with-priority",
+            Variant::CorpusGuided => "corpus-guided",
         }
     }
 }
@@ -76,9 +65,7 @@ pub(crate) const VARIANTS: &[Variant] = &[
     Variant::Uniform,
     Variant::Biased,
     Variant::BoundaryBiased,
-    Variant::Targeted,
-    Variant::SemanticOnly,
-    Variant::SemanticWithPriority,
+    Variant::CorpusGuided,
 ];
 
 /// Run one task (workload x mutant x variant) for a fixed seed and
@@ -124,8 +111,9 @@ pub(crate) fn run_task(
 ///
 /// The uniform / biased / boundary-biased variants use the task's
 /// uniform / biased / bb properties (feedback-reporting under the
-/// respective generation); the search variants reuse the uniform
-/// property, whose feedback methods are no-ops under `Runner::run`.
+/// respective generation); the corpus-guided variant reuses the
+/// uniform property, whose feedback methods are no-ops under
+/// `Runner::run`.
 fn run_variant(
     runner: &mut Runner,
     task: &Task,
@@ -143,23 +131,16 @@ fn run_variant(
         Variant::Base | Variant::Uniform | Variant::Biased | Variant::BoundaryBiased => {
             runner.run(run)
         }
-        Variant::Targeted => runner.run_targeted(run),
-        Variant::SemanticOnly => {
-            runner.run_corpus_guided_with_policy(CorpusPolicy::SemanticOnly, run)
-        }
-        Variant::SemanticWithPriority => runner.run_corpus_guided(run),
+        Variant::CorpusGuided => runner.run_corpus_guided(run),
     }
 }
 
 /// Classify the run outcome: property failure (found), rejection-cap
-/// exhaustion (gave_up), harness-level feedback failure (aborted), or
-/// a clean pass (not_found).
+/// exhaustion (gave_up), or a clean pass (not_found).
 ///
 /// `ErrorKind` is crate-private, so the classification relies on the
 /// stable `Display` wording of the failure kinds (pinned by the e2e
-/// tests). Targeted mode's missing / invalid feedback failures are
-/// harness errors of the property, not mutant detections, so they are
-/// classified as `Aborted` rather than `Found`.
+/// tests).
 fn classify(outcome: &Result<(), Error>) -> (Status, Option<usize>) {
     match outcome {
         Ok(()) => (Status::NotFound, None),
@@ -167,8 +148,6 @@ fn classify(outcome: &Result<(), Error>) -> (Status, Option<usize>) {
             let display = format!("{err}");
             if display.contains("too many rejections") {
                 (Status::GaveUp, None)
-            } else if display.contains("missing feedback") || display.contains("invalid feedback") {
-                (Status::Aborted, None)
             } else {
                 // `case_index` is the accepted case that failed; the
                 // iterations-to-detection count includes it.

@@ -387,24 +387,28 @@ mod tests {
     fn accumulate_counts_candidate_executions_on_found() {
         let mut summaries = Summaries::new();
         let raw = ParsedRaw {
-            variant: "targeted".to_string(),
+            variant: "corpus-guided".to_string(),
             workload: "w".to_string(),
             mutant: "m".to_string(),
             status: Status::Found,
             detected_at: Some(4),
             accepted_iterations: 4,
             rejected_iterations: 7,
-            discovered_features: 0,
-            max_corpus_size: 0,
+            discovered_features: 1,
+            max_corpus_size: 1,
         };
         accumulate(&mut summaries, &raw);
         let entry = summaries
-            .get(&("targeted".to_string(), "w".to_string(), "m".to_string()))
+            .get(&(
+                "corpus-guided".to_string(),
+                "w".to_string(),
+                "m".to_string(),
+            ))
             .expect("group must exist");
         assert_eq!(entry.found, 1);
         // accepted + rejected + the failing case itself.
         assert_eq!(entry.candidate_times, vec![12]);
         assert_eq!(entry.candidate_buckets[bucket_of(12)], 1);
-        assert_eq!(entry.discovered_features, vec![0]);
+        assert_eq!(entry.discovered_features, vec![1]);
     }
 }

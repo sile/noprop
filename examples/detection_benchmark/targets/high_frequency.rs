@@ -14,11 +14,10 @@ fn process(x: u32, mutant: bool) -> Result<(), ()> {
 }
 
 fn run(sut_mutant: bool, x: u32, ctx: &mut TestCaseContext, _obs: &Observe) -> Result<(), String> {
-    // Feedback: the mutant fails for odd x, so the priority rewards
-    // odd draws and the event observes which parity was reached. These
-    // calls draw no random bytes, so the generator stream is unchanged.
+    // Feedback: the mutant fails for odd x, so the event observes
+    // which parity was reached. This call draws no random bytes, so
+    // the generator stream is unchanged.
     ctx.event(if x.is_multiple_of(2) { "even" } else { "odd" });
-    ctx.maximize(if x.is_multiple_of(2) { 0.0 } else { 1.0 });
     process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 

@@ -145,11 +145,9 @@ fn run(
             noprop::sample_usize_in(ctx, 0..1024) as u32
         };
         // Feedback: the mutant fails when a key is inserted twice,
-        // which a small key range makes likely; the priority rewards
-        // small keys and the event observes duplicate insertion
-        // attempts. These calls draw no random bytes, so the generator
-        // stream is unchanged.
-        ctx.maximize(if key < 8 { 1.0 } else { 0.0 });
+        // which a small key range makes likely; the event observes
+        // duplicate insertion attempts. This call draws no random
+        // bytes, so the generator stream is unchanged.
         // 80% insert under the biased variant, 50% otherwise.
         let insert = if biased {
             noprop::sample_usize_in(ctx, 0..10) < 8
@@ -167,10 +165,6 @@ fn run(
             model.remove(&key);
         }
     }
-    // `maximize` is mandatory in targeted mode: report a score even
-    // when no operation was generated. The case-local maximum keeps
-    // any in-loop score.
-    ctx.maximize(0.0);
 
     // Property: the BST's in-order keys must match the model exactly.
     let actual = bst.keys();

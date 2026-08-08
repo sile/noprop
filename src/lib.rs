@@ -21,4 +21,4 @@ pub use generator::{
     sample_weighted_index, sample_with_boundaries, sample_with_rejection,
 };
 pub use rng::{GeneratedValue, TestCaseContext};
-pub use runner::{CorpusPolicy, Runner, Stats};
+pub use runner::{Runner, Stats};

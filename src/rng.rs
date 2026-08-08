@@ -38,9 +38,8 @@ const MAX_FEATURES_PER_CASE: usize = 64;
 /// must always be provided by the caller. This makes every property test
 /// exactly reproducible from its seed.
 ///
-/// The public methods are [`TestCaseContext::new`],
-/// [`TestCaseContext::reject_case`], and — in targeted mode —
-/// [`TestCaseContext::maximize`]; all byte/word production happens
+/// The public methods are [`TestCaseContext::new`] and
+/// [`TestCaseContext::reject_case`]; all byte/word production happens
 /// through the `noprop::sample_*` free functions, which record the
 /// generated values into an internal trace surfaced on failure. Raw
 /// PRNG state access is deliberately hidden so users cannot
@@ -78,52 +77,32 @@ pub struct TestCaseContext {
     total_samples: usize,
     /// Scalar / semantic feedback collected during the current case.
     /// Always [`FeedbackState::Disabled`] when constructed via
-    /// [`TestCaseContext::new`]; a runner switches it to `Targeted`
-    /// before running its case loop.
+    /// [`TestCaseContext::new`]; a runner switches it to
+    /// `SemanticCoverage` before running its case loop.
     feedback: FeedbackState,
 }
 
 /// Private feedback state carried by every [`TestCaseContext`].
 ///
-/// `Disabled` is the default and must stay allocation-free: `maximize`
-/// and the semantic methods are no-ops while it is active. The
-/// `Targeted` variant collects the maximum scalar reported via
-/// [`TestCaseContext::maximize`] during one case; the
+/// `Disabled` is the default and must stay allocation-free: the
+/// semantic methods are no-ops while it is active. The
 /// `SemanticCoverage` variant collects the semantic features reported
-/// via [`TestCaseContext::event`] / `bucket` / `transition` and an
-/// optional scalar priority via `maximize`.
+/// via [`TestCaseContext::event`] / `bucket` / `transition`.
 #[derive(Debug, Clone)]
 pub(crate) enum FeedbackState {
     Disabled,
-    Targeted { max_score: ScalarFeedback },
     SemanticCoverage(SemanticCoverage),
-}
-
-/// Three-state scalar feedback for one case.
-///
-/// `Missing` marks an accepted case that never called `maximize`;
-/// `Invalid` marks a `NaN` / infinity report. Keeping invalid out of
-/// the `f64` payload means a later `Valid` score can never mask an
-/// earlier invalid report.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub(crate) enum ScalarFeedback {
-    #[default]
-    Missing,
-    Valid(f64),
-    Invalid,
 }
 
 /// Per-case semantic feedback collected in corpus-guided mode.
 ///
 /// `features` holds the features the case reported so far, capped at
-/// [`MAX_FEATURES_PER_CASE`]; `priority` is the optional scalar score
-/// reported via [`TestCaseContext::maximize`]. `event_counts` tracks
-/// per-label repetition counts so repeated events saturate into
+/// [`MAX_FEATURES_PER_CASE`]. `event_counts` tracks per-label
+/// repetition counts so repeated events saturate into
 /// [`EventBucket`] features instead of unbounded counts.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticCoverage {
     features: Vec<Feature>,
-    priority: ScalarFeedback,
     event_counts: Vec<(&'static str, usize)>,
 }
 
@@ -175,19 +154,6 @@ impl SemanticCoverage {
         }
     }
 
-    fn report_priority(&mut self, score: f64) {
-        let next = if score.is_finite() {
-            match self.priority {
-                ScalarFeedback::Missing => ScalarFeedback::Valid(score),
-                ScalarFeedback::Valid(current) => ScalarFeedback::Valid(current.max(score)),
-                ScalarFeedback::Invalid => ScalarFeedback::Invalid,
-            }
-        } else {
-            ScalarFeedback::Invalid
-        };
-        self.priority = next;
-    }
-
     /// The features reported during the case, in report order.
     #[cfg(test)]
     pub(crate) fn features(&self) -> &[Feature] {
@@ -197,16 +163,6 @@ impl SemanticCoverage {
     /// Move the reported features out of the coverage state.
     pub(crate) fn take_features(&mut self) -> Vec<Feature> {
         std::mem::take(&mut self.features)
-    }
-
-    /// The optional scalar priority: `None` when `maximize` was never
-    /// called or reported a `NaN` / infinity value. Both are tolerated
-    /// in corpus-guided mode (the case proceeds without a priority).
-    pub(crate) fn priority(&self) -> Option<f64> {
-        match self.priority {
-            ScalarFeedback::Valid(score) => Some(score),
-            ScalarFeedback::Missing | ScalarFeedback::Invalid => None,
-        }
     }
 }
 
@@ -684,10 +640,10 @@ impl TestCaseContext {
         }
     }
 
-    /// Construct a context in recording mode for the targeted runner.
-    /// Every draw is appended to the carried [`ChoiceSequence`], which
-    /// the runner recovers via [`take_sequence`](Self::take_sequence)
-    /// at the case boundary.
+    /// Construct a context in recording mode for the corpus-guided
+    /// runner. Every draw is appended to the carried
+    /// [`ChoiceSequence`], which the runner recovers via
+    /// [`take_sequence`](Self::take_sequence) at the case boundary.
     pub(crate) fn recording(seed: u64) -> Self {
         Self {
             source: RandomSource::Recording {
@@ -759,10 +715,8 @@ impl TestCaseContext {
     }
 
     /// Reject the current iteration and unwind out of the property
-    /// closure. Only valid inside [`Runner::run`](crate::Runner::run),
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted) or
-    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) or
-    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy);
+    /// closure. Only valid inside [`Runner::run`](crate::Runner::run) or
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided);
     /// calling this from a `TestCaseContext` constructed outside a runner panics
     /// with a Runner-only message.
     ///
@@ -784,7 +738,7 @@ impl TestCaseContext {
         if !self.inside_runner {
             panic!(
                 "noprop::TestCaseContext::reject_case can only be called from inside a Runner::run, \
-                 Runner::run_targeted, Runner::run_corpus_guided or \
+                 Runner::run_corpus_guided or \
                  Runner::run_corpus_guided_with_policy property closure. Constructing a \
                  TestCaseContext directly via TestCaseContext::new does not create a Runner boundary."
             );
@@ -1064,7 +1018,7 @@ impl TestCaseContext {
     /// Consume and return any pending rejection state saved by
     /// [`TestCaseContext::reject_case`]. Called by
     /// [`Runner::run`](crate::Runner::run) and
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted) after each case boundary so
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) after each case boundary so
     /// a set state wins over the closure's own `Ok` / `Err` / non-marker
     /// panic outcome.
     pub(crate) fn take_rejection(&mut self) -> Option<RejectionState> {
@@ -1163,53 +1117,16 @@ impl TestCaseContext {
     /// Enable the Runner-only guard on
     /// [`TestCaseContext::reject_case`]. Called by
     /// [`Runner::run`](crate::Runner::run) or
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted) immediately after
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) immediately after
     /// constructing its `TestCaseContext`.
     pub(crate) fn set_inside_runner(&mut self) {
         self.inside_runner = true;
     }
 
-    /// Report a scalar "distance to failure" for the current case.
-    ///
-    /// Only meaningful in targeted mode: [`Runner::run_targeted`](crate::Runner::run_targeted)
-    /// switches the context into that mode before running its case
-    /// loop. In the default mode (plain [`Runner::run`](crate::Runner::run)
-    /// or a directly constructed context) this is an allocation-free
-    /// no-op.
-    ///
-    /// A larger finite value means "closer to failure". Multiple calls
-    /// within one case keep the maximum; a `NaN` / infinity report
-    /// marks the whole case invalid. Rejected cases (via
-    /// [`TestCaseContext::reject_case`]) discard their score — they do
-    /// not need to call `maximize`.
-    ///
-    /// In corpus-guided mode (see
-    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy))
-    /// this reports an optional scalar priority for the case, using the
-    /// same aggregation and invalid handling.
-    pub fn maximize(&mut self, score: f64) {
-        match &mut self.feedback {
-            FeedbackState::Targeted { max_score } => {
-                let next = if score.is_finite() {
-                    match *max_score {
-                        ScalarFeedback::Missing => ScalarFeedback::Valid(score),
-                        ScalarFeedback::Valid(current) => ScalarFeedback::Valid(current.max(score)),
-                        ScalarFeedback::Invalid => ScalarFeedback::Invalid,
-                    }
-                } else {
-                    ScalarFeedback::Invalid
-                };
-                *max_score = next;
-            }
-            FeedbackState::SemanticCoverage(cov) => cov.report_priority(score),
-            FeedbackState::Disabled => {}
-        }
-    }
-
     /// Report reaching a finite event for the current case.
     ///
     /// Only meaningful in corpus-guided mode:
-    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
     /// switches the context into that mode before running its case
     /// loop. In the default mode (plain [`Runner::run`](crate::Runner::run)
     /// or a directly constructed context) this is an allocation-free
@@ -1252,19 +1169,9 @@ impl TestCaseContext {
         }
     }
 
-    /// Switch the context into targeted feedback mode for the upcoming
-    /// case. Called by [`Runner::run_targeted`](crate::Runner::run_targeted)
-    /// before each case; the case-local score is drained via
-    /// [`take_feedback`](Self::take_feedback) at the case boundary.
-    pub(crate) fn enable_targeted(&mut self) {
-        self.feedback = FeedbackState::Targeted {
-            max_score: ScalarFeedback::Missing,
-        };
-    }
-
     /// Switch the context into corpus-guided feedback mode for the
     /// upcoming case. Called by
-    /// [`Runner::run_corpus_guided_with_policy`](crate::Runner::run_corpus_guided_with_policy)
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided)
     /// before each case; the case-local feedback is drained via
     /// [`take_feedback`](Self::take_feedback) at the case boundary.
     pub(crate) fn enable_corpus_guided(&mut self) {
@@ -1292,7 +1199,7 @@ impl TestCaseContext {
     /// Total number of top-level `sample_*` invocations observed on this
     /// context across every case that has run so far. Consumed by
     /// [`Runner::run`](crate::Runner::run) and
-    /// [`Runner::run_targeted`](crate::Runner::run_targeted) when they build
+    /// [`Runner::run_corpus_guided`](crate::Runner::run_corpus_guided) when they build
     /// [`Stats`](crate::Stats).
     pub(crate) fn total_samples(&self) -> usize {
         self.total_samples
@@ -1947,68 +1854,6 @@ mod tests {
 mod targeted_tests {
     use super::*;
 
-    // === maximize / feedback state ===
-
-    #[test]
-    fn maximize_keeps_maximum_within_case() {
-        let mut ctx = TestCaseContext::new(1);
-        ctx.enable_targeted();
-        ctx.maximize(1.0);
-        ctx.maximize(3.0);
-        ctx.maximize(2.0);
-        match ctx.take_feedback() {
-            FeedbackState::Targeted { max_score } => {
-                assert_eq!(max_score, ScalarFeedback::Valid(3.0));
-            }
-            other => panic!("expected targeted feedback, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn invalid_report_wins_over_earlier_valid_scores() {
-        let mut ctx = TestCaseContext::new(1);
-        ctx.enable_targeted();
-        ctx.maximize(5.0);
-        ctx.maximize(f64::NAN);
-        match ctx.take_feedback() {
-            FeedbackState::Targeted { max_score } => {
-                assert_eq!(max_score, ScalarFeedback::Invalid);
-            }
-            other => panic!("expected targeted feedback, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn invalid_report_survives_later_valid_scores() {
-        let mut ctx = TestCaseContext::new(1);
-        ctx.enable_targeted();
-        ctx.maximize(f64::NAN);
-        ctx.maximize(5.0);
-        match ctx.take_feedback() {
-            FeedbackState::Targeted { max_score } => {
-                assert_eq!(max_score, ScalarFeedback::Invalid);
-            }
-            other => panic!("expected targeted feedback, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn maximize_is_noop_when_disabled() {
-        let mut ctx = TestCaseContext::new(1);
-        ctx.maximize(f64::NAN);
-        ctx.maximize(1.0);
-        assert!(matches!(ctx.take_feedback(), FeedbackState::Disabled));
-    }
-
-    #[test]
-    fn take_feedback_resets_to_disabled() {
-        let mut ctx = TestCaseContext::new(1);
-        ctx.enable_targeted();
-        ctx.maximize(1.0);
-        let _ = ctx.take_feedback();
-        assert!(matches!(ctx.feedback, FeedbackState::Disabled));
-    }
-
     // === semantic features (corpus-guided mode) ===
 
     #[test]
@@ -2017,7 +1862,6 @@ mod targeted_tests {
         ctx.event("e");
         ctx.bucket("b", 7);
         ctx.transition("t", 0, 1);
-        ctx.maximize(1.0);
         assert!(matches!(ctx.take_feedback(), FeedbackState::Disabled));
     }
 
@@ -2103,43 +1947,6 @@ mod targeted_tests {
         match ctx.take_feedback() {
             FeedbackState::SemanticCoverage(cov) => {
                 assert_eq!(cov.features().len(), MAX_FEATURES_PER_CASE);
-            }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn corpus_guided_priority_keeps_maximum_within_case() {
-        let mut ctx = TestCaseContext::new(1);
-        ctx.enable_corpus_guided();
-        ctx.maximize(1.0);
-        ctx.maximize(3.0);
-        ctx.maximize(2.0);
-        match ctx.take_feedback() {
-            FeedbackState::SemanticCoverage(cov) => {
-                assert_eq!(cov.priority(), Some(3.0));
-            }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn corpus_guided_priority_tolerates_missing_and_invalid() {
-        let mut missing = TestCaseContext::new(1);
-        missing.enable_corpus_guided();
-        match missing.take_feedback() {
-            FeedbackState::SemanticCoverage(cov) => {
-                assert_eq!(cov.priority(), None);
-            }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
-        }
-
-        let mut invalid = TestCaseContext::new(1);
-        invalid.enable_corpus_guided();
-        invalid.maximize(f64::NAN);
-        match invalid.take_feedback() {
-            FeedbackState::SemanticCoverage(cov) => {
-                assert_eq!(cov.priority(), None);
             }
             other => panic!("expected corpus-guided feedback, got {other:?}"),
         }

@@ -1,17 +1,16 @@
 # Corpus-Guided Search
 
 This document describes the design of noprop's corpus-guided search
-policy, added for property testing with semantic feedback.
+policy, used for property testing with semantic feedback.
 
 ## Key Characteristics
 
 `Runner::run` samples inputs uniformly, so a property whose failure sits
 in a narrow input region is found only with probability proportional to
-that region's size. Targeted search (see `targeted_search`) drives the
-generators toward inputs that report a high scalar score. Corpus-guided
-search instead tracks semantic features — finite events, caller-bucketed
-state values, and abstract state transitions — and steers the search
-toward inputs that cover features no earlier case covered.
+that region's size. Corpus-guided search tracks semantic features —
+finite events, caller-bucketed state values, and abstract state
+transitions — and steers the search toward inputs that cover features no
+earlier case covered.
 
 Semantic features are reported by the property itself through
 `TestCaseContext::event`, `bucket`, and `transition`. Unlike raw code
@@ -36,12 +35,9 @@ record the mutated case's draws and features
            ────────► repeat
 ```
 
-`Runner::run_corpus_guided(closure)` is the entry point (it delegates
-to `run_corpus_guided_with_policy` with `CorpusPolicy::SemanticWithPriority`);
-`Runner::run_corpus_guided_with_policy(policy, closure)` selects the
-admission policy explicitly (`SemanticOnly`, or `SemanticWithPriority`).
-The closure receives the same `&mut TestCaseContext` as `Runner::run`,
-so the same property runs under every policy. See the
+`Runner::run_corpus_guided(closure)` is the entry point. The closure
+receives the same `&mut TestCaseContext` as `Runner::run`, so the same
+property runs under both. See the
 [`run_corpus_guided`](crate::Runner::run_corpus_guided) documentation
 for a runnable example.
 
@@ -62,14 +58,10 @@ Repeated events within one case saturate into a fixed hit-count bucket
 times is distinguished from one that visits it once, without unbounded
 counts.
 
-Unlike targeted mode, feedback is not mandatory:
+Feedback is not mandatory:
 
 - An accepted case that reports no feature is simply not interesting: it
   never enters the corpus, and the run continues.
-- `maximize` is an optional scalar priority. A case that never calls it,
-  or calls it with `NaN` / infinity, proceeds without a priority; no
-  missing / invalid feedback error is raised (targeted mode's
-  `MissingFeedback` / `InvalidFeedback` do not apply here).
 - A property failure (panic or returned `Err`) always beats any feedback
   consideration and is reported immediately.
 
@@ -79,7 +71,7 @@ those modes does not allocate.
 
 ## Choosing a feedback method
 
-The four feedback methods observe different things; pick the one that
+The three feedback methods observe different things; pick the one that
 matches the property's domain:
 
 - `event(label)` — for finite occurrences whose *count* matters only
@@ -99,11 +91,6 @@ matches the property's domain:
   advances). The `(from, to)` pair is part of the feature identity, so
   "follower → leader" and "leader → follower" are different features
   even under the same label.
-- `maximize(score)` — when "closeness to failure" can be designed as a
-  single scalar. Unlike the semantic methods it never registers a
-  feature; it only steers admission and eviction within a feature group
-  (under `SemanticWithPriority`). It is optional: a case that never
-  calls it is still admitted if it reports a novel feature.
 
 The label must identify a *meaning*, not a call site: using the same
 label for different meanings silently merges them (the search treats
@@ -142,44 +129,24 @@ size of both queues is capped at `CORPUS_SIZE`.
 Admission:
 
 - A case with novel features is admitted while the combined size is
-  below the cap (both policies).
+  below the cap.
 - Once full, the entry with the fewest newly registered features is
-  evicted; ties evict the earliest arrival. Under
-  `SemanticWithPriority`, ties within that group break on the lowest
-  score (missing scores count as the lowest).
-- Under `SemanticWithPriority`, a case with no novel feature is
-  admitted only when its priority beats the lowest-scored entry of a
-  feature group it overlaps, replacing that entry (the targeted top-k
-  replacement, restricted to one feature group). This keeps the search
-  from drifting entirely away from a promising group once its features
-  are covered. Under `SemanticOnly` such a case is never admitted.
-
-When the corpus is full of scored entries and a new case with no
-priority (it never called `maximize`, or called it with an invalid
-value) registers novel features, the eviction tie-break treats the
-missing score as the lowest: the new entry can evict itself on arrival.
-Its features still enter the global registry — so they never make
-another case interesting — but its choice sequence is discarded without
-serving as a mutation parent. This is an accepted consequence of
-"missing scores count as the lowest" under `SemanticWithPriority`; it
-only occurs when scored and unscored cases are mixed, since an
-all-unscored corpus evicts the earliest arrival instead (a plain FIFO
-rotation). A property that wants every novel discovery to persist in
-the corpus should call `maximize` consistently.
+  evicted; ties evict the earliest arrival.
+- A case with no novel feature is never admitted.
 
 A new case either restarts (with probability
 `1 / RANDOM_RESTART_DENOM`) and records fresh from a new seed, or
 explores: it picks a corpus entry and mutates it. Accepted picks are
-uniform among entries, except with probability `1 / LOW_SCORE_DENOM`
-the lowest-scored accepted entry is picked instead, concentrating some
-energy on the corpus's weak spot.
+uniform among entries; with probability `1 / REJECTED_PICK_DENOM` the
+rejected queue is picked instead when it is non-empty.
 
-Mutation and exploratory replay are shared with targeted search: draws
-are rewritten within their recorded constraints with probability
-`1 / MUTATION_DENOM`, and a mutated candidate replays its draws with
-generated tail draws for control flow the mutation introduces. The four
-exploratory replay rules and the per-case generated-draw cap are
-identical.
+Mutation rewrites each draw with probability `1 / MUTATION_DENOM`:
+bounded-domain draws (Bounded / Choice) get a fresh value inside their
+recorded constraint, while constraint-free draws (Raw: raw bytes, string
+payload, …) are regenerated as a whole. A mutated candidate replays its
+draws with generated tail draws for control flow the mutation
+introduces, under the four exploratory replay rules and the per-case
+generated-draw cap.
 
 ## Determinism and Reproduction
 
@@ -190,8 +157,7 @@ sequence of cases and mutations.
 
 A failure report's reproduce hint reruns the exact failing seed with
 the original iteration budget and names
-`run_corpus_guided_with_policy(noprop::CorpusPolicy::…, |ctx| ...)`
-(reusing the run's corpus policy), so the rerun reproduces the same
+`run_corpus_guided(|ctx| ...)`, so the rerun reproduces the same
 failure. The report also carries the failing case's candidate index
 (across accepted and rejected cases) and the semantic features the
 failing case reported, so the interesting input region is visible
@@ -206,7 +172,3 @@ without exposing the choice sequence itself.
 - Corpus-guided search cannot create inputs outside the generator's
   support; generator bias and search policy effectiveness are kept
   separate when interpreting results.
-- A property whose features are all trivially covered on the first few
-  cases leaves the corpus with few novel registrations; the
-  scalar-priority replacement path exists precisely so a covered group
-  can still be refined by score.

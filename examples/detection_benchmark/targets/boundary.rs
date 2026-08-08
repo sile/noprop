@@ -53,13 +53,12 @@ fn run(
     } else {
         noprop::sample_u32(ctx)
     };
-    // Feedback: the mutant fails for x == 0, so the priority rewards
-    // values close to zero (measured by leading zeros, 0..=32) and the
-    // bucket observes that distance in finite steps. These calls draw
-    // no random bytes, so the generator stream is unchanged.
+    // Feedback: the mutant fails for x == 0, so the bucket observes
+    // values close to zero (measured by leading zeros, 0..=32) in
+    // finite steps. This call draws no random bytes, so the generator
+    // stream is unchanged.
     let zeros = x.leading_zeros();
     ctx.bucket("leading_zeros", zeros as u64);
-    ctx.maximize(zeros as f64 / 32.0);
     process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 
@@ -67,7 +66,6 @@ fn run_bb(sut_mutant: bool, ctx: &mut TestCaseContext, _obs: &Observe) -> Result
     let x = crate::bb::u32(ctx);
     let zeros = x.leading_zeros();
     ctx.bucket("leading_zeros", zeros as u64);
-    ctx.maximize(zeros as f64 / 32.0);
     process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 
@@ -83,13 +81,11 @@ fn run_domain(
     } else {
         noprop::sample_u32(ctx)
     };
-    // Feedback: the mutant fails for x == 1500, so the priority
-    // rewards values close to it (measured by the distance) and the
-    // bucket observes the coarse distance. These calls draw no random
-    // bytes, so the generator stream is unchanged.
+    // Feedback: the mutant fails for x == 1500, so the bucket observes
+    // the coarse distance. This call draws no random bytes, so the
+    // generator stream is unchanged.
     let dist = x.abs_diff(1500);
     ctx.bucket("distance_log", dist.leading_zeros() as u64);
-    ctx.maximize(1.0 - dist as f64 / u32::MAX as f64);
     process_domain(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 
@@ -101,7 +97,6 @@ fn run_domain_bb(
     let x = crate::bb::u32(ctx);
     let dist = x.abs_diff(1500);
     ctx.bucket("distance_log", dist.leading_zeros() as u64);
-    ctx.maximize(1.0 - dist as f64 / u32::MAX as f64);
     process_domain(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 
@@ -119,13 +114,11 @@ fn run_range(
     } else {
         noprop::sample_usize_in(ctx, 0..1024)
     };
-    // Feedback: the mutant fails for v == 1023, so the priority
-    // rewards values close to the range end and the bucket observes
-    // the distance. These calls draw no random bytes, so the generator
+    // Feedback: the mutant fails for v == 1023, so the bucket observes
+    // the distance. This call draws no random bytes, so the generator
     // stream is unchanged.
     let dist = v.abs_diff(1023);
     ctx.bucket("range_distance", dist as u64);
-    ctx.maximize(1.0 - dist as f64 / 1024.0);
     process_range(v, sut_mutant).map_err(|_| format!("process failed for v={v}"))
 }
 
@@ -135,7 +128,6 @@ fn run_range_bb(sut_mutant: bool, ctx: &mut TestCaseContext, _obs: &Observe) -> 
     let v = noprop::sample_usize_in(ctx, 0..1024);
     let dist = v.abs_diff(1023);
     ctx.bucket("range_distance", dist as u64);
-    ctx.maximize(1.0 - dist as f64 / 1024.0);
     process_range(v, sut_mutant).map_err(|_| format!("process failed for v={v}"))
 }
 
