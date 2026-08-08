@@ -33,7 +33,7 @@ pub(crate) enum Variant {
     /// under `Runner::run`.
     BoundaryBiased,
     /// Corpus-guided search admitting purely on feature novelty
-    /// (`Runner::run_corpus_guided`).
+    /// (`Runner::run_feedback_guided`).
     CorpusGuided,
 }
 
@@ -131,7 +131,7 @@ fn run_variant(
         Variant::Base | Variant::Uniform | Variant::Biased | Variant::BoundaryBiased => {
             runner.run(run)
         }
-        Variant::CorpusGuided => runner.run_corpus_guided(run),
+        Variant::CorpusGuided => runner.run_feedback_guided(run),
     }
 }
 

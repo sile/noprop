@@ -4,7 +4,8 @@ use std::panic::AssertUnwindSafe;
 
 use crate::error::SearchPolicy;
 use crate::rng::{
-    ChoiceMeta, ChoiceSequence, Feature, FeedbackState, XoshiroState, is_iteration_rejected,
+    ChoiceMeta, ChoiceSequence, Feature, FeedbackState, RejectionState, XoshiroState,
+    is_iteration_rejected,
 };
 use crate::{Error, Result, TestCaseContext};
 
@@ -37,7 +38,7 @@ const REJECTED_PICK_DENOM: u64 = 8;
 const MAX_GLOBAL_FEATURES: usize = 1024;
 
 /// Observability data from a [`Runner::run`](Runner::run) or
-/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// [`Runner::run_feedback_guided`](Runner::run_feedback_guided)
 /// invocation.
 ///
 /// Read from a [`Runner`] after the run returns via
@@ -65,7 +66,7 @@ pub struct Stats {
     /// exhausted [`sample_with_rejection`](crate::sample_with_rejection)
     /// helpers (they discard via `reject_case` internally, so the two
     /// origins share this single counter), and — under
-    /// [`Runner::run_corpus_guided`](Runner::run_corpus_guided) — the
+    /// [`Runner::run_feedback_guided`](Runner::run_feedback_guided) — the
     /// exploratory-replay draw cap discards.
     pub rejected_iterations: usize,
     /// Total number of top-level `sample_*` invocations across every
@@ -179,7 +180,7 @@ pub struct Runner {
 }
 
 /// Global rejection limit for a single [`Runner::run`](Runner::run) or
-/// [`Runner::run_corpus_guided`](Runner::run_corpus_guided)
+/// [`Runner::run_feedback_guided`](Runner::run_feedback_guided)
 /// invocation.
 ///
 /// Total rejected iterations (across all iteration indices) are capped
@@ -227,21 +228,21 @@ impl Runner {
 
     /// Observability counters from the most recent
     /// [`run`](Runner::run) or
-    /// [`run_corpus_guided`](Runner::run_corpus_guided)
+    /// [`run_feedback_guided`](Runner::run_feedback_guided)
     /// call on this runner. Returns [`Stats::default`] (all zeros)
     /// before a run has been invoked.
     pub fn stats(&self) -> Stats {
         self.stats
     }
 
-    /// Corpus-guided search over semantic features reported via
+    /// Feedback-guided search over semantic features reported via
     /// [`TestCaseContext::event`](crate::TestCaseContext::event) /
     /// [`bucket`](crate::TestCaseContext::bucket) /
     /// [`transition`](crate::TestCaseContext::transition).
     ///
     /// The property closure has the same shape as
     /// [`run`](Runner::run), so the same property can be exercised
-    /// under both policies. Feedback is not mandatory: an accepted
+    /// under both entry points. Feedback is not mandatory: an accepted
     /// case that reports no semantic feature is simply not interesting
     /// (it never enters the corpus), and no missing / invalid feedback
     /// error is raised.
@@ -265,16 +266,16 @@ impl Runner {
     /// ```
     /// let mut runner = noprop::Runner::new(0xDEAD_BEEF, 16);
     /// runner
-    ///     .run_corpus_guided(|ctx| {
+    ///     .run_feedback_guided(|ctx| {
     ///         let x = noprop::sample_u32(ctx);
     ///         if x == 0 {
     ///             ctx.event("zero");
     ///         }
     ///         Ok(())
     ///     })
-    ///     .expect("corpus-guided run must succeed");
+    ///     .expect("feedback-guided run must succeed");
     /// ```
-    pub fn run_corpus_guided<F>(&mut self, f: F) -> Result<()>
+    pub fn run_feedback_guided<F>(&mut self, f: F) -> Result<()>
     where
         F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
     {
@@ -291,49 +292,47 @@ impl Runner {
             let mut ctx = search.next_context();
             ctx.set_inside_runner();
             ctx.enable_corpus_guided();
-            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
-            let rejection = ctx.take_rejection();
+            let verdict = run_case(&f, &mut ctx);
             total_samples = total_samples.saturating_add(ctx.total_samples());
-
-            if let Some(state) = rejection {
-                rejected += 1;
-                if rejected > rejection_cap {
-                    // Cap exceeded: report before consuming the
-                    // feedback, so the error can carry the last
-                    // rejected case's semantic features and candidate
-                    // index (drained inside `too_many_rejections`).
-                    record_corpus_stats(self, &search, accepted, rejected, total_samples);
-                    return Err(too_many_rejections(
-                        self,
-                        &mut ctx,
-                        accepted,
-                        rejected,
-                        state.location,
-                        SearchPolicy::CorpusGuided,
-                    ));
-                }
-                // A rejected case may still register novel features and
-                // enter the rejected queue as scaffolding toward sparse
-                // preconditions.
-                let feedback = ctx.take_feedback();
-                if let FeedbackState::SemanticCoverage(mut cov) = feedback {
-                    let features = cov.take_features();
-                    if let Some(sequence) = ctx.take_sequence() {
-                        search.corpus.admit_rejected(sequence, features);
+            match verdict {
+                CaseVerdict::Rejected(state) => {
+                    rejected += 1;
+                    if rejected > rejection_cap {
+                        // Cap exceeded: report before consuming the
+                        // feedback, so the error can carry the last
+                        // rejected case's semantic features and
+                        // candidate index (drained inside
+                        // `too_many_rejections`).
+                        record_corpus_stats(self, &search, accepted, rejected, total_samples);
+                        return Err(too_many_rejections(
+                            self,
+                            &mut ctx,
+                            accepted,
+                            rejected,
+                            state.location,
+                            SearchPolicy::CorpusGuided,
+                        ));
                     }
+                    // A rejected case may still register novel features
+                    // and enter the rejected queue as scaffolding toward
+                    // sparse preconditions.
+                    let feedback = ctx.take_feedback();
+                    if let FeedbackState::SemanticCoverage(mut cov) = feedback {
+                        let features = cov.take_features();
+                        if let Some(sequence) = ctx.take_sequence() {
+                            search.corpus.admit_rejected(sequence, features);
+                        }
+                    }
+                    continue;
                 }
-                continue;
-            }
-
-            let message = match outcome {
-                Ok(Ok(())) => {
+                CaseVerdict::Completed(CaseOutcome::Passed) => {
                     // Accepted case: the reported features decide
                     // interest.
                     let feedback = ctx.take_feedback();
                     let mut cov = match feedback {
                         FeedbackState::SemanticCoverage(cov) => cov,
                         _ => unreachable!(
-                            "run_corpus_guided enables corpus-guided mode before each case"
+                            "run_feedback_guided enables corpus-guided mode before each case"
                         ),
                     };
                     let features = cov.take_features();
@@ -343,55 +342,35 @@ impl Runner {
                     accepted += 1;
                     continue;
                 }
-                Ok(Err(err)) => format!("{err}"),
-                Err(panic) => {
-                    // Defensive: an IterationRejected marker without a
-                    // stored rejection state shouldn't happen because
-                    // `reject_case` (and the exploratory draw cap)
-                    // always set the state before resuming unwind. Keep
-                    // the same guard as `run` so all entry points treat
-                    // a stray marker identically.
-                    if is_iteration_rejected(&*panic) {
-                        rejected += 1;
-                        if rejected > rejection_cap {
-                            record_corpus_stats(self, &search, accepted, rejected, total_samples);
-                            return Err(too_many_rejections(
-                                self,
-                                &mut ctx,
-                                accepted,
-                                rejected,
-                                std::panic::Location::caller(),
-                                SearchPolicy::CorpusGuided,
-                            ));
-                        }
-                        continue;
-                    }
-                    panic_message(panic)
+                CaseVerdict::Completed(CaseOutcome::Failed(message)) => {
+                    record_corpus_stats(self, &search, accepted, rejected, total_samples);
+                    let generated = ctx.take_generated();
+                    let feedback = ctx.take_feedback();
+                    let semantic_features = match feedback {
+                        FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
+                        _ => unreachable!(
+                            "run_feedback_guided enables corpus-guided mode before each case"
+                        ),
+                    };
+                    return Err(Error::from_panic(
+                        self.seed,
+                        accepted,
+                        self.iterations,
+                        message,
+                        generated,
+                        self.stats,
+                        SearchPolicy::CorpusGuided,
+                    )
+                    .with_semantic(
+                        semantic_features,
+                        // The failing case is the current attempt: it
+                        // is neither accepted nor rejected, so its
+                        // candidate index is one past the completed
+                        // attempts.
+                        accepted + rejected + 1,
+                    ));
                 }
-            };
-            record_corpus_stats(self, &search, accepted, rejected, total_samples);
-            let generated = ctx.take_generated();
-            let feedback = ctx.take_feedback();
-            let semantic_features = match feedback {
-                FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
-                _ => unreachable!("run_corpus_guided enables corpus-guided mode before each case"),
-            };
-            return Err(Error::from_panic(
-                self.seed,
-                accepted,
-                self.iterations,
-                message,
-                generated,
-                self.stats,
-                SearchPolicy::CorpusGuided,
-            )
-            .with_semantic(
-                semantic_features,
-                // The failing case is the current attempt: it is
-                // neither accepted nor rejected, so its candidate
-                // index is one past the completed attempts.
-                accepted + rejected + 1,
-            ));
+            }
         }
         record_corpus_stats(self, &search, accepted, rejected, total_samples);
         Ok(())
@@ -446,84 +425,104 @@ impl Runner {
 
         while accepted < self.iterations {
             ctx.clear_generated();
-            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
-            let rejection = ctx.take_rejection();
-
-            if let Some(state) = rejection {
-                // Rejection wins over any closure outcome. If the
-                // outcome is a non-marker user panic, drop it silently
-                // — the "user cannot swallow rejection" guarantee is
-                // symmetric: user cannot escalate rejection into a
-                // property failure either.
-                let _ = outcome;
-                rejected += 1;
-                if rejected > rejection_cap {
+            match run_case(&f, &mut ctx) {
+                CaseVerdict::Rejected(state) => {
+                    rejected += 1;
+                    if rejected > rejection_cap {
+                        record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
+                        let generated = ctx.take_generated();
+                        return Err(Error::from_too_many_rejections(
+                            self.seed,
+                            accepted,
+                            self.iterations,
+                            rejected,
+                            state.location,
+                            generated,
+                            self.stats,
+                            SearchPolicy::Uniform,
+                        ));
+                    }
+                    continue;
+                }
+                CaseVerdict::Completed(CaseOutcome::Passed) => {
+                    accepted += 1;
+                    continue;
+                }
+                CaseVerdict::Completed(CaseOutcome::Failed(message)) => {
                     record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
                     let generated = ctx.take_generated();
-                    return Err(Error::from_too_many_rejections(
+                    return Err(Error::from_panic(
                         self.seed,
                         accepted,
                         self.iterations,
-                        rejected,
-                        state.location,
+                        message,
                         generated,
                         self.stats,
                         SearchPolicy::Uniform,
                     ));
                 }
-                continue;
             }
-
-            let message = match outcome {
-                Ok(Ok(())) => {
-                    accepted += 1;
-                    continue;
-                }
-                Ok(Err(err)) => format!("{err}"),
-                Err(panic) => {
-                    // Defensive: an IterationRejected marker without a
-                    // stored rejection state shouldn't happen because
-                    // `reject_case` always sets the state before
-                    // resuming unwind. If it somehow does, treat it as
-                    // rejection rather than as a property failure with
-                    // an opaque payload.
-                    if is_iteration_rejected(&*panic) {
-                        rejected += 1;
-                        if rejected > rejection_cap {
-                            record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
-                            let generated = ctx.take_generated();
-                            let unknown_location = std::panic::Location::caller();
-                            return Err(Error::from_too_many_rejections(
-                                self.seed,
-                                accepted,
-                                self.iterations,
-                                rejected,
-                                unknown_location,
-                                generated,
-                                self.stats,
-                                SearchPolicy::Uniform,
-                            ));
-                        }
-                        continue;
-                    }
-                    panic_message(panic)
-                }
-            };
-            record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
-            let generated = ctx.take_generated();
-            return Err(Error::from_panic(
-                self.seed,
-                accepted,
-                self.iterations,
-                message,
-                generated,
-                self.stats,
-                SearchPolicy::Uniform,
-            ));
         }
         record_stats(self, accepted, rejected, ctx.total_samples(), 0, 0);
         Ok(())
     }
+}
+
+/// The closure's own verdict for one property case.
+enum CaseOutcome {
+    /// The closure returned `Ok(())` without rejecting.
+    Passed,
+    /// The closure returned `Err` or panicked; the run must fail with
+    /// this message.
+    Failed(String),
+}
+
+/// The runner-side verdict for one property case, after any stored
+/// rejection has been resolved.
+enum CaseVerdict {
+    /// The iteration was rejected (`reject_case`, or a stray
+    /// `IterationRejected` marker without stored state).
+    Rejected(RejectionState),
+    /// The closure finished without rejecting.
+    Completed(CaseOutcome),
+}
+
+/// Invoke the property closure once and classify the verdict.
+///
+/// Shared by the uniform and feedback-guided entry points: the
+/// `catch_unwind` boundary, the stored-rejection precedence, the
+/// stray-marker guard, and panic-message extraction are identical
+/// across modes.
+///
+/// A stored rejection wins over any closure outcome: a non-marker user
+/// panic raised alongside a rejection is dropped, so user code can
+/// neither swallow rejection nor escalate it into a property failure.
+fn run_case<F>(f: &F, ctx: &mut TestCaseContext) -> CaseVerdict
+where
+    F: Fn(&mut TestCaseContext) -> std::result::Result<(), Box<dyn std::error::Error>>,
+{
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(ctx)));
+    if let Some(state) = ctx.take_rejection() {
+        return CaseVerdict::Rejected(state);
+    }
+    let message = match outcome {
+        Ok(Ok(())) => return CaseVerdict::Completed(CaseOutcome::Passed),
+        Ok(Err(err)) => format!("{err}"),
+        Err(panic) => {
+            // Defensive: a stray IterationRejected marker without a
+            // stored rejection state shouldn't happen because
+            // `reject_case` (and the exploratory draw cap) always set
+            // the state before resuming unwind. If it somehow does,
+            // treat it as rejection rather than as a property failure
+            // with an opaque payload.
+            if is_iteration_rejected(&*panic) {
+                let location = std::panic::Location::caller();
+                return CaseVerdict::Rejected(RejectionState { location });
+            }
+            panic_message(panic)
+        }
+    };
+    CaseVerdict::Completed(CaseOutcome::Failed(message))
 }
 
 /// Extract a human-readable message from a `catch_unwind` payload.
@@ -1282,7 +1281,7 @@ fn stats_corpus_fields_reflect_observed_features() {
     // observed and exactly one entry is admitted.
     let mut runner = Runner::new(1, 4);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             ctx.bucket("b", 1);
             Ok(())
         })
@@ -1302,7 +1301,7 @@ fn stats_corpus_fields_respect_corpus_cap() {
     let case = std::cell::Cell::new(0u64);
     let mut runner = Runner::new(1, 100);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
@@ -1328,7 +1327,7 @@ fn stats_corpus_fields_on_too_many_rejections() {
     let case = std::cell::Cell::new(0u64);
     let mut runner = Runner::new(1, 103);
     let err = runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", i);
@@ -1382,7 +1381,7 @@ fn stats_corpus_fields_include_rejected_case_features() {
     let case = std::cell::Cell::new(0u64);
     let mut runner = Runner::new(1, 8);
     runner
-        .run_corpus_guided(|ctx| {
+        .run_feedback_guided(|ctx| {
             let i = case.get();
             case.set(i + 1);
             ctx.bucket("b", 1);
@@ -1402,7 +1401,7 @@ fn stats_corpus_fields_include_rejected_case_features() {
 fn stats_corpus_fields_zero_iterations() {
     let mut runner = Runner::new(1, 0);
     runner
-        .run_corpus_guided(|_ctx| {
+        .run_feedback_guided(|_ctx| {
             panic!("closure must not be invoked with zero iterations");
         })
         .expect("zero iterations must succeed");
