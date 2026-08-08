@@ -526,27 +526,33 @@ impl Ratio {
     }
 
     /// 1/2.
-    pub const ONE_HALF: Self = match Self::new(1, 2) {
-        Some(ratio) => ratio,
-        None => panic!("Ratio::ONE_HALF: invalid constant"),
+    pub const ONE_HALF: Self = Self {
+        numerator: 1,
+        denominator: 2,
     };
 
     /// 1/3.
-    pub const ONE_THIRD: Self = match Self::new(1, 3) {
-        Some(ratio) => ratio,
-        None => panic!("Ratio::ONE_THIRD: invalid constant"),
+    pub const ONE_THIRD: Self = Self {
+        numerator: 1,
+        denominator: 3,
     };
 
     /// 1/4.
-    pub const ONE_QUARTER: Self = match Self::new(1, 4) {
-        Some(ratio) => ratio,
-        None => panic!("Ratio::ONE_QUARTER: invalid constant"),
+    pub const ONE_QUARTER: Self = Self {
+        numerator: 1,
+        denominator: 4,
     };
 
     /// 1/10.
-    pub const ONE_TENTH: Self = match Self::new(1, 10) {
-        Some(ratio) => ratio,
-        None => panic!("Ratio::ONE_TENTH: invalid constant"),
+    pub const ONE_TENTH: Self = Self {
+        numerator: 1,
+        denominator: 10,
+    };
+
+    /// 1/100.
+    pub const ONE_HUNDREDTH: Self = Self {
+        numerator: 1,
+        denominator: 100,
     };
 }
 
@@ -1858,6 +1864,10 @@ mod tests {
         assert_eq!(Ratio::ONE_THIRD, Ratio::new(1, 3).expect("valid ratio"));
         assert_eq!(Ratio::ONE_QUARTER, Ratio::new(1, 4).expect("valid ratio"));
         assert_eq!(Ratio::ONE_TENTH, Ratio::new(1, 10).expect("valid ratio"));
+        assert_eq!(
+            Ratio::ONE_HUNDREDTH,
+            Ratio::new(1, 100).expect("valid ratio")
+        );
     }
 
     // === sample_ratio ===
