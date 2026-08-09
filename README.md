@@ -15,7 +15,7 @@ An imperative property-based testing library for Rust.
 - Imperative API — properties are plain `Fn(&mut TestCaseContext) -> Result<(), Box<dyn Error>>` closures that use ordinary Rust control flow (`if` / `match` / `for`) instead of combinator DSLs
 - Automatic value trace — each `noprop::sample_*` call is recorded at its source location and surfaced on failure, so the failing input is visible without extra plumbing
 - Feedback-guided search (`Runner::run_feedback_guided`) over semantic feedback (`event` / `bucket` / `transition`); its design is documented in
-  [docs/corpus-guided-search.md](https://github.com/sile/noprop/blob/main/docs/corpus-guided-search.md)
+  [docs/feedback-guided-search.md](https://github.com/sile/noprop/blob/main/docs/feedback-guided-search.md)
 
 Example
 -------

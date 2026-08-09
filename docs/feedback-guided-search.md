@@ -1,13 +1,18 @@
-# Corpus-Guided Search
+# Feedback-Guided Search
 
-This document describes the design of noprop's corpus-guided search
-policy, used for property testing with semantic feedback.
+This document describes the design of noprop's feedback-guided search
+policy, used for property testing over semantic feedback. Throughout
+the document, **corpus** refers specifically to the bounded collection
+of interesting cases that feedback-guided search maintains internally
+(the same bound reported by
+[`Stats::max_corpus_size`](crate::Stats::max_corpus_size)); it is not
+another name for feedback-guided search itself.
 
 ## Key Characteristics
 
 `Runner::run` samples inputs uniformly, so a property whose failure sits
 in a narrow input region is found only with probability proportional to
-that region's size. Corpus-guided search tracks semantic features —
+that region's size. Feedback-guided search tracks semantic features —
 finite events, caller-bucketed state values, and abstract state
 transitions — and steers the search toward inputs that cover features no
 earlier case covered.
@@ -35,15 +40,15 @@ record the mutated case's draws and features
            ────────► repeat
 ```
 
-`Runner::run_feedback_guided(closure)` is the entry point. The closure
-receives the same `&mut TestCaseContext` as `Runner::run`, so the same
-property runs under both. See the
-[`run_feedback_guided`](crate::Runner::run_feedback_guided) documentation
-for a runnable example.
+`Runner::run_feedback_guided(cases, closure)` is the entry point. The
+closure receives the same `&mut TestCaseContext` as `Runner::run`, so
+the same property runs under both. See the
+[`run_feedback_guided`](crate::Runner::run_feedback_guided)
+documentation for a runnable example.
 
 ## Feedback Protocol
 
-A corpus-guided case reports features by calling:
+A feedback-guided case reports features by calling:
 
 - `TestCaseContext::event(label)` — reaching a finite event
 - `TestCaseContext::bucket(label, value)` — a caller-bucketed state
@@ -65,9 +70,9 @@ Feedback is not mandatory:
 - A property failure (panic or returned `Err`) always beats any feedback
   consideration and is reported immediately.
 
-The semantic methods are no-ops outside corpus-guided mode: the uniform
-runner and `TestCaseContext::new` ignore them, and the feedback state in
-those modes does not allocate.
+The semantic methods are no-ops outside feedback-guided mode: the
+uniform runner and `TestCaseContext::new` ignore them, and the feedback
+state in those modes does not allocate.
 
 ## Choosing a feedback method
 
@@ -156,9 +161,9 @@ rolls, corpus picks, and mutation rolls, so a fixed seed yields a fixed
 sequence of cases and mutations.
 
 A failure report's reproduce hint reruns the exact failing seed with
-the original iteration budget and names
-`run_feedback_guided(|ctx| ...)`, so the rerun reproduces the same
-failure. The report also carries the failing case's candidate index
+the original case budget and names
+`run_feedback_guided(cases, |ctx| ...)`, so the rerun reproduces the
+same failure. The report also carries the failing case's candidate index
 (across accepted and rejected cases) and the semantic features the
 failing case reported, so the interesting input region is visible
 without exposing the choice sequence itself.
@@ -169,6 +174,6 @@ without exposing the choice sequence itself.
   odds, rejected-queue odds, feature caps) are initial guesses. Tuning
   them against synthetic targets is deferred until benchmark data
   exists.
-- Corpus-guided search cannot create inputs outside the generator's
+- Feedback-guided search cannot create inputs outside the generator's
   support; generator bias and search policy effectiveness are kept
   separate when interpreting results.
