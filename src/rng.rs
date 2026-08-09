@@ -1225,7 +1225,7 @@ impl TestCaseContext {
 /// alongside the closure's own return value. Recording is not woven
 /// into `TestCaseContext::new` or `Runner::run` because those production paths
 /// have no consumer for the sequence — [`RecordingSession`] is the
-/// only entry point that allocates one outside the targeted runner.
+/// only entry point that allocates one outside the feedback-guided runner.
 #[cfg(test)]
 pub(crate) struct RecordingSession {
     seed: u64,

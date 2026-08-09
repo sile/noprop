@@ -29,16 +29,18 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
-/// reproducible: rerunning `noprop::Runner::new(err.seed(), N)` with
-/// the `N` printed by the reproduce hint will hit the same failure
-/// again. The hint reuses the original iteration budget so the rerun
-/// also hits the same rejection cap.
+/// reproducible: rerunning
+/// `noprop::Runner::new(err.seed()).run(N, |ctx| ...)` (or
+/// `.run_feedback_guided(N, |ctx| ...)` for a feedback-guided failure)
+/// with the `N` printed by the reproduce hint will hit the same
+/// failure again. The hint reuses the original case budget so the
+/// rerun also hits the same rejection cap.
 ///
 /// A `TooManyRejections` failure — raised when
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
 /// the internal global limit is reached — reports the number of
 /// accepted cases that completed before the runner gave up as
-/// `case_index()`, so the same seed and iteration budget reproduce the
+/// `case_index()`, so the same seed and case budget reproduce the
 /// same exit.
 ///
 /// A feedback-guided failure report additionally carries the semantic
@@ -62,20 +64,21 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// list, so returning this from a `#[test]` function prints a
 /// self-contained failure report through the standard test harness.
 /// Both formats also print a reproduce hint reusing the original
-/// iteration budget:
+/// case budget. `run`'s hint prints:
 ///
 /// ```text
-/// reproduce with: noprop::Runner::new(0x..., N)
+/// reproduce with: noprop::Runner::new(0x...).run(N, |ctx| ...)
 /// ```
 ///
-/// The hint reuses the original iteration budget and names the failing
-/// entry point: `run`'s hint prints the bare constructor, while the
-/// feedback-guided hint appends
-/// `run_feedback_guided(|ctx| ...)`
-/// with the closure body left as a
-/// placeholder. In each case the original property closure must be
-/// supplied before rerunning; the re-run size never needs to be
-/// recomputed by hand.
+/// while a feedback-guided failure prints:
+///
+/// ```text
+/// reproduce with: noprop::Runner::new(0x...).run_feedback_guided(N, |ctx| ...)
+/// ```
+///
+/// In each case the closure body is a placeholder: the caller
+/// substitutes the original property closure before rerunning, and the
+/// re-run size never needs to be recomputed by hand.
 pub struct RunError {
     seed: u64,
     case_index: usize,
@@ -102,9 +105,9 @@ pub struct RunError {
 
 /// Semantic details carried by a feedback-guided failure report.
 ///
-/// Boxed so `RunError` stays small: the fields are only populated on the
-/// feedback-guided failure path, and the uniform / targeted entry points
-/// never touch them.
+/// Boxed so `RunError` stays small: the fields are only populated on
+/// the feedback-guided failure path, and the uniform entry point never
+/// touches them.
 struct SemanticFailureReport {
     /// Semantic features the failing case reported.
     features: Vec<Feature>,
