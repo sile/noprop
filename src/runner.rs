@@ -118,11 +118,6 @@ pub struct Stats {
 /// existing call sites. Observability data ([`Stats`]) is exposed via
 /// [`Runner::stats`] after `run` returns.
 ///
-/// Other PBT libraries call the case count `cases` (proptest),
-/// `examples` (Hypothesis), or `tests` (QuickCheck). noprop uses
-/// `cases` to stay consistent with [`RunError::case_index`] and
-/// [`Stats::accepted_cases`].
-///
 /// # Configuring the seed
 ///
 /// [`Runner::new`] takes `seed` as a required argument and
