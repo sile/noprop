@@ -27,6 +27,15 @@ jobs:
       # with other target selectors.
       - run: cargo test --all --lib --bins --tests --examples
       - run: cargo test --doc
+      # The reproduce example demonstrates a failure and exits
+      # non-zero by design; verify that expectation.
+      - name: Reproduce example must fail
+        run: |
+          set +e
+          cargo run --example reproduce > /dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 1
 
   lints:
     name: Lints

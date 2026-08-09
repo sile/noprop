@@ -1,0 +1,13 @@
+[package]
+name = "benchmark"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Detection benchmark harness for noprop: measures how many cases noprop needs to detect known mutants of small workloads"
+publish = false
+
+[dependencies]
+noprop = { path = ".." }
+noargs = "0.4"
+nojson = "0.3"

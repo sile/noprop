@@ -1,30 +1,10 @@
-//! Smoke tests for the detection benchmark harness.
+//! Smoke tests for the benchmark harness.
 //!
 //! These exercise the harness as a subprocess (`CARGO_BIN_EXE_...`):
 //! determinism, ground truth (base completes, mutants are detected by
 //! known witnesses), and summary regeneration from raw results.
 
 use std::process::Command;
-use std::sync::OnceLock;
-
-/// Build the harness once per test process: a filtered
-/// `cargo test --test ...` run does not build examples, and running
-/// `cargo build` on every invocation would race between the parallel
-/// tests while the binary is being replaced.
-static BUILD: OnceLock<()> = OnceLock::new();
-
-fn ensure_built() {
-    BUILD.get_or_init(|| {
-        let build = Command::new(env!("CARGO"))
-            .args(["build", "--example", "detection_benchmark"])
-            .status()
-            .expect("failed to run cargo build");
-        assert!(
-            build.success(),
-            "cargo build --example detection_benchmark failed"
-        );
-    });
-}
 
 /// Workload / mutant pairs registered by the harness, excluding the
 /// guard workload (which has no mutant and never detects).
@@ -52,17 +32,12 @@ fn run(args: &[&str]) -> String {
 
 fn run_with_stdin(args: &[&str], stdin: Option<&str>) -> String {
     use std::io::Write;
-    ensure_built();
-    let binary = format!(
-        "{}/target/debug/examples/detection_benchmark",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let mut child = Command::new(binary)
+    let mut child = Command::new(env!("CARGO_BIN_EXE_benchmark"))
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("failed to run the detection benchmark");
+        .expect("failed to run the benchmark");
     if let Some(input) = stdin {
         child
             .stdin
