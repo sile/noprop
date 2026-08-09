@@ -1,4 +1,6 @@
-//! Non-cryptographic seedable PRNG (xoshiro256** with SplitMix64 seed expansion).
+//! Entropy source, generated-value trace, and corpus-guided search
+//! machinery (draw recording / replay, semantic coverage) behind
+//! [`TestCaseContext`].
 
 use std::any::Any;
 use std::collections::VecDeque;
@@ -28,22 +30,34 @@ const MAX_CHOICES_PER_CASE: usize = 4096;
 /// not count as a new one.
 const MAX_FEATURES_PER_CASE: usize = 64;
 
-/// Seedable non-cryptographic PRNG used by all noprop generators.
+/// Per-case state threaded through every generator and property closure.
 ///
-/// The underlying algorithm is `xoshiro256**` with the initial 256-bit
-/// state derived from a caller-supplied `u64` seed through `SplitMix64`
-/// (Blackman/Vigna's recommended seeding procedure).
+/// A `TestCaseContext` carries everything a case needs:
 ///
-/// noprop never draws entropy from the OS or the system clock: the seed
-/// must always be provided by the caller. This makes every property test
-/// exactly reproducible from its seed.
+/// * **Entropy.** All random bytes come from an internal `xoshiro256**`
+///   state seeded from a caller-supplied `u64` through `SplitMix64`.
+///   noprop never draws entropy from the OS or the system clock: the
+///   seed must always be provided by the caller, which makes every
+///   property test exactly reproducible from its seed.
+/// * **Trace.** Every `noprop::sample_*` call records the produced
+///   value and its call site into the context; the trace is surfaced on
+///   failure via [`RunError::generated`](crate::RunError::generated).
+///   Raw PRNG state access is deliberately hidden so users cannot
+///   accidentally bypass that trace.
+/// * **Rejection.** [`TestCaseContext::reject_case`] unwinds out of the
+///   property closure to reject the current iteration. Prefer the
+///   bounded-retry helper
+///   [`sample_with_rejection`](crate::sample_with_rejection) when the
+///   exit is expressible as "retry this sample".
+/// * **Semantic feedback.** [`TestCaseContext::event`], `bucket`, and
+///   `transition` report per-case features consumed by
+///   [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
+///   to guide the corpus; they are only meaningful in that mode.
 ///
-/// The public methods are [`TestCaseContext::new`] and
-/// [`TestCaseContext::reject_case`]; all byte/word production happens
-/// through the `noprop::sample_*` free functions, which record the
-/// generated values into an internal trace surfaced on failure. Raw
-/// PRNG state access is deliberately hidden so users cannot
-/// accidentally bypass that trace.
+/// When driven by a [`Runner`](crate::Runner), the context additionally
+/// records each case's draws and replays mutated variants for
+/// corpus-guided search; that machinery is invisible to property
+/// closures.
 ///
 /// # Examples
 ///
