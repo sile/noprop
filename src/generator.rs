@@ -1137,18 +1137,18 @@ fn sample_ascii_printable_char_raw(ctx: &mut TestCaseContext) -> char {
 /// ```
 ///
 /// For the full finite domain without a specific range, use
-/// [`sample_f32_finite`].
+/// [`sample_f32`].
 ///
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
 #[track_caller]
-pub fn sample_f32(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
+pub fn sample_f32_in(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
     assert!(
         min.is_finite() && max.is_finite(),
-        "sample_f32: min and max must be finite"
+        "sample_f32_in: min and max must be finite"
     );
-    assert!(min < max, "sample_f32: min must be less than max");
+    assert!(min < max, "sample_f32_in: min must be less than max");
     let loc = Location::caller();
     // Build a 24-bit uniform value in [0, 1): construct a float in
     // [1, 2) by injecting 23 random bits into the mantissa of a fixed
@@ -1163,21 +1163,21 @@ pub fn sample_f32(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
 
 /// Uniformly-distributed `f64` in `[min, max)`.
 ///
-/// Same conventions as [`sample_f32`]: NaN and infinities are excluded from
+/// Same conventions as [`sample_f32_in`]: NaN and infinities are excluded from
 /// the output. Use [`sample_choice`] to include specific special values, or
 /// `f64::from_bits(sample_u64(ctx))` for an arbitrary bit pattern. For the
-/// full finite domain without a specific range, use [`sample_f64_finite`].
+/// full finite domain without a specific range, use [`sample_f64`].
 ///
 /// # Panics
 ///
 /// Panics if `min` or `max` is not finite, or if `min >= max`.
 #[track_caller]
-pub fn sample_f64(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
+pub fn sample_f64_in(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
     assert!(
         min.is_finite() && max.is_finite(),
-        "sample_f64: min and max must be finite"
+        "sample_f64_in: min and max must be finite"
     );
-    assert!(min < max, "sample_f64: min must be less than max");
+    assert!(min < max, "sample_f64_in: min must be less than max");
     let loc = Location::caller();
     // Same construction as sample_f32 but with 53-bit precision.
     let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(ctx)) >> 12);
@@ -1195,7 +1195,7 @@ pub fn sample_f64(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
 /// tests, where NaN and infinity are typically outside the format's
 /// support. For an arbitrary bit pattern (including NaN / ±∞), use
 /// `f32::from_bits(noprop::sample_u32(ctx))` instead. For a specific
-/// finite subrange, use [`sample_f32`].
+/// finite subrange, use [`sample_f32_in`].
 ///
 /// # Implementation
 ///
@@ -1208,11 +1208,11 @@ pub fn sample_f64(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
 ///
 /// ```
 /// let mut ctx = noprop::TestCaseContext::new(0);
-/// let x = noprop::sample_f32_finite(&mut ctx);
+/// let x = noprop::sample_f32(&mut ctx);
 /// assert!(x.is_finite());
 /// ```
 #[track_caller]
-pub fn sample_f32_finite(ctx: &mut TestCaseContext) -> f32 {
+pub fn sample_f32(ctx: &mut TestCaseContext) -> f32 {
     let loc = Location::caller();
     let v = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
         let candidate = f32::from_bits(u32::from_le_bytes(raw_bytes(ctx)));
@@ -1223,23 +1223,23 @@ pub fn sample_f32_finite(ctx: &mut TestCaseContext) -> f32 {
 }
 
 /// Uniformly-distributed finite `f64` over the full finite domain.
-/// Same conventions and rationale as [`sample_f32_finite`]; the
+/// Same conventions and rationale as [`sample_f32`]; the
 /// rejection rate over `u64` bit patterns is even lower (~2⁻¹¹ of
 /// patterns are non-finite).
 ///
 /// For an arbitrary bit pattern, use
 /// `f64::from_bits(noprop::sample_u64(ctx))`. For a specific finite
-/// subrange, use [`sample_f64`].
+/// subrange, use [`sample_f64_in`].
 ///
 /// # Examples
 ///
 /// ```
 /// let mut ctx = noprop::TestCaseContext::new(0);
-/// let x = noprop::sample_f64_finite(&mut ctx);
+/// let x = noprop::sample_f64(&mut ctx);
 /// assert!(x.is_finite());
 /// ```
 #[track_caller]
-pub fn sample_f64_finite(ctx: &mut TestCaseContext) -> f64 {
+pub fn sample_f64(ctx: &mut TestCaseContext) -> f64 {
     let loc = Location::caller();
     let v = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
         let candidate = f64::from_bits(u64::from_le_bytes(raw_bytes(ctx)));
@@ -1488,114 +1488,117 @@ mod tests {
     fn float_generators_are_deterministic() {
         let mut a = TestCaseContext::new(999);
         let mut b = TestCaseContext::new(999);
-        assert_eq!(sample_f32(&mut a, 0.0, 1.0), sample_f32(&mut b, 0.0, 1.0));
         assert_eq!(
-            sample_f64(&mut a, -100.0, 100.0),
-            sample_f64(&mut b, -100.0, 100.0)
+            sample_f32_in(&mut a, 0.0, 1.0),
+            sample_f32_in(&mut b, 0.0, 1.0)
+        );
+        assert_eq!(
+            sample_f64_in(&mut a, -100.0, 100.0),
+            sample_f64_in(&mut b, -100.0, 100.0)
         );
     }
 
     #[test]
-    fn sample_f32_stays_in_range() {
+    fn sample_f32_in_stays_in_range() {
         let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let v = sample_f32(&mut ctx, 10.0, 20.0);
+            let v = sample_f32_in(&mut ctx, 10.0, 20.0);
             assert!((10.0..20.0).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
-    fn sample_f64_stays_in_range() {
+    fn sample_f64_in_stays_in_range() {
         let mut ctx = TestCaseContext::new(1);
         for _ in 0..1000 {
-            let v = sample_f64(&mut ctx, -1.0, 1.0);
+            let v = sample_f64_in(&mut ctx, -1.0, 1.0);
             assert!((-1.0..1.0).contains(&v), "out of range: {v}");
         }
     }
 
     #[test]
-    fn sample_f32_covers_both_halves_of_range() {
+    fn sample_f32_in_covers_both_halves_of_range() {
         let mut ctx = TestCaseContext::new(1);
         let (mut low, mut high) = (false, false);
         for _ in 0..64 {
-            let v = sample_f32(&mut ctx, 0.0, 1.0);
+            let v = sample_f32_in(&mut ctx, 0.0, 1.0);
             low |= v < 0.5;
             high |= v >= 0.5;
             if low && high {
                 return;
             }
         }
-        panic!("sample_f32 covered only one half of the range");
+        panic!("sample_f32_in covered only one half of the range");
     }
 
     #[test]
     #[should_panic(expected = "must be less than")]
-    fn sample_f32_panics_when_min_equals_max() {
+    fn sample_f32_in_panics_when_min_equals_max() {
         let mut ctx = TestCaseContext::new(0);
-        let _ = sample_f32(&mut ctx, 5.0, 5.0);
+        let _ = sample_f32_in(&mut ctx, 5.0, 5.0);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
-    fn sample_f32_panics_on_nan() {
+    fn sample_f32_in_panics_on_nan() {
         let mut ctx = TestCaseContext::new(0);
-        let _ = sample_f32(&mut ctx, f32::NAN, 1.0);
+        let _ = sample_f32_in(&mut ctx, f32::NAN, 1.0);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
-    fn sample_f32_panics_on_infinity() {
+    fn sample_f32_in_panics_on_infinity() {
         let mut ctx = TestCaseContext::new(0);
-        let _ = sample_f32(&mut ctx, 0.0, f32::INFINITY);
+        let _ = sample_f32_in(&mut ctx, 0.0, f32::INFINITY);
     }
 
     #[test]
     #[should_panic(expected = "must be finite")]
-    fn sample_f64_panics_on_nan() {
+    fn sample_f64_in_panics_on_nan() {
         let mut ctx = TestCaseContext::new(0);
-        let _ = sample_f64(&mut ctx, 0.0, f64::NAN);
+        let _ = sample_f64_in(&mut ctx, 0.0, f64::NAN);
     }
 
-    // === sample_f32_finite / sample_f64_finite ===
+    // === sample_f32 / sample_f64 (full finite domain) ===
 
     #[test]
-    fn sample_f32_finite_always_returns_finite() {
+    fn sample_f32_always_returns_finite() {
         let mut ctx = TestCaseContext::new(1);
         for _ in 0..10_000 {
-            let v = sample_f32_finite(&mut ctx);
+            let v = sample_f32(&mut ctx);
             assert!(v.is_finite(), "expected finite, got {v:?}");
             assert!(!v.is_nan(), "expected non-NaN, got {v:?}");
         }
     }
 
     #[test]
-    fn sample_f64_finite_always_returns_finite() {
+    fn sample_f64_always_returns_finite() {
         let mut ctx = TestCaseContext::new(1);
         for _ in 0..10_000 {
-            let v = sample_f64_finite(&mut ctx);
+            let v = sample_f64(&mut ctx);
             assert!(v.is_finite(), "expected finite, got {v:?}");
             assert!(!v.is_nan(), "expected non-NaN, got {v:?}");
         }
     }
 
     #[test]
-    fn finite_float_generators_are_deterministic() {
+    fn full_domain_float_generators_are_deterministic() {
         let mut a = TestCaseContext::new(0xF10A_7000);
         let mut b = TestCaseContext::new(0xF10A_7000);
         for _ in 0..64 {
-            assert_eq!(sample_f32_finite(&mut a), sample_f32_finite(&mut b));
-            assert_eq!(sample_f64_finite(&mut a), sample_f64_finite(&mut b));
+            assert_eq!(sample_f32(&mut a), sample_f32(&mut b));
+            assert_eq!(sample_f64(&mut a), sample_f64(&mut b));
         }
     }
 
     #[test]
-    fn sample_f32_finite_covers_both_signs() {
+    fn sample_f32_covers_both_signs() {
         // ~half of finite f32 patterns are negative (the sign bit is
         // uniform over accepted candidates).
         let mut ctx = TestCaseContext::new(2);
         let (mut pos, mut neg) = (false, false);
         for _ in 0..256 {
-            let v = sample_f32_finite(&mut ctx);
+            let v = sample_f32(&mut ctx);
             if v > 0.0 {
                 pos = true;
             } else if v < 0.0 {
@@ -1605,7 +1608,7 @@ mod tests {
                 return;
             }
         }
-        panic!("sample_f32_finite did not cover both signs");
+        panic!("sample_f32 did not cover both signs");
     }
 
     // === sample_below ===

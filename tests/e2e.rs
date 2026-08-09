@@ -635,13 +635,13 @@ fn sample_string_records_one_entry_per_call() {
     }
 }
 
-// === sample_f32_finite / sample_f64_finite trace format ===
+// === sample_f32 / sample_f64 trace format ===
 
 #[test]
-fn sample_finite_floats_record_type_and_value() {
+fn sample_floats_record_type_and_value() {
     let result = noprop::Runner::new(5).run(1, |ctx| {
-        let a = noprop::sample_f32_finite(ctx);
-        let b = noprop::sample_f64_finite(ctx);
+        let a = noprop::sample_f32(ctx);
+        let b = noprop::sample_f64(ctx);
         panic!("stop with a={a} b={b}");
     });
     let err = result.expect_err("expected Err");
