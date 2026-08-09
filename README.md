@@ -53,20 +53,23 @@ More examples
 The [`examples/`](examples/) directory contains runnable demos of the
 larger recipes (each runs with `cargo run --example <name>`):
 
-- [`basics.rs`](examples/basics.rs) — the minimal property shape, the
-  common pitfalls (`Fn` closures and interior mutability, fixing the
-  seed for reproducible failures), and the short idioms for
-  random-length collections and boundary values
+- [`basics.rs`](examples/basics.rs) — the minimal property shape
+  against a real function, the common pitfalls (`Fn` closures and
+  interior mutability, environment-controlled seeds via
+  `seed_from_env_or_time`), and the short idioms for random-length
+  collections and boundary values
 - [`stateful.rs`](examples/stateful.rs) — model-based (stateful)
-  property testing with a bounded command loop
+  property testing of an LRU cache with a bounded command loop
 - [`feedback_guided.rs`](examples/feedback_guided.rs) — steering the
-  search toward interesting regions with `event` / `bucket` /
-  `transition`, and the `require_event` coverage gate
+  search toward interesting inputs (long log lines that exercise
+  truncation) with `event` / `bucket` / `transition`, and the
+  `require_event` coverage gate
 - [`rejection.rs`](examples/rejection.rs) — `sample_with_rejection`
-  for constrained draws, `reject_case` for whole-case preconditions
+  for constrained draws and `reject_case` for whole-case
+  preconditions, parsing `key=value` config lines
 - [`reproduce.rs`](examples/reproduce.rs) — reproducing a failing
-  seed with the failure report's reproduce hint (this one fails on
-  purpose)
+  seed via `NOPROP_SEED` and the failure report's reproduce hint
+  (this one fails on purpose)
 
 Status
 ------

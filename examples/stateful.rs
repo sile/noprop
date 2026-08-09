@@ -2,99 +2,158 @@
 //! system under test are driven by the same bounded command loop, and
 //! every step checks the SUT against the model.
 //!
+//! The SUT is an LRU cache — a data structure with subtle eviction
+//! rules — and the model is the plain rule it should implement.
+//!
 //! Run with: `cargo run --example stateful`
 
 use noprop::TestCaseContext;
+use std::collections::{HashMap, VecDeque};
 
-/// The commands the model and the SUT both understand.
-enum Command {
-    Push(u32),
-    Pop,
-}
-
-/// A stack with a fixed capacity, standing in for a real system.
+/// An LRU cache standing in for a real system (a session store, a
+/// rate-limit table, ...). Inserting beyond capacity evicts the least
+/// recently used entry; reading a key refreshes its recency.
 ///
-/// The model below mirrors the capacity decision, so a bug in the SUT
-/// (e.g. forgetting to decrement the length) fails one of the equality
-/// checks within a few commands.
-struct Stack {
-    buf: Vec<u32>,
-    len: usize,
+/// This implementation tracks recency with a per-access clock and
+/// finds the eviction victim by scanning — a plausible production
+/// choice, and a good place for off-by-one and stale-clock bugs. The
+/// model below implements the same rule with a recency-ordered list,
+/// so any mismatch between the two is caught within a few commands.
+struct LruCache {
+    capacity: usize,
+    /// key -> (value, last access clock).
+    entries: HashMap<u32, (u32, u64)>,
+    clock: u64,
 }
 
-impl Stack {
-    const CAPACITY: usize = 16;
-
-    fn new() -> Self {
+impl LruCache {
+    fn new(capacity: usize) -> Self {
         Self {
-            buf: vec![0; Self::CAPACITY],
-            len: 0,
+            capacity,
+            entries: HashMap::new(),
+            clock: 0,
         }
     }
 
-    /// Push `v`, returning `false` when the stack is full. The caller
-    /// mirrors the result in the model so both stay in lockstep.
-    fn push(&mut self, v: u32) -> bool {
-        if self.len >= Self::CAPACITY {
-            return false;
-        }
-        self.buf[self.len] = v;
-        self.len += 1;
-        true
+    fn get(&mut self, key: u32) -> Option<u32> {
+        let (value, _) = self.entries.get(&key).copied()?;
+        self.clock += 1;
+        self.entries
+            .get_mut(&key)
+            .expect("the key was just looked up")
+            .1 = self.clock;
+        Some(value)
     }
 
-    fn pop(&mut self) -> Option<u32> {
-        if self.len == 0 {
-            None
-        } else {
-            self.len -= 1;
-            Some(self.buf[self.len])
+    fn put(&mut self, key: u32, value: u32) {
+        if let Some(entry) = self.entries.get_mut(&key) {
+            *entry = (value, self.clock);
+            return;
         }
+        if self.entries.len() >= self.capacity
+            && let Some(victim) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, last_used))| *last_used)
+                .map(|(&k, _)| k)
+        {
+            self.entries.remove(&victim);
+        }
+        self.entries.insert(key, (value, self.clock));
     }
 }
 
-/// Pick the next command: pushes are more common than pops so the
-/// stack actually grows and shrinks over a run.
-fn sample_command(ctx: &mut TestCaseContext) -> Command {
-    match noprop::sample_usize_in(ctx, 0..8) {
-        0 => Command::Pop,
-        _ => Command::Push(noprop::sample_u32(ctx)),
+/// The abstract model of an LRU cache: a recency-ordered list of keys
+/// and a key -> value map, with the same eviction rule.
+struct Model {
+    capacity: usize,
+    order: VecDeque<u32>,
+    values: HashMap<u32, u32>,
+}
+
+impl Model {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::new(),
+            values: HashMap::new(),
+        }
     }
+
+    fn get(&mut self, key: u32) -> Option<u32> {
+        let value = self.values.get(&key).copied()?;
+        self.touch(key);
+        Some(value)
+    }
+
+    fn put(&mut self, key: u32, value: u32) {
+        if let Some(entry) = self.values.get_mut(&key) {
+            *entry = value;
+            self.touch(key);
+            return;
+        }
+        if self.values.len() >= self.capacity
+            && let Some(evicted) = self.order.pop_back()
+        {
+            self.values.remove(&evicted);
+        }
+        self.values.insert(key, value);
+        self.order.push_front(key);
+    }
+
+    fn touch(&mut self, key: u32) {
+        if let Some(pos) = self.order.iter().position(|&k| k == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_front(key);
+    }
+}
+
+/// Pick the next command: reads and writes of small integer keys, so
+/// cache hits, misses, and evictions all occur within a run.
+fn sample_command(ctx: &mut TestCaseContext) -> (u32, Option<u32>) {
+    let key = noprop::sample_usize_in(ctx, 0..8) as u32;
+    let write = noprop::sample_bool(ctx);
+    let value = write.then(|| noprop::sample_u32(ctx));
+    (key, value)
 }
 
 fn main() -> noprop::TestResult {
-    // `transition` reports each model step to the corpus-guided
+    // `transition` reports each model step to the feedback-guided
     // search, so `run_feedback_guided` steers toward longer command
-    // chains instead of restarting the model from scratch every case.
-    let mut runner = noprop::Runner::new(0xDEAD_BEEF);
+    // chains instead of restarting the cache from scratch every case.
+    let seed = noprop::seed_from_env_or_time("NOPROP_SEED")?;
+    let mut runner = noprop::Runner::new(seed);
     runner.run_feedback_guided(256, |ctx| {
-        let mut model: Vec<u32> = Vec::new();
-        let mut sut = Stack::new();
+        let mut model = Model::new(4);
+        let mut sut = LruCache::new(4);
 
         for step in 0..64 {
-            let cmd = sample_command(ctx);
-            let (model_len, model_top) = match cmd {
-                Command::Push(v) => {
-                    if sut.push(v) {
-                        model.push(v);
-                    }
-                    (model.len(), None)
-                }
-                Command::Pop => {
-                    let expected = model.pop();
-                    let actual = sut.pop();
+            let (key, write) = sample_command(ctx);
+            match write {
+                None => {
+                    let expected = model.get(key);
+                    let actual = sut.get(key);
                     assert_eq!(
                         expected, actual,
-                        "step {step}: model said {expected:?}, SUT returned {actual:?}"
+                        "step {step}: get({key}) — model said {expected:?}, SUT returned {actual:?}"
                     );
-                    (model.len(), actual)
                 }
-            };
-            ctx.transition("stack", step as u64, model_len as u64);
-            let _ = model_top;
+                Some(value) => {
+                    model.put(key, value);
+                    sut.put(key, value);
+                    assert_eq!(
+                        sut.get(key),
+                        Some(value),
+                        "step {step}: put({key}, {value}) must be readable back"
+                    );
+                }
+            }
+            let state = model.order.iter().copied().collect::<Vec<_>>();
+            ctx.transition("lru", step as u64, state.len() as u64);
         }
         Ok(())
     })?;
-    println!("stateful property: passed (256 cases of 64-step command chains)");
+    println!("stateful property: passed (256 cases of 64-step get/put chains)");
     Ok(())
 }

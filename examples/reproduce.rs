@@ -2,25 +2,44 @@
 //! The failure report prints a `reproduce with:` hint, and re-running
 //! the same seed hits the identical failure case.
 //!
+//! The seed is read from `NOPROP_SEED` (falling back to a fixed
+//! default), so the workflow is: run, copy the reported seed into
+//! `NOPROP_SEED`, re-run — same failure, same case index.
+//!
 //! This example fails on purpose — a non-zero exit code is the
 //! expected behavior (CI verifies it).
 
+/// A property whose failure is value-dependent: roughly half of the
+/// draws violate the assertion, so the failing case index is decided
+/// by the seed.
 fn run(seed: u64) -> noprop::RunResult {
-    let case = std::cell::Cell::new(0usize);
     noprop::Runner::new(seed).run(64, |ctx| {
-        let n = case.get();
-        case.set(n + 1);
-        let _ = noprop::sample_u32(ctx);
-        if n >= 3 {
-            panic!("boom at case {n}");
-        }
+        let x = noprop::sample_u32(ctx);
+        assert!(x < 0x8000_0000, "high bit set: {x:#010x}");
         Ok(())
     })
 }
 
+/// Parse a seed from the environment: accepts decimal and `0x`-prefixed
+/// hex with optional `_` separators, matching the format printed by
+/// the failure report.
+fn parse_seed(s: &str) -> Option<u64> {
+    let cleaned: String = s.chars().filter(|c| *c != '_').collect();
+    if let Some(hex) = cleaned.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        cleaned.parse().ok()
+    }
+}
+
 fn main() {
-    // A seed whose failure lands at a non-zero case index.
-    let seed = 0xBAD_CAFE_1234_5678;
+    // `NOPROP_SEED` overrides; the fixed default keeps the demo
+    // deterministic without setup (and the CI expectation stable).
+    let seed = match std::env::var("NOPROP_SEED") {
+        Ok(s) => parse_seed(&s).expect("NOPROP_SEED must be decimal or 0x-prefixed hex"),
+        // Fails at case 3, so the demo shows a non-trivial case index.
+        Err(_) => 0x00FF_00FF_00FF_00FF,
+    };
     let err = run(seed).expect_err("this seed must fail");
 
     eprintln!("--- first run ---");
@@ -38,6 +57,8 @@ fn main() {
         "the replay must fail at the same case index"
     );
     println!("reproduced: seed {seed:#018x} fails at case {first_case} on every run");
+    println!("to reproduce this failure outside this example:");
+    println!("  NOPROP_SEED={seed:#018x} cargo run --example reproduce");
 
     // Deliberate failure: this example demonstrates the failure
     // report, so exiting non-zero is the expected outcome.
