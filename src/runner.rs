@@ -51,8 +51,6 @@ const MAX_GLOBAL_FEATURES: usize = 1024;
 /// [`Stats::max_corpus_size`](Stats::max_corpus_size)) are only
 /// meaningful for corpus-guided runs and are 0 otherwise.
 ///
-/// As an unstable v0.0.x API, fields may be added over time, which
-/// breaks external struct-literal construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
     /// Number of cases whose closure completed without calling
