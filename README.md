@@ -47,43 +47,38 @@ let x = noprop::sample_with_boundaries(
 );
 ```
 
+More examples
+-------------
+
+The [`examples/`](examples/) directory contains runnable demos of the
+larger recipes (each runs with `cargo run --example <name>`):
+
+- [`basics.rs`](examples/basics.rs) — the minimal property shape
+  against a real function, the common pitfalls (`Fn` closures and
+  interior mutability, environment-controlled seeds via
+  `seed_from_env_or_time`), and the short idioms for random-length
+  collections and boundary values
+- [`stateful.rs`](examples/stateful.rs) — model-based (stateful)
+  property testing of an LRU cache with a bounded command loop
+- [`feedback_guided.rs`](examples/feedback_guided.rs) — steering the
+  search toward interesting inputs (long log lines that exercise
+  truncation) with `event` / `bucket` / `transition`, and the
+  `require_event` coverage gate
+- [`rejection.rs`](examples/rejection.rs) — `sample_with_rejection`
+  for constrained draws and `reject_case` for whole-case
+  preconditions, parsing `key=value` config lines
+- [`reproduce.rs`](examples/reproduce.rs) — reproducing a failing
+  seed via `NOPROP_SEED` and the failure report's reproduce hint
+  (this one fails on purpose)
+
 Status
 ------
 
 Early development (`v0.0.x`). API is unstable and may change without notice.
 
-Detection benchmark
--------------------
+Benchmark
+---------
 
-`examples/detection_benchmark` measures how many cases noprop
-needs to detect known mutants of small workloads (high-frequency,
-boundary, combination, dependent, bst, stepping, stateful) under
-different generator variants, and how broad the generated inputs are
-(semantic buckets; reported by the dependent workload, whose base
-variant shows the full breadth). The guard workload checks that the
-corpus-guided machinery stays bounded.
+The detection benchmark harness lives in the `benchmark/` workspace
+crate; see its [`README.md`](benchmark/README.md) for how to run it.
 
-```
-# Run a single task: print one raw-result JSON line.
-cargo run --example detection_benchmark -- run \
-    --workload bst --mutant insert_duplicate_key --variant uniform --seed 0
-
-# Run every task over a seed cohort: one raw-result JSON line per trial.
-cargo run --example detection_benchmark -- run-all \
-    --cases 1000 --seeds 0,1,2,3,4,5,6,7 > raw.jsonl
-
-# Regenerate the bucket summary from raw results.
-cargo run --example detection_benchmark -- summary < raw.jsonl
-```
-
-The `base` variant (ground-truth SUT) completes every property and is
-used to verify the workloads; the comparison variants are `uniform`,
-`biased`, `boundary-biased`, and `corpus-guided`. Raw results are
-written as format-versioned JSON lines, so summaries can always be
-regenerated from a saved cohort. Smoke tests live in
-`tests/detection_benchmark.rs`.
-
-These numbers measure only the chosen workloads, mutants, seed
-cohort, and case budget. They are not a complete measure of
-generator quality: a generator that wins on one target may lose on
-another, and detection speed says nothing about shrinking quality.

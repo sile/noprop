@@ -1,4 +1,4 @@
-//! Detection benchmark harness.
+//! Benchmark harness.
 //!
 //! Subcommands:
 //!
@@ -19,12 +19,12 @@ use noargs::{Error, cmd, opt, raw_args};
 
 fn main() -> Result<(), Error> {
     let mut args = raw_args();
-    args.metadata_mut().app_name = "noprop-detection-benchmark";
+    args.metadata_mut().app_name = "noprop-benchmark";
     args.metadata_mut().app_description =
         "Measure detection rate and cases-to-detection of noprop generators.";
 
     if noargs::VERSION_FLAG.take(&mut args).is_present() {
-        println!("noprop-detection-benchmark {}", env!("CARGO_PKG_VERSION"));
+        println!("noprop-benchmark {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     noargs::HELP_FLAG.take_help(&mut args);

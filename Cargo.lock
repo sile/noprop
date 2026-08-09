@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "benchmark"
+version = "0.0.0"
+dependencies = [
+ "noargs",
+ "nojson",
+ "noprop",
+]
+
+[[package]]
 name = "noargs"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17,7 +26,3 @@ checksum = "e75dfcef0ca5529a58a350e6b80783c98521a70f73fb1c4f0d4b661ba892d766"
 [[package]]
 name = "noprop"
 version = "0.0.3"
-dependencies = [
- "noargs",
- "nojson",
-]
