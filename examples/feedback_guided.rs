@@ -93,15 +93,17 @@ fn main() -> noprop::TestResult {
     })?;
     println!("bucket / transition reporting: passed");
 
-    // === coverage gate: require_event ===
+    // === coverage gate: Cell counter + run-after assert ===
     //
     // Reporting an event steers the search, but a run that never
-    // reaches the region still passes silently. `Runner::require_event`
-    // turns "should reach" into "must reach": when the declared event
-    // is not reported even once, the run fails with
-    // RequiredEventNotReached instead of passing vacuously.
+    // reaches the region still passes silently. The coverage gate is
+    // spelled out with an interior-mutability counter: the `event`
+    // report stays as the search signal, the same condition bumps the
+    // counter, and a run-after assert turns "should reach" into "must
+    // reach". The runner's Display embeds the seed and stats so the
+    // failure is reproducible.
+    let long_line_hits = std::cell::Cell::new(0usize);
     let mut runner = noprop::Runner::new(0xFEED);
-    runner.require_event("long-line");
     runner.run_feedback_guided(256, |ctx| {
         let len = noprop::sample_usize_in(ctx, 0..=24);
         let line = noprop::sample_string(ctx, len);
@@ -109,12 +111,17 @@ fn main() -> noprop::TestResult {
         let _ = ingest(&line, &mut buf);
         if len > BUF_SIZE {
             ctx.event("long-line");
+            long_line_hits.set(long_line_hits.get() + 1);
         }
         Ok(())
     })?;
+    assert!(
+        long_line_hits.get() > 0,
+        "the `long-line` event must be reached at least once\n{runner}"
+    );
     println!(
         "coverage gate: passed (the `long-line` event was reached {} times)",
-        runner.stats().required_event_hits
+        long_line_hits.get()
     );
     Ok(())
 }
