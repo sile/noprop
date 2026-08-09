@@ -24,7 +24,7 @@ const TASKS: &[(&str, &str)] = &[
 const GUARD_TASKS: &[(&str, &str)] = &[("guard", "reports_unbounded_buckets")];
 
 /// Comparison variants run by `run-all`.
-const VARIANTS: &[&str] = &["uniform", "biased", "boundary-biased", "corpus-guided"];
+const VARIANTS: &[&str] = &["uniform", "biased", "boundary-biased", "feedback-guided"];
 
 fn run(args: &[&str]) -> String {
     run_with_stdin(args, None)

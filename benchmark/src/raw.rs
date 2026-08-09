@@ -53,10 +53,10 @@ pub(crate) struct RawResult {
     pub rejected_cases: usize,
     pub total_samples: usize,
     /// Distinct semantic features registered in the global observation
-    /// set (corpus-guided variants only; 0 otherwise).
+    /// set (feedback-guided variants only; 0 otherwise).
     pub discovered_features: usize,
     /// Combined accepted + rejected corpus size at the end of the run
-    /// (corpus-guided variants only; 0 otherwise).
+    /// (feedback-guided variants only; 0 otherwise).
     pub max_corpus_size: usize,
     /// Workload-specific observations gathered during the run
     /// (e.g. the dependent workload's semantic-bucket reach counts).

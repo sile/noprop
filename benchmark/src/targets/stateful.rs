@@ -2,7 +2,7 @@
 //! Each case applies `advance` / `reset` commands to an abstract
 //! state; the mutant fails once the state reaches 7. Every case runs
 //! the same code path — only the transition combination differs, which
-//! is exactly what the corpus-guided search observes.
+//! is exactly what feedback-guided search observes.
 
 use super::{Observe, Task, Workload};
 use noprop::TestCaseContext;

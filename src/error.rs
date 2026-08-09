@@ -95,15 +95,15 @@ pub struct RunError {
     /// The runner entry point that produced this failure. Switches the
     /// reproduce hint.
     policy: SearchPolicy,
-    /// Semantic details of the failing case (corpus-guided runs only;
+    /// Semantic details of the failing case (feedback-guided runs only;
     /// `None` otherwise).
     semantic: Option<Box<SemanticFailureReport>>,
 }
 
-/// Semantic details carried by a corpus-guided failure report.
+/// Semantic details carried by a feedback-guided failure report.
 ///
 /// Boxed so `RunError` stays small: the fields are only populated on the
-/// corpus-guided failure path, and the uniform / targeted entry points
+/// feedback-guided failure path, and the uniform / targeted entry points
 /// never touch them.
 struct SemanticFailureReport {
     /// Semantic features the failing case reported.
@@ -119,7 +119,7 @@ pub(crate) enum SearchPolicy {
     /// [`Runner::run`](crate::Runner::run).
     Uniform,
     /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
-    CorpusGuided,
+    FeedbackGuided,
 }
 
 /// The kind of a [`RunError`], for type-safe dispatch on the failure
@@ -194,7 +194,7 @@ impl RunError {
     }
 
     /// Attach the semantic features and candidate index of a failing
-    /// corpus-guided case. Used by
+    /// feedback-guided case. Used by
     /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
     /// and the too-many-rejections exit path.
     pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
@@ -298,7 +298,7 @@ impl RunError {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original case budget so reruns hit the same
-    /// rejection cap. In corpus-guided mode the closure body
+    /// rejection cap. In feedback-guided mode the closure body
     /// is a placeholder: the caller substitutes the original property
     /// closure.
     fn reproduce_command(&self) -> String {
@@ -307,7 +307,7 @@ impl RunError {
                 "noprop::Runner::new({:#018x}).run({}, |ctx| ...)",
                 self.seed, self.cases
             ),
-            SearchPolicy::CorpusGuided => format!(
+            SearchPolicy::FeedbackGuided => format!(
                 "noprop::Runner::new({:#018x}).run_feedback_guided({}, |ctx| ...)",
                 self.seed, self.cases
             ),

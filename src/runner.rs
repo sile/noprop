@@ -32,7 +32,7 @@ const RANDOM_RESTART_DENOM: u64 = 8;
 const REJECTED_PICK_DENOM: u64 = 8;
 
 /// Maximum number of semantic features observed across a whole
-/// corpus-guided run. After the cap is reached, new features are not
+/// feedback-guided run. After the cap is reached, new features are not
 /// registered and never make a case interesting, so a high-cardinality
 /// property cannot grow the registry without bound.
 const MAX_GLOBAL_FEATURES: usize = 1024;
@@ -49,7 +49,7 @@ const MAX_GLOBAL_FEATURES: usize = 1024;
 /// every case, accepted or rejected). The corpus fields
 /// ([`Stats::discovered_features`](Stats::discovered_features) and
 /// [`Stats::max_corpus_size`](Stats::max_corpus_size)) are only
-/// meaningful for corpus-guided runs and are 0 otherwise.
+/// meaningful for feedback-guided runs and are 0 otherwise.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
@@ -77,14 +77,14 @@ pub struct Stats {
     /// those cases still consumed generator budget.
     pub total_samples: usize,
     /// Number of distinct semantic features registered in the global
-    /// observation set during a corpus-guided run, capped at 1024
+    /// observation set during a feedback-guided run, capped at 1024
     /// (`MAX_GLOBAL_FEATURES`). Features registered by rejected cases
     /// are included; features of the failing case itself are not (a
     /// case is registered only after its verdict, and the failing case
     /// never reaches admission).
     pub discovered_features: usize,
     /// Combined size of the semantic corpus (accepted + rejected) at
-    /// the end of a corpus-guided run. The combined size only grows
+    /// the end of a feedback-guided run. The combined size only grows
     /// and is trimmed back to the corpus cap (64) when full, so the
     /// value at the end of the run equals the maximum; the transient
     /// overshoot just before eviction is not counted (admission
@@ -303,7 +303,7 @@ impl Runner {
                             self,
                             &mut ctx,
                             state.location,
-                            SearchPolicy::CorpusGuided,
+                            SearchPolicy::FeedbackGuided,
                             cases,
                         ));
                     }
@@ -326,7 +326,7 @@ impl Runner {
                     let mut cov = match feedback {
                         FeedbackState::SemanticCoverage(cov) => cov,
                         _ => unreachable!(
-                            "run_feedback_guided enables corpus-guided mode before each case"
+                            "run_feedback_guided enables feedback-guided mode before each case"
                         ),
                     };
                     let features = cov.take_features();
@@ -343,7 +343,7 @@ impl Runner {
                     let semantic_features = match feedback {
                         FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
                         _ => unreachable!(
-                            "run_feedback_guided enables corpus-guided mode before each case"
+                            "run_feedback_guided enables feedback-guided mode before each case"
                         ),
                     };
                     return Err(RunError::from_panic(
@@ -352,7 +352,7 @@ impl Runner {
                         message,
                         generated,
                         self.stats,
-                        SearchPolicy::CorpusGuided,
+                        SearchPolicy::FeedbackGuided,
                     )
                     .with_semantic(
                         semantic_features,
@@ -606,7 +606,7 @@ fn record_corpus_stats(
 /// `record_corpus_stats`); this helper reads them back from
 /// `runner.stats`.
 ///
-/// For corpus-guided runs, the error additionally carries the semantic
+/// For feedback-guided runs, the error additionally carries the semantic
 /// features of the last rejected case and its candidate index (the
 /// ordinal of the attempt that exceeded the cap, derived from the
 /// recorded stats: `accepted + rejected`).
@@ -626,7 +626,7 @@ fn too_many_rejections(
         runner.stats,
         policy,
     );
-    if matches!(policy, SearchPolicy::CorpusGuided) {
+    if matches!(policy, SearchPolicy::FeedbackGuided) {
         let features = match ctx.take_feedback() {
             FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
             _ => Vec::new(),
@@ -652,7 +652,7 @@ struct SemanticEntry {
     novel: Vec<Feature>,
 }
 
-/// Bounded corpus of interesting cases for corpus-guided search.
+/// Bounded corpus of interesting cases for feedback-guided search.
 ///
 /// Accepted and rejected cases live in separate queues; the combined
 /// size is capped at `CORPUS_SIZE`. Admission and eviction are

@@ -63,8 +63,8 @@ fn main() -> noprop::TestResult {
     let second_half_mean = |xs: &[usize]| xs[128..].iter().sum::<usize>() as f64 / 128.0;
     let uniform_mean = second_half_mean(&uniform);
     let guided_mean = second_half_mean(&guided);
-    println!("uniform run:       second-half mean line length = {uniform_mean:.1}");
-    println!("corpus-guided run: second-half mean line length = {guided_mean:.1}");
+    println!("uniform run:         second-half mean line length = {uniform_mean:.1}");
+    println!("feedback-guided run: second-half mean line length = {guided_mean:.1}");
     println!(
         "the guided run concentrates cases on overlong lines: {} of 256",
         guided.iter().filter(|&&l| l > BUF_SIZE).count()
