@@ -25,7 +25,7 @@ pub(crate) fn u32(ctx: &mut TestCaseContext) -> u32 {
     }
 }
 
-/// Draw one `u64`: same boundary mix as [`u32`], over the `u64` set.
+/// Draw one `u64`: same boundary mix as [`u32()`], over the `u64` set.
 pub(crate) fn u64(ctx: &mut TestCaseContext) -> u64 {
     if noprop::sample_usize_in(ctx, 0..MIX_DENOMINATOR) == 0 {
         noprop::sample_choice(ctx, &[0, 1, u64::MAX, u64::MAX - 1])
