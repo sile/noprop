@@ -94,18 +94,6 @@ pub struct TestCaseContext {
     /// [`TestCaseContext::new`]; a runner switches it to
     /// `SemanticCoverage` before running its case loop.
     feedback: FeedbackState,
-    /// Label of the event that must be reported at least once during
-    /// the run, or `None` when no required event was declared via
-    /// [`Runner::require_event`](crate::Runner::require_event). Set by
-    /// the runner at the start of each case; [`event`](Self::event)
-    /// counts reports of this label into `required_event_hits` even
-    /// outside corpus-guided mode.
-    required_event_label: Option<&'static str>,
-    /// Number of times the required event label was reported during
-    /// the current case. The runner drains this at every case boundary
-    /// (see [`take_required_event_hits`](Self::take_required_event_hits)),
-    /// so the sum across cases equals the run-wide hit count.
-    required_event_hits: usize,
 }
 
 /// Private feedback state carried by every [`TestCaseContext`].
@@ -663,8 +651,6 @@ impl TestCaseContext {
             inside_runner: false,
             total_samples: 0,
             feedback: FeedbackState::Disabled,
-            required_event_label: None,
-            required_event_hits: 0,
         }
     }
 
@@ -686,8 +672,6 @@ impl TestCaseContext {
             inside_runner: false,
             total_samples: 0,
             feedback: FeedbackState::Disabled,
-            required_event_label: None,
-            required_event_hits: 0,
         }
     }
 
@@ -713,8 +697,6 @@ impl TestCaseContext {
             inside_runner: false,
             total_samples: 0,
             feedback: FeedbackState::Disabled,
-            required_event_label: None,
-            required_event_hits: 0,
         }
     }
 
@@ -1163,22 +1145,11 @@ impl TestCaseContext {
     /// or a directly constructed context) this is an allocation-free
     /// no-op.
     ///
-    /// The one exception is the required event: when
-    /// [`Runner::require_event`](crate::Runner::require_event) was
-    /// declared, reports of that exact label are counted (outside the
-    /// semantic-feature machinery, so no cap applies) even under plain
-    /// `run`, so the coverage gate works in every mode.
-    ///
     /// Repeating the same event within one case saturates into a fixed
     /// hit-count bucket (1 / 2-3 / 4-7 / 8+ occurrences), so a case
     /// that visits an event many times is distinguished from one that
     /// visits it once, without unbounded counts.
     pub fn event(&mut self, label: &'static str) {
-        if let Some(required) = self.required_event_label
-            && required == label
-        {
-            self.required_event_hits += 1;
-        }
         if let FeedbackState::SemanticCoverage(cov) = &mut self.feedback {
             cov.report_event(label);
         }
@@ -1218,23 +1189,6 @@ impl TestCaseContext {
     /// [`take_feedback`](Self::take_feedback) at the case boundary.
     pub(crate) fn enable_corpus_guided(&mut self) {
         self.feedback = FeedbackState::SemanticCoverage(SemanticCoverage::default());
-    }
-
-    /// Set the required-event label for the upcoming case and reset the
-    /// per-case hit counter. Called by the runner at the start of each
-    /// case when [`Runner::require_event`](crate::Runner::require_event)
-    /// was declared.
-    pub(crate) fn set_required_event_label(&mut self, label: Option<&'static str>) {
-        self.required_event_label = label;
-        self.required_event_hits = 0;
-    }
-
-    /// Drain the number of required-event reports collected since the
-    /// last reset. Called by the runner at every case boundary so the
-    /// per-case counter accumulates into the run-wide
-    /// [`Stats::required_event_hits`](crate::Stats::required_event_hits).
-    pub(crate) fn take_required_event_hits(&mut self) -> usize {
-        std::mem::take(&mut self.required_event_hits)
     }
 
     /// Drain the case-local feedback state, resetting to disabled.
@@ -1341,8 +1295,6 @@ impl ReplaySession {
             inside_runner: false,
             total_samples: 0,
             feedback: FeedbackState::Disabled,
-            required_event_label: None,
-            required_event_hits: 0,
         };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| f(&mut ctx)));
         let (sequence, next_draw, next_span, error) = match ctx.source {

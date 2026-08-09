@@ -131,8 +131,7 @@ pub(crate) enum SearchPolicy {
 /// detail while the kind stays cheap to compare.
 ///
 /// New kinds are added as breaking changes (no `#[non_exhaustive]`), so
-/// future failure axes — such as an unmet required-event coverage —
-/// extend this enum deliberately.
+/// future failure axes extend this enum deliberately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunErrorKind {
     /// The property closure returned `Err` or panicked in a case.
@@ -140,11 +139,6 @@ pub enum RunErrorKind {
     /// The internal global rejection limit was reached before
     /// `Runner::run`'s `cases` budget of accepted cases completed.
     TooManyRejections,
-    /// The event declared via
-    /// [`Runner::require_event`](crate::Runner::require_event) was
-    /// never reported during the run, so the required coverage was
-    /// not met.
-    RequiredEventNotReached,
 }
 
 /// The internal, payload-carrying failure mode of a [`RunError`].
@@ -163,10 +157,6 @@ enum ErrorKind {
         rejected_cases: usize,
         last_reject_location: &'static Location<'static>,
     },
-    /// The event declared via
-    /// [`Runner::require_event`](crate::Runner::require_event) was
-    /// never reported during the run.
-    RequiredEventNotReached { label: &'static str },
 }
 
 impl RunErrorKind {
@@ -174,7 +164,6 @@ impl RunErrorKind {
         match kind {
             ErrorKind::Panic { .. } => RunErrorKind::PropertyFailure,
             ErrorKind::TooManyRejections { .. } => RunErrorKind::TooManyRejections,
-            ErrorKind::RequiredEventNotReached { .. } => RunErrorKind::RequiredEventNotReached,
         }
     }
 }
@@ -244,31 +233,6 @@ impl RunError {
         )
     }
 
-    /// Build a required-event-not-reached error from the recorded run
-    /// stats.
-    ///
-    /// The run completed its case budget without a single report of
-    /// the declared required event, so no failing case exists: the
-    /// generated-value trace is empty and `case_index` is the number of
-    /// accepted cases that ran.
-    pub(crate) fn from_required_event_not_reached(
-        seed: u64,
-        cases: usize,
-        label: &'static str,
-        stats: Stats,
-        policy: SearchPolicy,
-    ) -> Self {
-        Self::new(
-            seed,
-            stats.accepted_cases,
-            cases,
-            ErrorKind::RequiredEventNotReached { label },
-            Vec::new(),
-            stats,
-            policy,
-        )
-    }
-
     fn new(
         seed: u64,
         case_index: usize,
@@ -328,16 +292,6 @@ impl RunError {
     pub fn kind(&self) -> RunErrorKind {
         RunErrorKind::of(&self.kind)
     }
-
-    /// The label of the required event that was never reported, for a
-    /// [`RunErrorKind::RequiredEventNotReached`] failure; `None`
-    /// otherwise.
-    pub fn required_event_label(&self) -> Option<&'static str> {
-        match self.kind {
-            ErrorKind::RequiredEventNotReached { label } => Some(label),
-            _ => None,
-        }
-    }
 }
 
 impl RunError {
@@ -385,20 +339,16 @@ impl std::fmt::Debug for RunError {
                     last_reject_location.line(),
                 )?;
             }
-            ErrorKind::RequiredEventNotReached { label } => {
-                writeln!(f, "    required_event_not_reached: {label:?},")?;
-            }
         }
         writeln!(f, "    reproduce: {},", self.reproduce_command())?;
         writeln!(
             f,
-            "    stats: {{ accepted: {}, rejected: {}, total_samples: {}, discovered_features: {}, max_corpus_size: {}, required_event_hits: {} }},",
+            "    stats: {{ accepted: {}, rejected: {}, total_samples: {}, discovered_features: {}, max_corpus_size: {} }},",
             self.stats.accepted_cases,
             self.stats.rejected_cases,
             self.stats.total_samples,
             self.stats.discovered_features,
             self.stats.max_corpus_size,
-            self.stats.required_event_hits,
         )?;
         if self.generated.is_empty() {
             writeln!(f, "    generated: [],")?;
@@ -446,25 +396,16 @@ impl std::fmt::Display for RunError {
                     last_reject_location.line(),
                 )?;
             }
-            ErrorKind::RequiredEventNotReached { label } => {
-                writeln!(
-                    f,
-                    "noprop required event not reached at case {} (seed={:#018x}): \
-                     `{label}` was never reported during the run",
-                    self.case_index, self.seed,
-                )?;
-            }
         }
         writeln!(f, "reproduce with: {}", self.reproduce_command())?;
         writeln!(
             f,
-            "stats: accepted={}, rejected={}, total_samples={}, discovered_features={}, max_corpus_size={}, required_event_hits={}",
+            "stats: accepted={}, rejected={}, total_samples={}, discovered_features={}, max_corpus_size={}",
             self.stats.accepted_cases,
             self.stats.rejected_cases,
             self.stats.total_samples,
             self.stats.discovered_features,
             self.stats.max_corpus_size,
-            self.stats.required_event_hits,
         )?;
         if !self.generated.is_empty() {
             writeln!(f, "Generated values:")?;

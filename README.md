@@ -62,8 +62,7 @@ larger recipes (each runs with `cargo run --example <name>`):
   property testing of an LRU cache with a bounded command loop
 - [`feedback_guided.rs`](examples/feedback_guided.rs) — steering the
   search toward interesting inputs (long log lines that exercise
-  truncation) with `event` / `bucket` / `transition`, and the
-  `require_event` coverage gate
+  truncation) with `event` / `bucket` / `transition`
 - [`rejection.rs`](examples/rejection.rs) — `sample_with_rejection`
   for constrained draws and `reject_case` for whole-case
   preconditions, parsing `key=value` config lines

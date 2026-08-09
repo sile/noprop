@@ -148,11 +148,6 @@ fn classify(outcome: &RunResult) -> (Status, Option<usize>) {
                 // cases-to-detection count includes it.
                 (Status::Found, Some(err.case_index() + 1))
             }
-            // The benchmark never declares a required event, so this
-            // failure mode cannot occur here.
-            RunErrorKind::RequiredEventNotReached => {
-                unreachable!("the detection benchmark does not use Runner::require_event")
-            }
         },
     }
 }
