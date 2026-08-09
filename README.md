@@ -61,7 +61,7 @@ larger recipes (each runs with `cargo run --example <name>`):
   property testing with a bounded command loop
 - [`feedback_guided.rs`](examples/feedback_guided.rs) — steering the
   search toward interesting regions with `event` / `bucket` /
-  `transition`
+  `transition`, and the `require_event` coverage gate
 - [`rejection.rs`](examples/rejection.rs) — `sample_with_rejection`
   for constrained draws, `reject_case` for whole-case preconditions
 - [`reproduce.rs`](examples/reproduce.rs) — reproducing a failing

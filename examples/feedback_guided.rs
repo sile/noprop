@@ -77,5 +77,26 @@ fn main() -> noprop::TestResult {
         Ok(())
     })?;
     println!("bucket / transition reporting: passed");
+
+    // === coverage gate: require_event ===
+    //
+    // Reporting an event steers the search, but a run that never
+    // reaches the region still passes silently. `Runner::require_event`
+    // turns "should reach" into "must reach": when the declared event
+    // is not reported even once, the run fails with
+    // RequiredEventNotReached instead of passing vacuously.
+    let mut runner = noprop::Runner::new(0xFEED);
+    runner.require_event("high");
+    runner.run_feedback_guided(256, |ctx| {
+        let x = noprop::sample_usize_in(ctx, 0..1000);
+        if x > 900 {
+            ctx.event("high");
+        }
+        Ok(())
+    })?;
+    println!(
+        "coverage gate: passed (the `high` event was reached {} times)",
+        runner.stats().required_event_hits
+    );
     Ok(())
 }
