@@ -9,23 +9,20 @@ noprop
 An imperative property-based testing library for Rust.
 
 - No dependencies
-- No macros
-- No `unsafe` code (`#![forbid(unsafe_code)]`)
-- No implicit I/O — seeds are always caller-supplied, so every run is fully reproducible
-- Imperative API — properties are plain `Fn(&mut TestCaseContext) -> Result<(), Box<dyn Error>>` closures that use ordinary Rust control flow (`if` / `match` / `for`) instead of combinator DSLs
-- Automatic value trace — each `noprop::sample_*` call is recorded at its source location and surfaced on failure, so the failing input is visible without extra plumbing
-- Feedback-guided search (`Runner::run_feedback_guided`) over semantic feedback (`event` / `bucket` / `transition`)
-
-Install
--------
-
-Add noprop as a dev-dependency (property tests live in `#[test]`
-functions, so noprop is not needed at runtime):
-
-```toml
-[dev-dependencies]
-noprop = "0.0"
-```
+- Expressive without a DSL
+  - Ordinary Rust control flow (`if` / `match` / `for` / recursion)
+    and interior mutability express properties and generators
+    directly — no combinator DSL or derive macros to learn.
+- Stateful (model-based) PBT built in
+  - The same runner and closure shape cover one-line properties,
+    dependent generators, and command loops that compare a model
+    against a system under test — no separate stateful framework or
+    dependent-generation syntax for the harder cases.
+- Steer testing toward hard-to-reach states
+  - Feedback-guided search concentrates cases on the semantic states
+    the property reports as interesting — deep protocol phases,
+    hard-to-hit branches, long command sequences a uniform run would
+    only find by chance.
 
 Example
 -------
@@ -68,10 +65,12 @@ Main constraints
 - `panic=unwind` is required. noprop catches property panics and uses
   panic-based unwinding for `TestCaseContext::reject_case`;
   `panic=abort` is not supported.
-- No automatic shrinking in v0.1. Failures are reproduced from the
-  seed and the case budget; to freeze a specific case as a regression
-  test, simplify it by hand from the value trace and inline the
-  witness as a regular `#[test]`.
+- No automatic shrinking in v0.1. The failure report instead carries
+  an automatic value trace — every `noprop::sample_*` call recorded
+  at its source location — so the failing input is visible without
+  extra plumbing. Reproduce the failing case from the seed and case
+  budget; if you want a frozen regression, hand-simplify the trace
+  into a plain `#[test]`.
 - No file-based failure persistence. The caller manages the seed and
   case budget; there is no on-disk seed corpus.
 
