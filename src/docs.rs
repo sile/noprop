@@ -8,3 +8,9 @@
 /// feature registry, corpus admission and eviction, and scheduling.
 #[doc = include_str!("../docs/feedback-guided-search.md")]
 pub mod feedback_guided_search {}
+
+/// Small design reference for writing `sample_*` generators: support,
+/// distribution, termination, rejection scope, and
+/// valid-by-construction.
+#[doc = include_str!("../docs/generator-design.md")]
+pub mod generator_design {}
