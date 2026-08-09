@@ -4,6 +4,13 @@
 //! `include_str!`, so they are browsable on docs.rs and their Rust
 //! code examples run as doctests.
 
+/// Task-oriented recipes for common property shapes: the seed / run
+/// scaffolding, sampling primitives and collections, rejection scopes,
+/// stateful properties, feedback-guided search, and reproducing a
+/// failing seed.
+#[doc = include_str!("../docs/recipes.md")]
+pub mod recipes {}
+
 /// Design of the feedback-guided search policy: semantic features, the
 /// feature registry, corpus admission and eviction, and scheduling.
 #[doc = include_str!("../docs/feedback-guided-search.md")]
