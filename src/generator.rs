@@ -403,8 +403,8 @@ impl Ratio {
 /// `numerator == denominator` (always `true`) consume no RNG bytes, so
 /// tuning a weight down to 0 or up to 100% does not shift subsequent
 /// output. All other cases consume RNG bytes through the shared
-/// rejection sampler, and the exact byte count depends on
-/// `denominator`.
+/// rejection sampler, so tuning `numerator` / `denominator` in that
+/// range may shift the choice sequence.
 ///
 /// # Examples
 ///
@@ -474,9 +474,9 @@ pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
 /// recipe is not byte-equivalent: the ratio draws through the shared
 /// rejection sampler.)
 ///
-/// The call records two trace entries — the ratio's `bool` and the
-/// chosen value — both attributed to the call site; a hand-written
-/// recipe records only the value.
+/// The call records the ratio's `bool` as a trace entry; the chosen
+/// value (boundary or `sample`'s draw) is a second entry. A
+/// hand-written recipe records only one value.
 ///
 /// # Examples
 ///
@@ -849,8 +849,9 @@ pub fn sample_ascii_printable_char(ctx: &mut TestCaseContext) -> char {
 /// "..."`, Rust `Debug` escape). Because [`sample_char`] internally
 /// uses a bounded rejection loop, each call to `sample_string`
 /// consumes up to `len × 64` internal attempts and, in Recording
-/// mode, opens `len` attempt spans in the choice sequence — one per
-/// character.
+/// mode, opens at least `len` attempt spans in the choice sequence
+/// (one per accepted character; each rejected attempt adds another
+/// span).
 ///
 /// # Examples
 ///
@@ -1105,8 +1106,7 @@ mod tests {
 
     /// Assert that `ctx` and `fresh` (built from the same seed) still
     /// produce identical output — used by the "consumes no RNG state"
-    /// tests. Compares `fill` outputs rather than the removed
-    /// `TestCaseContext::next_u64`.
+    /// tests. Compares an 8-byte `fill` from each context.
     fn assert_state_unadvanced(ctx: &mut TestCaseContext, fresh: &mut TestCaseContext) {
         let mut a = [0u8; 8];
         let mut b = [0u8; 8];
