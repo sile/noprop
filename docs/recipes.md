@@ -940,7 +940,8 @@ seed.
 ## Turn a trace into a hand-written regression test
 
 **Goal.** Freeze a failure as a small deterministic test after
-reproducing it, since v0.1 does not ship automatic shrinking.
+reproducing it. noprop does not ship automatic shrinking, so the
+regression test is the hand-simplified witness.
 
 The failure trace shows *the actual values* the primitives produced,
 labelled with their call sites. Instead of storing the choice sequence

@@ -13,7 +13,7 @@
 //!
 //! ```
 //! # fn body() -> noprop::TestResult {
-//! noprop::Runner::new(0xDEAD_BEEF).run(256, |ctx| {
+//! noprop::Runner::new(0xDEAD_BEEF).run(1024, |ctx| {
 //!     let a = noprop::sample_u32(ctx);
 //!     let b = noprop::sample_u32(ctx);
 //!     assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
@@ -82,7 +82,7 @@
 //!   panic-based unwinding for
 //!   [`TestCaseContext::reject_case`], so the crate does not work
 //!   under `panic=abort`.
-//! - **No automatic shrinking in v0.1.** Failures are reproduced from
+//! - **No automatic shrinking.** Failures are reproduced from
 //!   the seed and the case budget; to freeze a specific case as a
 //!   regression test, simplify it by hand from the value trace and
 //!   inline the witness as a regular `#[test]`. See
