@@ -197,6 +197,10 @@ impl Runner {
     /// Construct a runner that invokes the property closure against a
     /// [`TestCaseContext`] seeded with `seed`.
     ///
+    /// For the usual "read the seed from an environment variable, with a
+    /// clock-derived fallback" setup, see
+    /// [`seed_from_env_or_time`](crate::seed_from_env_or_time).
+    ///
     /// The number of *accepted* cases to invoke the closure for is
     /// given per run, via [`run`](Runner::run) / [`run_feedback_guided`](Runner::run_feedback_guided).
     ///
