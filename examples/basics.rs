@@ -71,10 +71,13 @@ fn main() -> noprop::TestResult {
     // Without a fixed seed a failure cannot be replayed. The failure
     // here is value-dependent — roughly half of the draws violate the
     // assertion — so which case index fails depends on the seed. The
-    // same seed must always produce the same case index.
-    let seed = 0x00FF_00FF_00FF_00FF;
+    // same seed must always produce the same case index. A fixed seed
+    // (not the env-derived `seed` above) is required so the two runs
+    // below compare like-for-like; use its own binding so the outer
+    // `seed` keeps its env-driven value for the idioms that follow.
+    let pitfall_seed = 0x00FF_00FF_00FF_00FF_u64;
     let run = || {
-        noprop::Runner::new(seed).run(64, |ctx| {
+        noprop::Runner::new(pitfall_seed).run(64, |ctx| {
             let x = noprop::sample_u32(ctx);
             assert!(x < 0x8000_0000, "high bit set: {x:#010x}");
             Ok(())

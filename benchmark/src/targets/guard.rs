@@ -42,6 +42,11 @@ fn run_case_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String>
 fn run_case_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_case(true, noprop::sample_u64, ctx, obs)
 }
+// guard has no mutant, so there is no failure region to bias toward:
+// the biased and uniform variants deliberately share the same draw
+// distribution. Keeping the biased slot lets guard run under every
+// variant of the benchmark harness (registry saturation, determinism)
+// without carving out a special case.
 fn run_case_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_case(true, noprop::sample_u64, ctx, obs)
 }
