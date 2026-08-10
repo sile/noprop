@@ -39,7 +39,7 @@ Two reasons to move away from uniform:
   buffer size, `u16::MAX`) are hit by uniform sampling with vanishing
   probability. Use [`sample_with_boundaries`](crate::sample_with_boundaries)
   to mix a small set of interesting candidates in at an exact rational
-  probability (`Ratio::ONE_TENTH`, `Ratio::ONE_HUNDREDTH`, …). The
+  probability (`Ratio::one_nth(10)`, `Ratio::one_nth(100)`, …). The
   underlying uniform draw is unchanged; only the mixing weight is new.
 - **Weighted branch selection.** A `match` on
   [`sample_weighted_index`](crate::sample_weighted_index) picks a

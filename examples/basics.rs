@@ -120,7 +120,7 @@ fn main() -> noprop::TestResult {
         let port = noprop::sample_with_boundaries(
             ctx,
             &[0, 1500, u16::MAX],
-            noprop::Ratio::ONE_TENTH,
+            noprop::Ratio::one_nth(10),
             noprop::sample_u16,
         );
         // The three boundary candidates each map to a distinct
