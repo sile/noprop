@@ -89,16 +89,6 @@
 //!   test") for the pattern.
 //! - **No file-based failure persistence.** The caller manages the
 //!   seed and case budget; there is no on-disk seed corpus.
-//! - **Static argument errors panic, external input errors return
-//!   `Result`.** Generator misuse
-//!   (`sample_with_rejection(ctx, 0, _)`, `Ratio::new(2, 1)` called
-//!   on an unchecked input) is a caller bug and panics with a
-//!   `#[track_caller]` message. Environment or config errors that a
-//!   user can hit at runtime (a mistyped `MYAPP_SEED`) return
-//!   `Result`.
-//! - **`sample_with_rejection` attempt budgets are explicit.** Every
-//!   call names its own `max_attempts`; there is no library-wide
-//!   default.
 //!
 //! noprop is imperative-first and does not replace a general PBT
 //! library where automatic shrinking or seed persistence is the
