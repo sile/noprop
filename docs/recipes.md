@@ -46,7 +46,7 @@ environment-controlled seed, so failures are reproducible.
 [`seed_from_env_or_time`](crate::seed_from_env_or_time),
 [`TestResult`](crate::TestResult).
 
-```
+```rust
 # fn body() -> noprop::TestResult {
 // A fixed seed keeps the run repeatable.
 noprop::Runner::new(0xDEAD_BEEF).run(256, |ctx| {
@@ -87,7 +87,7 @@ properties need.
 [`sample_ascii_printable_string`](crate::sample_ascii_printable_string),
 [`sample_bool`](crate::sample_bool).
 
-```
+```rust
 let mut ctx = noprop::TestCaseContext::new(0);
 
 // Full-width integers.
@@ -127,7 +127,7 @@ combinator DSLs.
 [`sample_u32`](crate::sample_u32),
 [`sample_string`](crate::sample_string).
 
-```
+```rust
 use std::collections::{HashMap, HashSet};
 
 let mut ctx = noprop::TestCaseContext::new(0);
@@ -182,7 +182,7 @@ optionally with unequal weights.
 [`sample_weighted_index`](crate::sample_weighted_index),
 [`sample_choice`](crate::sample_choice).
 
-```
+```rust
 let mut ctx = noprop::TestCaseContext::new(0);
 
 // Uniform one-of-N branching.
@@ -222,7 +222,7 @@ with an exact probability.
 **Uses.** [`sample_with_boundaries`](crate::sample_with_boundaries),
 [`Ratio`](crate::Ratio).
 
-```
+```rust
 let mut ctx = noprop::TestCaseContext::new(0);
 let port = noprop::sample_with_boundaries(
     &mut ctx,
@@ -255,7 +255,7 @@ without shipping a dedicated helper.
 [`sample_with_rejection`](crate::sample_with_rejection) (uniform),
 [`sample_u32`](crate::sample_u32) + explicit remap (biased).
 
-```
+```rust
 # use std::num::NonZeroU32;
 // Uniform: rejects the case if 64 attempts all draw 0 (astronomically
 // unreachable for u32; requires a Runner around it).
@@ -291,7 +291,7 @@ rejection recipe covers both signs uniformly.
 **Uses.** Whatever primitives the domain needs — the pattern is
 "draw, then branch".
 
-```
+```rust
 let mut ctx = noprop::TestCaseContext::new(0);
 
 // Draw a version first, then a payload whose length is bounded by it.
@@ -324,7 +324,7 @@ without risking unbounded work per case.
 **Uses.** [`sample_usize_in`](crate::sample_usize_in), an explicit
 depth or count parameter.
 
-```
+```rust
 use noprop::TestCaseContext;
 
 #[derive(Debug)]
@@ -375,7 +375,7 @@ draw), [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case)
 (per case). Prefer *valid-by-construction* over either when
 practical.
 
-```
+```rust
 # let _: noprop::RunResult = noprop::Runner::new(0).run(1, |ctx| {
 // Per-draw rejection: an identifier (a-z_ start, then a-z0-9_).
 let is_identifier = |s: &str| {
@@ -421,7 +421,7 @@ sequence, comparing them at every step.
 plus [`sample_usize_in`](crate::sample_usize_in) and the primitives
 the commands need.
 
-```
+```rust
 # use noprop::TestCaseContext;
 # fn body() -> noprop::TestResult {
 noprop::Runner::new(0).run(64, |ctx| {
@@ -478,7 +478,7 @@ of interest, rather than sampling uniformly.
 [`TestCaseContext::bucket`](crate::TestCaseContext::bucket),
 [`TestCaseContext::transition`](crate::TestCaseContext::transition).
 
-```
+```rust
 # fn body() -> noprop::TestResult {
 noprop::Runner::new(0xC0FFEE).run_feedback_guided(64, |ctx| {
     let len = noprop::sample_usize_in(ctx, 0..=24);
@@ -522,7 +522,7 @@ a silent pass.
 toward the region, and a run-after assert. The `Runner`'s `Display`
 embeds the seed and stats so the failure is reproducible.
 
-```
+```rust
 # use std::cell::Cell;
 # fn body() -> noprop::TestResult {
 let long_line_hits: Cell<usize> = Cell::new(0);
@@ -607,7 +607,7 @@ labelled with their call sites. Instead of storing the choice sequence
 witness that still triggers the bug and inline it as a regular
 `#[test]`:
 
-```
+```rust
 #[test]
 fn commutativity_holds_on_the_shrunk_witness() {
     // Values pulled from the failure trace of case 3 (seed 0x00...ff).
@@ -637,7 +637,7 @@ closure being `Fn`, not `FnMut`.
 **Uses.** `std::cell::Cell` (for `Copy` counters) or `std::cell::RefCell`
 (for non-`Copy` accumulators).
 
-```
+```rust
 # use std::cell::Cell;
 # fn body() -> noprop::TestResult {
 let long_names: Cell<usize> = Cell::new(0);
@@ -672,7 +672,7 @@ body.
 
 **Uses.** `#[track_caller]` on the wrapper.
 
-```
+```rust
 use std::num::NonZeroU32;
 use noprop::TestCaseContext;
 

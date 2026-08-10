@@ -140,7 +140,7 @@ the trace so failures show what the generator returned, not the raw
 byte source. The primitives (`sample_u32`, `sample_string`, …) already
 record; wrappers only need to record when they transform the value:
 
-```
+```rust
 use std::num::NonZeroU32;
 use noprop::TestCaseContext;
 
