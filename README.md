@@ -16,7 +16,7 @@ An imperative property-based testing library for Rust.
   - Ordinary Rust control flow (`if` / `match` / `for` / recursion)
     and interior mutability express any generator directly — no
     combinator DSL or derive macros to learn.
-- Stateful (model-based) PBT built in
+- Stateful (model-based) PBT without a separate framework
   - The same API covers one-line properties, dependent generators,
     and command loops that compare a model against a system under
     test — no separate stateful framework or dependent-generation
@@ -49,6 +49,38 @@ See [`docs/recipes.md`](docs/recipes.md) for the seed / env-variable
 scaffolding, sampling patterns, stateful properties, feedback-guided
 search, and the failure-reproduction workflow.
 
+Choosing a search strategy
+--------------------------
+
+Start from the property and its semantic input domain. Make every relevant
+behavior reachable, then bias boundaries and operation sequences that would
+otherwise be too rare. Draw dependent values in order instead of sampling
+independent primitives and filtering the combinations afterward. For example,
+inside a property closure:
+
+```rust
+let len = noprop::sample_with_boundaries(
+    ctx,
+    &[0usize, 1, 64],
+    noprop::Ratio::one_nth(5),
+    |ctx| noprop::sample_usize_in(ctx, 0..=64),
+);
+let input = noprop::sample_bytes_vec(ctx, len);
+let split_at = noprop::sample_usize_in(ctx, 0..=input.len());
+
+let mut left = input.clone();
+let right = left.split_off(split_at);
+left.extend_from_slice(&right);
+assert_eq!(left, input);
+```
+
+Use `Runner::run` as the baseline. Adjust boundary probabilities and command
+weights before increasing the case budget. Switch to
+`Runner::run_feedback_guided` only when the failure lies behind rare semantic
+progress and the property can report stable, low-cardinality events, buckets,
+or transitions. Feedback can steer within a generator's support; it cannot
+make an unreachable value reachable.
+
 When to use noprop
 ------------------
 
@@ -60,7 +92,7 @@ can adopt it as a dev-dependency without pulling in a graph of crates.
 
 If you need automatic shrinking or file-based failure persistence,
 another PBT library will fit better today; noprop deliberately leaves
-those out in v0.1 (see below).
+those out.
 
 Main constraints
 ----------------
@@ -68,12 +100,12 @@ Main constraints
 - `panic=unwind` is required. noprop catches property panics and uses
   panic-based unwinding for `TestCaseContext::reject_case`;
   `panic=abort` is not supported.
-- No automatic shrinking in v0.1. The failure report instead carries
-  an automatic value trace — every `noprop::sample_*` call recorded
-  at its source location — so the failing input is visible without
+- No automatic shrinking. The failure report instead carries an
+  automatic value trace — primitive samplers record generated values
+  at their source locations — so the failing input is visible without
   extra plumbing. Reproduce the failing case from the seed and case
-  budget; if you want a frozen regression, hand-simplify the trace
-  into a plain `#[test]`.
+  budget; if you want a frozen regression, hand-simplify the trace into
+  a plain `#[test]`.
 - No file-based failure persistence. The caller manages the seed and
   case budget; there is no on-disk seed corpus.
 
@@ -97,12 +129,8 @@ Documentation
 - **[API reference](https://docs.rs/noprop)** — every function and
   type on docs.rs.
 
-The doc modules ([`docs::recipes`](https://docs.rs/noprop/latest/noprop/docs/recipes/),
-[`docs::generator_design`](https://docs.rs/noprop/latest/noprop/docs/generator_design/),
-[`docs::generator_authoring`](https://docs.rs/noprop/latest/noprop/docs/generator_authoring/),
-[`docs::feedback_guided_search`](https://docs.rs/noprop/latest/noprop/docs/feedback_guided_search/))
-render the same Markdown on docs.rs, so the recipes and design notes
-appear alongside the API rustdoc.
+The four Markdown guides above also render as `docs::*` modules on docs.rs,
+alongside the API rustdoc.
 
 Examples
 --------
@@ -138,8 +166,9 @@ Agent Skills
 ------------
 
 An [Agent Skills](https://agentskills.io/) bundle ships with the crate.
-Install it with `gh skill install` so a supported AI agent picks up
-noprop's public API and conventions before answering.
+Install it with `gh skill install` so a supported AI agent can design
+effective search spaces, choose between uniform and feedback-guided search,
+and apply noprop's API conventions.
 
 ```bash
 gh skill install sile/noprop noprop
