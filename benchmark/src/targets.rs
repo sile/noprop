@@ -11,15 +11,6 @@ mod high_frequency;
 mod stateful;
 mod stepping;
 
-pub(crate) use self::boundary::WORKLOAD as BOUNDARY;
-pub(crate) use self::bst::WORKLOAD as BST;
-pub(crate) use self::combination::WORKLOAD as COMBINATION;
-pub(crate) use self::dependent::WORKLOAD as DEPENDENT;
-pub(crate) use self::guard::WORKLOAD as GUARD;
-pub(crate) use self::high_frequency::WORKLOAD as HIGH_FREQUENCY;
-pub(crate) use self::stateful::WORKLOAD as STATEFUL;
-pub(crate) use self::stepping::WORKLOAD as STEPPING;
-
 /// A property run: generate an input from `ctx`, exercise the SUT, and
 /// return `Err` when the property fails.
 ///
@@ -53,14 +44,14 @@ pub(crate) struct Workload {
 
 /// All registered workloads, keyed by `Workload::name`.
 pub(crate) const WORKLOADS: &[Workload] = &[
-    HIGH_FREQUENCY,
-    BOUNDARY,
-    COMBINATION,
-    DEPENDENT,
-    BST,
-    STEPPING,
-    STATEFUL,
-    GUARD,
+    high_frequency::WORKLOAD,
+    boundary::WORKLOAD,
+    combination::WORKLOAD,
+    dependent::WORKLOAD,
+    bst::WORKLOAD,
+    stepping::WORKLOAD,
+    stateful::WORKLOAD,
+    guard::WORKLOAD,
 ];
 
 /// Observation sink for workload-specific measurements.

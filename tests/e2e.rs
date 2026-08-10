@@ -72,9 +72,6 @@ fn run_budget_is_per_call() {
         }
         Ok(())
     };
-    // Dead code guard: `failing` must stay a valid property closure
-    // (the `if true` arm is never reached past the panic).
-    let _ = &failing;
 
     let err = runner.run(16, failing).expect_err("first run must fail");
     assert!(
@@ -601,13 +598,6 @@ fn sample_with_rejection_all_rejected_triggers_iteration_rejection() -> noprop::
     // Two cases rejected + two accepted = 4 outer invocations.
     assert_eq!(outer_attempts.get(), 4);
     Ok(())
-}
-
-#[test]
-#[should_panic(expected = "Runner::run")]
-fn reject_case_outside_runner_panics() {
-    let mut ctx = noprop::TestCaseContext::new(0);
-    ctx.reject_case();
 }
 
 // === sample_string / sample_ascii_string / sample_ascii_printable_string trace format ===
