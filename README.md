@@ -123,11 +123,6 @@ demos of the larger recipes (each runs with `cargo run --example
   seed via `NOPROP_SEED` and the failure report's reproduce hint
   (this one fails on purpose)
 
-Status
-------
-
-Early development (`v0.0.x`). API is unstable and may change without notice.
-
 Benchmark
 ---------
 
