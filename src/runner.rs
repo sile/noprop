@@ -78,9 +78,9 @@ pub struct Stats {
     pub total_samples: usize,
     /// Number of distinct semantic features registered in the global
     /// observation set during a feedback-guided run, capped at 1024
-    /// (`MAX_GLOBAL_FEATURES`). Features registered by rejected cases
-    /// are included; features of the failing case itself are not (a
-    /// case is registered only after its verdict, and the failing case
+    /// (currently). Features registered by rejected cases are
+    /// included; features of the failing case itself are not (a case
+    /// is registered only after its verdict, and the failing case
     /// never reaches admission).
     pub discovered_features: usize,
     /// Combined size of the semantic corpus (accepted + rejected) at

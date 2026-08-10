@@ -89,8 +89,15 @@ matches the property's domain:
   ranges. Example: queue length bucketed as 0 / 1-4 / 5-16 / 17+.
   Bucket *before* reporting: a raw value that differs every case (a
   timestamp, a byte count, a sequence number) defeats the corpus —
-  every case reports a novel feature, the global registry hits
-  `MAX_GLOBAL_FEATURES`, and novelty stops meaning anything.
+  every case reports a novel feature, the global registry hits its
+  cap, and novelty stops meaning anything.
+  Aim for roughly 3–10 buckets per label: fewer than three collapses
+  the signal to "hit / not hit" and the search loses its steering
+  ability, while more than ten dilutes the registry — a single label
+  at 100 buckets can eat roughly 10% of the registry cap (currently
+  1024) before any other feature is reported. Logarithmic bands
+  (`0 / 1-4 / 5-16 / 17-64 / 65+`) or fixed ranges (`0-1024 /
+  1025-8192 / 8193-32768`) tend to balance signal and cost.
 - `transition(label, from, to)` — for stateful tests, when the abstract
   state change itself is what matters (role changes, protocol phase
   advances). The `(from, to)` pair is part of the feature identity, so
@@ -107,13 +114,14 @@ identity, and unbounded labels defeat the registry cap.
 ## Feature Registry
 
 The runner keeps a global observation set of features, in
-first-registration order, capped at `MAX_GLOBAL_FEATURES`. A feature
-already present is never interesting again; once the cap is reached,
-new features are not registered and never make a case interesting, so a
-high-cardinality property cannot grow the registry without bound.
+first-registration order, capped at 1024 features (currently). A
+feature already present is never interesting again; once the cap is
+reached, new features are not registered and never make a case
+interesting, so a high-cardinality property cannot grow the registry
+without bound.
 
-A per-case cap (`MAX_FEATURES_PER_CASE` in `src/rng.rs`) bounds the
-features one case may report; the excess is discarded in report order.
+A per-case cap (currently 64) bounds the features one case may
+report; the excess is discarded in report order.
 An event saturating to a higher bucket replaces its earlier feature and
 does not count toward the per-case cap. Note that the replacement
 itself can still be a *global* novelty: a bucket that no case has
