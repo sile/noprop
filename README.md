@@ -10,16 +10,19 @@ An imperative property-based testing library for Rust.
 
 - No dependencies
 - Expressive without a DSL
+  - A small, orthogonal imperative API — the property is a plain Rust
+    function that samples values ("generators" in PBT parlance) and
+    asserts on the results.
   - Ordinary Rust control flow (`if` / `match` / `for` / recursion)
-    and interior mutability express properties and generators
-    directly — no combinator DSL or derive macros to learn.
+    and interior mutability express any generator directly — no
+    combinator DSL or derive macros to learn.
 - Stateful (model-based) PBT built in
-  - The same runner and closure shape cover one-line properties,
-    dependent generators, and command loops that compare a model
-    against a system under test — no separate stateful framework or
-    dependent-generation syntax for the harder cases.
-- Steer testing toward hard-to-reach states
-  - Feedback-guided search concentrates cases on the semantic states
+  - The same API covers one-line properties, dependent generators,
+    and command loops that compare a model against a system under
+    test — no separate stateful framework or dependent-generation
+    syntax for the harder cases.
+- Guided sampling for hard-to-reach states
+  - Feedback-guided search steers sampling toward the semantic states
     the property reports as interesting — deep protocol phases,
     hard-to-hit branches, long command sequences a uniform run would
     only find by chance.
