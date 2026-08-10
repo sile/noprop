@@ -102,13 +102,26 @@ where
     );
     for _ in 0..max_attempts {
         let id = ctx.begin_attempt();
-        match attempt(ctx) {
-            Some(value) => {
+        // catch_unwind so an unwinding attempt (a user panic, or the
+        // private iteration-rejected marker raised by
+        // `ctx.reject_case()` from inside the closure) does not leave
+        // the recording span at `AttemptVerdict::Pending` — which the
+        // public `ChoiceSequence` contract promises never appears. The
+        // panic is re-raised after closing the span, so the runner's
+        // outer `catch_unwind` and the iteration-rejection propagation
+        // still see the original payload.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| attempt(ctx)));
+        match outcome {
+            Ok(Some(value)) => {
                 ctx.end_attempt(id, AttemptVerdict::Accepted);
                 return value;
             }
-            None => {
+            Ok(None) => {
                 ctx.end_attempt(id, AttemptVerdict::Rejected);
+            }
+            Err(panic) => {
+                ctx.end_attempt(id, AttemptVerdict::Rejected);
+                std::panic::resume_unwind(panic);
             }
         }
     }
@@ -2230,5 +2243,54 @@ mod tests {
             assert_eq!(span.start_draw, span.end_draw); // no draws consumed
         }
         assert!(seq.draws().is_empty());
+    }
+
+    #[test]
+    fn sample_with_rejection_closes_span_on_user_panic() {
+        // A user panic inside the attempt must not leave the recorded
+        // span at AttemptVerdict::Pending (the ChoiceSequence contract
+        // documents that Pending never appears in a released
+        // sequence). Catch the unwind here, inspect the sequence, and
+        // assert every recorded span is closed.
+        let mut ctx = TestCaseContext::recording(0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: u32 = sample_with_rejection(&mut ctx, 8, |_ctx| {
+                panic!("user panic inside attempt");
+            });
+        }));
+        assert!(outcome.is_err(), "user panic must propagate out");
+        let seq = ctx
+            .take_sequence()
+            .expect("recording mode yields a sequence");
+        assert_eq!(seq.spans().len(), 1);
+        assert_ne!(
+            seq.spans()[0].verdict,
+            AttemptVerdict::Pending,
+            "released ChoiceSequence must not carry a Pending span"
+        );
+    }
+
+    #[test]
+    fn sample_with_rejection_closes_span_on_reject_case_marker() {
+        // ctx.reject_case() inside the attempt unwinds via the private
+        // iteration-rejected marker. The span must still close before
+        // the unwind propagates, so no Pending span leaks into the
+        // sequence a rejected-case admission (feedback-guided mode)
+        // would then move into the corpus.
+        let mut ctx = TestCaseContext::recording(0);
+        ctx.set_inside_runner();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: u32 = sample_with_rejection(&mut ctx, 8, |ctx| ctx.reject_case());
+        }));
+        assert!(outcome.is_err(), "reject_case must propagate out");
+        let seq = ctx
+            .take_sequence()
+            .expect("recording mode yields a sequence");
+        assert_eq!(seq.spans().len(), 1);
+        assert_ne!(
+            seq.spans()[0].verdict,
+            AttemptVerdict::Pending,
+            "released ChoiceSequence must not carry a Pending span"
+        );
     }
 }
