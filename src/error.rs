@@ -263,12 +263,20 @@ impl RunError {
         self.seed
     }
 
-    /// The zero-based index of the accepted iteration this failure is
-    /// tied to. For a property panic / returned `Err`, this is the
-    /// index of the failing iteration. For `TooManyRejections`, this
-    /// is the count of accepted cases that ran before the runner
-    /// gave up (i.e. the index of the iteration that could not be
-    /// accepted).
+    /// The count of accepted iterations that completed before the
+    /// failure.
+    ///
+    /// - Under [`Runner::run`](crate::Runner::run), a property panic /
+    ///   returned `Err` fails within the (`case_index + 1`)th accepted
+    ///   iteration, so this is also the zero-based index of the
+    ///   failing iteration.
+    /// - Under
+    ///   [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
+    ///   the failing candidate is neither accepted nor rejected; use
+    ///   the report's candidate index (documented on the class-level
+    ///   doc) for its ordinal across accepted and rejected attempts.
+    /// - For `TooManyRejections`, this is the count of accepted cases
+    ///   that completed before the runner gave up.
     pub fn case_index(&self) -> usize {
         self.case_index
     }
@@ -279,9 +287,10 @@ impl RunError {
         &self.generated
     }
 
-    /// Observability counters accumulated up to (and including) the
-    /// failing case. `accepted_cases` matches
-    /// [`case_index`](Self::case_index). The corpus fields
+    /// Observability counters as of the failure. `accepted_cases`
+    /// matches [`case_index`](Self::case_index) (accepted cases
+    /// completed *before* the failure). `total_samples` includes
+    /// samples drawn by the failing case itself. The corpus fields
     /// (`discovered_features` / `max_corpus_size`) do not include the
     /// failing case's features (the failing case is not admitted).
     pub fn stats(&self) -> Stats {
