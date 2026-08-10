@@ -12,6 +12,11 @@ use crate::rng::{AttemptVerdict, ChoiceMeta};
 /// so that composite generators (non-zero variants, `sample_char`,
 /// floats, `sample_choice`) can consume randomness without producing
 /// intermediate trace entries for the raw byte source.
+///
+/// `#[track_caller]` so an exploratory-draw-cap rejection reports the
+/// user's `sample_*` call site rather than this helper (see
+/// [`TestCaseContext::fill`] and `within_generated_draw_cap`).
+#[track_caller]
 fn raw_bytes<const N: usize>(ctx: &mut TestCaseContext) -> [u8; N] {
     let mut buf = [0u8; N];
     ctx.fill(&mut buf);
@@ -2267,6 +2272,38 @@ mod tests {
             seq.spans()[0].verdict,
             AttemptVerdict::Pending,
             "released ChoiceSequence must not carry a Pending span"
+        );
+    }
+
+    #[test]
+    fn exploratory_draw_cap_reject_location_points_at_caller() {
+        // In exploratory replay mode with an empty recorded sequence,
+        // every sample_* call hits the tail-generation rule and counts
+        // against the per-case cap (MAX_CHOICES_PER_CASE). Overshoot
+        // the cap and verify the recorded reject location points at
+        // the primitive's caller (this test file), not inside noprop's
+        // own rng.rs internals — the #[track_caller] chain from
+        // raw_bytes -> fill -> within_generated_draw_cap makes
+        // Location::caller() resolve to the user site.
+        let mut ctx = TestCaseContext::exploring(ChoiceSequence::default(), 0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for _ in 0..8192 {
+                let _ = sample_u32(&mut ctx);
+            }
+        }));
+        assert!(outcome.is_err(), "exploratory cap must fire and unwind");
+        let state = ctx
+            .take_rejection()
+            .expect("rejection state must have been recorded when the cap fired");
+        let file = state.location.file();
+        assert!(
+            !file.contains("rng.rs"),
+            "reject location must not point into rng.rs internals; got {file}:{}",
+            state.location.line()
+        );
+        assert!(
+            file.ends_with("generator.rs"),
+            "reject location must point at the caller in this test file; got {file}"
         );
     }
 

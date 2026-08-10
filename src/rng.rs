@@ -627,6 +627,13 @@ struct DedupState {
 /// replacement and append past the recording) share this accounting:
 /// returns `false` when the cap is exceeded, with the case marked as a
 /// rejection so the caller unwinds it.
+///
+/// `#[track_caller]` so the recorded `RejectionState::location` (which
+/// [`RunError`](crate::RunError) prints as `last_reject_location`)
+/// points at the user's `sample_*` call site rather than at this
+/// helper. Callers on the propagation chain — [`TestCaseContext::fill`]
+/// and `generator::raw_bytes` — carry the attribute too.
+#[track_caller]
 fn within_generated_draw_cap(consumed: &mut usize, rejection: &mut Option<RejectionState>) -> bool {
     *consumed += 1;
     if *consumed > MAX_CHOICES_PER_CASE {
@@ -783,6 +790,11 @@ impl TestCaseContext {
     ///   via the private control-flow marker.
     ///
     /// `pub(crate)` — see the [`TestCaseContext`] type-level docs for why.
+    ///
+    /// `#[track_caller]` so an exploratory-draw-cap rejection surfaces
+    /// the user's `sample_*` call site through `Location::caller()` in
+    /// `within_generated_draw_cap`.
+    #[track_caller]
     pub(crate) fn fill(&mut self, dst: &mut [u8]) {
         if dst.is_empty() {
             return;
