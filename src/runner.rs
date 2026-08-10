@@ -1195,232 +1195,230 @@ mod tests {
             assert!(idx < 4, "mutated choice index {idx} escaped its domain");
         }
     }
-}
 
-// === mutate_sequence ===
-
-#[test]
-fn mutation_rewrites_integer_draws() {
-    let mut prng = XoshiroState::from_seed(77);
-    let mut changed = false;
-    for _ in 0..100 {
-        let mut seq = ChoiceSequence::default();
-        seq.push_draw(5u64.to_le_bytes().to_vec(), ChoiceMeta::Integer);
-        mutate_sequence(&mut seq, &mut prng);
-        let x = u64::from_le_bytes(seq.draws()[0][..8].try_into().unwrap());
-        if x != 5 {
-            changed = true;
-        }
-    }
-    assert!(changed, "integer draws must be rewritten to another value");
-}
-
-#[test]
-fn mutation_rewrites_integer_draws_across_widths() {
-    let mut prng = XoshiroState::from_seed(31337);
-    // Every recorded width must be rewritable to a new value.
-    let mut changed = 0u32;
-    for width in [1usize, 2, 4, 8, 16] {
-        for _ in 0..64 {
+    #[test]
+    fn mutation_rewrites_integer_draws() {
+        let mut prng = XoshiroState::from_seed(77);
+        let mut changed = false;
+        for _ in 0..100 {
             let mut seq = ChoiceSequence::default();
-            seq.push_draw(vec![0xAB; width], ChoiceMeta::Integer);
+            seq.push_draw(5u64.to_le_bytes().to_vec(), ChoiceMeta::Integer);
+            mutate_sequence(&mut seq, &mut prng);
+            let x = u64::from_le_bytes(seq.draws()[0][..8].try_into().unwrap());
+            if x != 5 {
+                changed = true;
+            }
+        }
+        assert!(changed, "integer draws must be rewritten to another value");
+    }
+
+    #[test]
+    fn mutation_rewrites_integer_draws_across_widths() {
+        let mut prng = XoshiroState::from_seed(31337);
+        // Every recorded width must be rewritable to a new value.
+        let mut changed = 0u32;
+        for width in [1usize, 2, 4, 8, 16] {
+            for _ in 0..64 {
+                let mut seq = ChoiceSequence::default();
+                seq.push_draw(vec![0xAB; width], ChoiceMeta::Integer);
+                let before = seq.draws()[0].clone();
+                mutate_sequence(&mut seq, &mut prng);
+                if seq.draws()[0] != before {
+                    changed += 1;
+                    break;
+                }
+            }
+        }
+        assert_eq!(changed, 5, "every integer width must be rewritable");
+    }
+
+    #[test]
+    fn mutation_rewrites_upper_bytes_of_16_byte_integer_draw() {
+        // Width 16 is written as two 8-byte halves; a mutation bug that
+        // only rewrote the low half would leave high values untouched.
+        let mut prng = XoshiroState::from_seed(1337);
+        let mut low_changed = false;
+        let mut high_changed = false;
+        for _ in 0..256 {
+            let mut seq = ChoiceSequence::default();
+            seq.push_draw(vec![0xAB; 16], ChoiceMeta::Integer);
             let before = seq.draws()[0].clone();
             mutate_sequence(&mut seq, &mut prng);
-            if seq.draws()[0] != before {
-                changed += 1;
+            let after = &seq.draws()[0];
+            low_changed |= after[..8] != before[..8];
+            high_changed |= after[8..] != before[8..];
+            if low_changed && high_changed {
                 break;
             }
         }
+        assert!(low_changed, "low 8 bytes must be rewritable");
+        assert!(high_changed, "high 8 bytes must be rewritable");
     }
-    assert_eq!(changed, 5, "every integer width must be rewritable");
-}
 
-#[test]
-fn mutation_rewrites_upper_bytes_of_16_byte_integer_draw() {
-    // Width 16 is written as two 8-byte halves; a mutation bug that
-    // only rewrote the low half would leave high values untouched.
-    let mut prng = XoshiroState::from_seed(1337);
-    let mut low_changed = false;
-    let mut high_changed = false;
-    for _ in 0..256 {
-        let mut seq = ChoiceSequence::default();
-        seq.push_draw(vec![0xAB; 16], ChoiceMeta::Integer);
-        let before = seq.draws()[0].clone();
-        mutate_sequence(&mut seq, &mut prng);
-        let after = &seq.draws()[0];
-        low_changed |= after[..8] != before[..8];
-        high_changed |= after[8..] != before[8..];
-        if low_changed && high_changed {
-            break;
-        }
+    // === Stats corpus fields ===
+
+    #[test]
+    fn stats_corpus_fields_are_zero_for_uniform() {
+        let mut runner = Runner::new(1);
+        runner
+            .run(4, |ctx| {
+                crate::sample_u32(ctx);
+                Ok(())
+            })
+            .unwrap();
+        let stats = runner.stats();
+        assert_eq!(stats.discovered_features, 0);
+        assert_eq!(stats.max_corpus_size, 0);
+
+        // The corpus fields stay 0 on failure paths too.
+        let err = Runner::new(1)
+            .run(4, |_ctx| {
+                Err::<(), Box<dyn std::error::Error>>("boom".into())
+            })
+            .expect_err("returned Err must fail the run");
+        assert_eq!(err.stats().discovered_features, 0);
+        assert_eq!(err.stats().max_corpus_size, 0);
+
+        let err = Runner::new(1)
+            .run(4, |ctx| {
+                crate::sample_u32(ctx);
+                panic!("boom");
+            })
+            .expect_err("panicking closure must fail the run");
+        assert_eq!(err.stats().discovered_features, 0);
+        assert_eq!(err.stats().max_corpus_size, 0);
     }
-    assert!(low_changed, "low 8 bytes must be rewritable");
-    assert!(high_changed, "high 8 bytes must be rewritable");
-}
 
-// === Stats corpus fields ===
+    #[test]
+    fn stats_corpus_fields_reflect_observed_features() {
+        // Every case reports the same feature, so exactly one feature is
+        // observed and exactly one entry is admitted.
+        let mut runner = Runner::new(1);
+        runner
+            .run_feedback_guided(4, |ctx| {
+                ctx.bucket("b", 1);
+                Ok(())
+            })
+            .unwrap();
+        let stats = runner.stats();
+        assert_eq!(stats.discovered_features, 1);
+        assert_eq!(stats.max_corpus_size, 1);
+    }
 
-#[test]
-fn stats_corpus_fields_are_zero_for_uniform() {
-    let mut runner = Runner::new(1);
-    runner
-        .run(4, |ctx| {
-            crate::sample_u32(ctx);
-            Ok(())
-        })
-        .unwrap();
-    let stats = runner.stats();
-    assert_eq!(stats.discovered_features, 0);
-    assert_eq!(stats.max_corpus_size, 0);
+    #[test]
+    fn stats_corpus_fields_respect_corpus_cap() {
+        // Every case reports a fresh feature: the corpus fills to the cap
+        // while the observation set keeps growing. Each candidate invokes
+        // the closure exactly once (exploratory replay replays draws, not
+        // the closure), so 100 accepted cases register exactly 100
+        // features.
+        let case = std::cell::Cell::new(0u64);
+        let mut runner = Runner::new(1);
+        runner
+            .run_feedback_guided(100, |ctx| {
+                let i = case.get();
+                case.set(i + 1);
+                ctx.bucket("b", i);
+                Ok(())
+            })
+            .unwrap();
+        let stats = runner.stats();
+        assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
+        assert_eq!(
+            stats.discovered_features, 100,
+            "the observation set must keep growing past the corpus cap"
+        );
+    }
 
-    // The corpus fields stay 0 on failure paths too.
-    let err = Runner::new(1)
-        .run(4, |_ctx| {
-            Err::<(), Box<dyn std::error::Error>>("boom".into())
-        })
-        .expect_err("returned Err must fail the run");
-    assert_eq!(err.stats().discovered_features, 0);
-    assert_eq!(err.stats().max_corpus_size, 0);
-
-    let err = Runner::new(1)
-        .run(4, |ctx| {
-            crate::sample_u32(ctx);
-            panic!("boom");
-        })
-        .expect_err("panicking closure must fail the run");
-    assert_eq!(err.stats().discovered_features, 0);
-    assert_eq!(err.stats().max_corpus_size, 0);
-}
-
-#[test]
-fn stats_corpus_fields_reflect_observed_features() {
-    // Every case reports the same feature, so exactly one feature is
-    // observed and exactly one entry is admitted.
-    let mut runner = Runner::new(1);
-    runner
-        .run_feedback_guided(4, |ctx| {
-            ctx.bucket("b", 1);
-            Ok(())
-        })
-        .unwrap();
-    let stats = runner.stats();
-    assert_eq!(stats.discovered_features, 1);
-    assert_eq!(stats.max_corpus_size, 1);
-}
-
-#[test]
-fn stats_corpus_fields_respect_corpus_cap() {
-    // Every case reports a fresh feature: the corpus fills to the cap
-    // while the observation set keeps growing. Each candidate invokes
-    // the closure exactly once (exploratory replay replays draws, not
-    // the closure), so 100 accepted cases register exactly 100
-    // features.
-    let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1);
-    runner
-        .run_feedback_guided(100, |ctx| {
-            let i = case.get();
-            case.set(i + 1);
-            ctx.bucket("b", i);
-            Ok(())
-        })
-        .unwrap();
-    let stats = runner.stats();
-    assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
-    assert_eq!(
-        stats.discovered_features, 100,
-        "the observation set must keep growing past the corpus cap"
-    );
-}
-
-#[test]
-fn stats_corpus_fields_on_too_many_rejections() {
-    // Every case rejects, so the run ends with too-many-rejections
-    // after the rejection cap. Each rejected case reports a fresh
-    // feature before rejecting: with 103 cases the rejection cap
-    // (1030) exceeds `MAX_GLOBAL_FEATURES`, so the observation set
-    // saturates at the cap and the rejected queue fills to
-    // `CORPUS_SIZE`; the error must carry both.
-    let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1);
-    let err = runner
-        .run_feedback_guided(103, |ctx| {
-            let i = case.get();
-            case.set(i + 1);
-            ctx.bucket("b", i);
-            ctx.reject_case();
-        })
-        .expect_err("rejecting every case must hit the rejection cap");
-    let stats = err.stats();
-    assert_eq!(stats.rejected_cases, rejection_limit(103) + 1);
-    assert_eq!(stats.discovered_features, MAX_GLOBAL_FEATURES);
-    assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
-}
-
-#[test]
-fn corpus_stats_matches_corpus_state() {
-    use crate::rng::{EventBucket, FeatureKind};
-    let mut search = CorpusGuidedSearch::new(1);
-    assert_eq!(corpus_stats(&search), (0, 0));
-
-    // An accepted case registering a novel feature.
-    let feature = Feature {
-        label: "a",
-        kind: FeatureKind::Event(EventBucket::One),
-    };
-    assert!(
-        search
-            .corpus
-            .admit_accepted(ChoiceSequence::default(), vec![feature])
-    );
-    assert_eq!(corpus_stats(&search), (1, 1));
-
-    // A rejected case registering another novel feature: rejected
-    // cases also contribute to the observation set and the corpus.
-    let feature = Feature {
-        label: "b",
-        kind: FeatureKind::Event(EventBucket::One),
-    };
-    assert!(
-        search
-            .corpus
-            .admit_rejected(ChoiceSequence::default(), vec![feature])
-    );
-    assert_eq!(corpus_stats(&search), (2, 2));
-}
-
-#[test]
-fn stats_corpus_fields_include_rejected_case_features() {
-    // The first case rejects while reporting a novel feature: it
-    // enters the rejected queue and its feature enters the observation
-    // set. Later cases report the same (now observed) feature and are
-    // not admitted.
-    let case = std::cell::Cell::new(0u64);
-    let mut runner = Runner::new(1);
-    runner
-        .run_feedback_guided(8, |ctx| {
-            let i = case.get();
-            case.set(i + 1);
-            ctx.bucket("b", 1);
-            if i == 0 {
+    #[test]
+    fn stats_corpus_fields_on_too_many_rejections() {
+        // Every case rejects, so the run ends with too-many-rejections
+        // after the rejection cap. Each rejected case reports a fresh
+        // feature before rejecting: with 103 cases the rejection cap
+        // (1030) exceeds `MAX_GLOBAL_FEATURES`, so the observation set
+        // saturates at the cap and the rejected queue fills to
+        // `CORPUS_SIZE`; the error must carry both.
+        let case = std::cell::Cell::new(0u64);
+        let mut runner = Runner::new(1);
+        let err = runner
+            .run_feedback_guided(103, |ctx| {
+                let i = case.get();
+                case.set(i + 1);
+                ctx.bucket("b", i);
                 ctx.reject_case();
-            }
-            Ok(())
-        })
-        .expect("run must succeed");
-    let stats = runner.stats();
-    assert_eq!(stats.rejected_cases, 1);
-    assert_eq!(stats.discovered_features, 1);
-    assert_eq!(stats.max_corpus_size, 1);
-}
+            })
+            .expect_err("rejecting every case must hit the rejection cap");
+        let stats = err.stats();
+        assert_eq!(stats.rejected_cases, rejection_limit(103) + 1);
+        assert_eq!(stats.discovered_features, MAX_GLOBAL_FEATURES);
+        assert_eq!(stats.max_corpus_size, CORPUS_SIZE);
+    }
 
-#[test]
-fn stats_corpus_fields_zero_cases() {
-    let mut runner = Runner::new(1);
-    runner
-        .run_feedback_guided(0, |_ctx| {
-            panic!("closure must not be invoked with zero cases");
-        })
-        .expect("zero cases must succeed");
-    assert_eq!(runner.stats(), Stats::default());
+    #[test]
+    fn corpus_stats_matches_corpus_state() {
+        use crate::rng::{EventBucket, FeatureKind};
+        let mut search = CorpusGuidedSearch::new(1);
+        assert_eq!(corpus_stats(&search), (0, 0));
+
+        // An accepted case registering a novel feature.
+        let feature = Feature {
+            label: "a",
+            kind: FeatureKind::Event(EventBucket::One),
+        };
+        assert!(
+            search
+                .corpus
+                .admit_accepted(ChoiceSequence::default(), vec![feature])
+        );
+        assert_eq!(corpus_stats(&search), (1, 1));
+
+        // A rejected case registering another novel feature: rejected
+        // cases also contribute to the observation set and the corpus.
+        let feature = Feature {
+            label: "b",
+            kind: FeatureKind::Event(EventBucket::One),
+        };
+        assert!(
+            search
+                .corpus
+                .admit_rejected(ChoiceSequence::default(), vec![feature])
+        );
+        assert_eq!(corpus_stats(&search), (2, 2));
+    }
+
+    #[test]
+    fn stats_corpus_fields_include_rejected_case_features() {
+        // The first case rejects while reporting a novel feature: it
+        // enters the rejected queue and its feature enters the observation
+        // set. Later cases report the same (now observed) feature and are
+        // not admitted.
+        let case = std::cell::Cell::new(0u64);
+        let mut runner = Runner::new(1);
+        runner
+            .run_feedback_guided(8, |ctx| {
+                let i = case.get();
+                case.set(i + 1);
+                ctx.bucket("b", 1);
+                if i == 0 {
+                    ctx.reject_case();
+                }
+                Ok(())
+            })
+            .expect("run must succeed");
+        let stats = runner.stats();
+        assert_eq!(stats.rejected_cases, 1);
+        assert_eq!(stats.discovered_features, 1);
+        assert_eq!(stats.max_corpus_size, 1);
+    }
+
+    #[test]
+    fn stats_corpus_fields_zero_cases() {
+        let mut runner = Runner::new(1);
+        runner
+            .run_feedback_guided(0, |_ctx| {
+                panic!("closure must not be invoked with zero cases");
+            })
+            .expect("zero cases must succeed");
+        assert_eq!(runner.stats(), Stats::default());
+    }
 }
