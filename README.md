@@ -133,3 +133,17 @@ Benchmark
 
 The detection benchmark harness lives in the `benchmark/` workspace
 crate; see its [`README.md`](benchmark/README.md) for how to run it.
+
+Agent Skills
+------------
+
+An [Agent Skills](https://agentskills.io/) bundle ships with the crate.
+Install it with `gh skill install` so a supported AI agent picks up
+noprop's public API and conventions before answering.
+
+```bash
+gh skill install sile/noprop noprop
+```
+
+The skill itself lives at
+[`skills/noprop/SKILL.md`](skills/noprop/SKILL.md).
