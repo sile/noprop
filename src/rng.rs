@@ -82,12 +82,14 @@ pub struct TestCaseContext {
     /// context that cannot catch it.
     inside_runner: bool,
     /// Total number of [`record_generated`](Self::record_generated) calls
-    /// observed across every case that ran on this context. Never reset
-    /// between cases so [`Runner::run`](crate::Runner::run) can report it
-    /// as [`Stats::total_samples`](crate::Stats::total_samples). Counted
-    /// once per top-level `sample_*` invocation (dedup / elision happens
-    /// after the counter is incremented, so folded runs are still fully
-    /// counted).
+    /// observed on this context (never reset between cases). The
+    /// uniform runner reuses one context across the whole run and
+    /// reads this directly for
+    /// [`Stats::total_samples`](crate::Stats::total_samples); the
+    /// feedback-guided runner builds a fresh context per case and sums
+    /// this externally. Counted once per top-level `sample_*`
+    /// invocation (dedup / elision happens after the counter is
+    /// incremented, so folded runs are still fully counted).
     total_samples: usize,
     /// Scalar / semantic feedback collected during the current case.
     /// Always [`FeedbackState::Disabled`] when constructed via
@@ -1210,10 +1212,10 @@ impl TestCaseContext {
     }
 
     /// Total number of top-level `sample_*` invocations observed on this
-    /// context across every case that has run so far. Consumed by
-    /// [`Runner::run`](crate::Runner::run) and
-    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided) when they build
-    /// [`Stats`](crate::Stats).
+    /// context. Consumed by [`Runner::run`](crate::Runner::run) directly
+    /// (one context reused across cases) and summed externally by
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
+    /// (a fresh context per case).
     pub(crate) fn total_samples(&self) -> usize {
         self.total_samples
     }
@@ -1394,7 +1396,7 @@ impl SplitMix64 {
 mod tests {
     use super::*;
 
-    // === Seed determinism (fill-based; next_u64 is no longer on TestCaseContext) ===
+    // === Seed determinism (via TestCaseContext::fill) ===
 
     #[test]
     fn same_seed_gives_same_sequence() {
