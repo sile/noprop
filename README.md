@@ -27,8 +27,8 @@ An imperative property-based testing library for Rust.
     hard-to-hit branches, long command sequences a uniform run would
     only find by chance.
 
-Example
--------
+Quick start
+-----------
 
 ```rust
 #[test]
@@ -49,8 +49,25 @@ See [`docs/recipes.md`](docs/recipes.md) for the seed / env-variable
 scaffolding, sampling patterns, stateful properties, feedback-guided
 search, and the failure-reproduction workflow.
 
-Choosing a search strategy
---------------------------
+When noprop fits
+----------------
+
+Choose noprop when properties are naturally sequential — dependent
+generation, stateful command loops, or protocol traces — and plain Rust
+control flow is clearer than a combinator DSL.
+
+If automatic shrinking or file-based failure persistence is a priority,
+another PBT library will fit better.
+
+Designing the search
+--------------------
+
+A property can only discover failures that lie within its generator's
+support. How quickly it finds them depends on the generator's distribution
+and the search policy. noprop keeps these decisions explicit: dependent
+values use ordinary Rust control flow, boundaries and branches can receive
+deliberate probability, and feedback-guided search can steer toward rare
+semantic states.
 
 Start from the property and its semantic input domain. Make every relevant
 behavior reachable, then bias boundaries and operation sequences that would
@@ -80,19 +97,6 @@ weights before increasing the case budget. Switch to
 progress and the property can report stable, low-cardinality events, buckets,
 or transitions. Feedback can steer within a generator's support; it cannot
 make an unreachable value reachable.
-
-When to use noprop
-------------------
-
-noprop is imperative-first and suits properties that are naturally
-sequential — dependent generation, model-based (stateful) commands,
-protocol traces — and where writing the generator as plain Rust reads
-more clearly than a combinator DSL. The API stays small so a project
-can adopt it as a dev-dependency without pulling in a graph of crates.
-
-If you need automatic shrinking or file-based failure persistence,
-another PBT library will fit better today; noprop deliberately leaves
-those out.
 
 Main constraints
 ----------------
@@ -132,8 +136,8 @@ Documentation
 The four Markdown guides above also render as `docs::*` modules on docs.rs,
 alongside the API rustdoc.
 
-Examples
---------
+Runnable examples
+-----------------
 
 The [`examples/`](examples/) directory contains runnable end-to-end
 demos of the larger recipes (each runs with `cargo run --example
@@ -156,11 +160,16 @@ demos of the larger recipes (each runs with `cargo run --example
   seed via `NOPROP_SEED` and the failure report's reproduce hint
   (this one fails on purpose)
 
-Benchmark
----------
+Evaluating search effectiveness
+-------------------------------
 
-The detection benchmark harness lives in the `benchmark/` workspace
-crate; see its [`README.md`](benchmark/README.md) for how to run it.
+The benchmark compares how many cases uniform, biased, boundary-biased,
+and feedback-guided searches need to detect known mutants across fixed seed
+cohorts. It evaluates fault-detection effectiveness rather than runtime
+throughput, and its results are specific to the included workloads.
+
+See [`benchmark/README.md`](benchmark/README.md) for the workloads,
+methodology, and commands.
 
 Agent Skills
 ------------
