@@ -4,7 +4,7 @@ This document describes the design of noprop's feedback-guided search
 policy, used for property testing over semantic feedback. Throughout
 the document, **corpus** refers specifically to the bounded collection
 of interesting cases that feedback-guided search maintains internally
-(the same bound reported by
+(whose current size at end-of-run is reported by
 [`Stats::max_corpus_size`](crate::Stats::max_corpus_size)); it is not
 another name for feedback-guided search itself.
 
@@ -134,10 +134,10 @@ high-visit paths.
 Accepted cases that register at least one novel feature enter the
 accepted queue; rejected cases that register novel features enter a
 separate rejected queue, kept as low-energy scaffolding for reaching
-sparse preconditions (picked with probability
-`1 / REJECTED_PICK_DENOM`; while the accepted queue is empty, the
-rejected queue is the only source and is always picked). The combined
-size of both queues is capped at `CORPUS_SIZE`.
+sparse preconditions (picked with probability 1/8 (currently); while
+the accepted queue is empty, the rejected queue is the only source
+and is always picked). The combined size of both queues is capped at
+64 (currently).
 
 Admission:
 
@@ -147,19 +147,46 @@ Admission:
   evicted; ties evict the earliest arrival.
 - A case with no novel feature is never admitted.
 
-A new case either restarts (with probability
-`1 / RANDOM_RESTART_DENOM`) and records fresh from a new seed, or
-explores: it picks a corpus entry and mutates it. Accepted picks are
-uniform among entries; with probability `1 / REJECTED_PICK_DENOM` the
-rejected queue is picked instead when it is non-empty.
+A new case either restarts (with probability 1/8 (currently)) and
+records fresh from a new seed, or explores: it picks a corpus entry
+and mutates it. Accepted picks are uniform among entries; with
+probability 1/8 (currently) the rejected queue is picked instead when
+it is non-empty.
 
-Mutation rewrites each draw with probability `1 / MUTATION_DENOM`:
+Mutation rewrites each draw with probability 1/4 (currently):
 bounded-domain draws (Bounded / Choice) get a fresh value inside their
 recorded constraint, while constraint-free draws (Raw: raw bytes, string
-payload, …) are regenerated as a whole. A mutated candidate replays its
-draws with generated tail draws for control flow the mutation
-introduces, under the four exploratory replay rules and the per-case
-generated-draw cap.
+payload, …) are regenerated as a whole. A mutated candidate then
+replays its draws under the exploratory replay rules described in the
+next section.
+
+## Exploratory Replay
+
+The mutated candidate is replayed against its recorded draw sequence.
+Each draw the generator asks for during the replay follows exactly one
+of four rules, matched in order against the recorded draw at the
+current cursor:
+
+1. **Match** — the recorded draw has the same width and the same
+   declared constraint. The recorded value is returned as-is and the
+   cursor advances.
+2. **Constraint change** — the recorded draw has the same width but a
+   different constraint (a different primitive, or a bounded draw whose
+   bound changed). The value is regenerated under the new constraint,
+   the recorded metadata is overwritten, and the regenerated value is
+   returned.
+3. **Width change** — the recorded draw has a different width. The
+   recorded value is dead; a fresh value of the new width is generated,
+   replaces the recorded draw in place (with the new metadata), and is
+   returned.
+4. **Tail generation** — the recorded sequence is exhausted. A fresh
+   value is generated (with the new metadata) and appended to the
+   sequence, so an accepted mutated candidate can re-enter the corpus
+   with its tail intact.
+
+Rules 3 and 4 count each generated draw against a per-case cap
+(currently 4096). A case that draws past the cap is rejected so a
+mutation that opens an unbounded loop still terminates the run.
 
 ## Determinism and Reproduction
 
