@@ -78,20 +78,20 @@ fn main() -> noprop::TestResult {
         "the guided run must steer toward the reported region"
     );
 
-    // === bucket and transition report distributions ===
+    // === bucket reports a distribution ===
     //
     // `bucket` reports where a value fell in a caller-designed
-    // histogram; `transition` reports an abstract state change. Both
-    // widen the feature set the corpus is built from, without
-    // steering toward a single region.
+    // histogram; it widens the feature set the corpus is built from
+    // without steering toward a single region. `transition` reports
+    // an abstract state change and needs a genuine (from, to) pair;
+    // see `stateful.rs` for that pattern applied to a real model.
     noprop::Runner::new(0xC0FFEE).run_feedback_guided(64, |ctx| {
         let len = noprop::sample_usize_in(ctx, 0..=24);
         let _line = noprop::sample_string(ctx, len);
         ctx.bucket("len-bucket", (len / 4) as u64);
-        ctx.transition("ingest", 0, (len % 3) as u64);
         Ok(())
     })?;
-    println!("bucket / transition reporting: passed");
+    println!("bucket reporting: passed");
 
     // === coverage gate: Cell counter + run-after assert ===
     //

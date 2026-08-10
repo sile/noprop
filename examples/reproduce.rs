@@ -37,7 +37,8 @@ fn main() {
     // deterministic without setup (and the CI expectation stable).
     let seed = match std::env::var("NOPROP_SEED") {
         Ok(s) => parse_seed(&s).expect("NOPROP_SEED must be decimal or 0x-prefixed hex"),
-        // Fails at case 3, so the demo shows a non-trivial case index.
+        // Any fixed seed works; this one fails at a non-trivial case
+        // index (printed below) so the demo shows a non-zero index.
         Err(_) => 0x00FF_00FF_00FF_00FF,
     };
     let err = run(seed).expect_err("this seed must fail");
