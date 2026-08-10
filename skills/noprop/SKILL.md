@@ -1,392 +1,214 @@
 ---
 name: noprop
 description: >
-  Reference for the noprop crate — imperative property-based testing in Rust
-  with no macros, no combinator DSL, and no dependencies. Use when the task
-  mentions noprop, or when writing property tests / stateful (model + SUT)
-  checks / feedback-guided search / rejection scopes in Rust with `Runner`,
-  `TestCaseContext`, `Ratio`, or any `sample_*` primitive, or when reading
-  the bundled docs (`docs::recipes`, `docs::generator_authoring`,
-  `docs::generator_design`, `docs::feedback_guided_search`).
-license: MIT
+  Implement, review, debug, and explain Rust property tests that use the
+  noprop crate. Use when a task names noprop, contains `noprop::` APIs or a
+  Cargo dependency on noprop, or asks specifically about noprop's Runner,
+  TestCaseContext, Ratio, `sample_*`, rejection, failure reproduction, or
+  feedback-guided search. Do not activate for generic Rust property-testing
+  tasks that use another framework.
 ---
 
 # noprop
 
-Property-based testing written as imperative closures. Properties are plain
-`Fn(&mut TestCaseContext) -> Result<(), Box<dyn Error>>` values that use
-ordinary Rust control flow — `if` / `match` / `for` — to draw values and
-check them, so a test reads like the code under test.
+Use noprop to write imperative property tests as plain Rust closures. Focus
+first on making the intended bug region reachable and likely to be explored;
+API selection and case count come after the search space is sound.
 
-## What this crate is like
+## Follow this workflow
 
-- **Imperative closure style.** No macros, no combinator DSL. Properties
-  are closures; sequencing is plain Rust.
-- **One generator shape.** Every `sample_*` primitive is
-  `fn sample_X(ctx: &mut TestCaseContext) -> X`. User-defined generators
-  (`fn sample_person(ctx: &mut TestCaseContext) -> Person`) follow the same
-  shape and compose by plain call.
-- **Static argument errors panic, external input errors return `Result`.**
-  Caller-bug inputs (`Ratio::new(2, 1)` on an unchecked value,
-  `sample_with_rejection(ctx, 0, _)`) panic with a `#[track_caller]`
-  message. Environment / config values (`MYAPP_SEED` parse failure) return
-  a `Result`.
-- **Rejection scope is explicit.** `sample_with_rejection(ctx, N, f)`
-  redraws bounded within one draw; `TestCaseContext::reject_case()` throws
-  the whole case away. They do not overlap.
-- **Reproduction is seed-driven.** v0.1 has no automatic shrinking and no
-  on-disk failure corpus. `RunError`'s `Display` / `Debug` embeds a
-  `reproduce with: noprop::Runner::new(0x...).run(N, |ctx| ...)` hint that
-  reruns the identical failure case index.
-- **No `unsafe`, no implicit I/O, no dependencies.** `panic = "unwind"` is
-  required (`reject_case` uses panic-based unwind).
+### 1. Establish the applicable API
 
-## Version info
+- Treat the guidance in this skill as targeting noprop 0.1.0.
+- Inspect the target project's `Cargo.toml` and `Cargo.lock`; when it resolves
+  a different version, use that version's matching rustdoc instead.
+- When changing noprop itself, treat `src/lib.rs`, the public rustdoc, and the
+  relevant root `docs/*.md` file as the source of truth.
+- When changing a consuming project, do not silently upgrade its noprop API.
+- Read [references/api.md](references/api.md) only when an exact signature,
+  sampler, panic condition, or statistic is needed.
 
-- crate: `noprop`
-- version: 0.0.4 (approaching v0.1)
-- Rust edition: 2024
-- MSRV: 1.88
-- license: MIT
-- dependencies: none (workspace root; only a `benchmark` member crate lives
-  alongside)
+### 2. State what the property must explore
 
-## Bundled documentation
+Write down the following before writing generators:
 
-`src/lib.rs` re-exports `pub mod docs;`, and each entry pulls a Markdown
-file in via `#[doc = include_str!]`. All four render on docs.rs alongside
-the API rustdoc.
+1. Name the invariant or oracle: model-versus-SUT, differential,
+   round-trip, metamorphic relation, or a domain invariant.
+2. Identify the behavior that could falsify it, including its setup,
+   trigger, and observable consequence.
+3. Identify boundary values, dependent values, preconditions, state
+   transitions, and sequence lengths needed to reach that behavior.
+4. Decide what evidence will prove that the meaningful region was actually
+   exercised. Add a coverage gate when the invariant can otherwise pass
+   vacuously.
 
-| Module | What it covers |
-|--------|---------------|
-| `docs::recipes` | Task-oriented recipes: seed / run scaffolding, sampling primitives and collections, rejection scopes, dependent / stateful / cluster / streaming properties, feedback-guided search, coverage gate, reproducing failures, turning a trace into a hand-written regression test. |
-| `docs::generator_authoring` | How-to guide for writing `sample_*` helpers: composing primitives, bounded rejection, the shared `sample_below` migration note, the two `NonZero` recipes, and the finite-by-default float samplers. |
-| `docs::generator_design` | Small design reference every `sample_*` generator has to satisfy: support, distribution, termination, rejection scope, valid-by-construction. |
-| `docs::feedback_guided_search` | Design of `Runner::run_feedback_guided`: the three feedback methods, corpus admission and eviction, the global feature registry cap, the per-case cap. |
+Do not start by drawing convenient primitive types. Start from the semantic
+states and operations the test must reach, then map them onto noprop draws.
 
-For any "how do I write X with noprop", the fastest path is
-`docs::recipes` first, then drop down to the API rustdoc.
+### 3. Design an effective search space
 
-## Core types
+For every generator, decide its support, distribution, and termination.
 
-### `Runner`
+- Make the support contain every class relevant to the property, including
+  empty, singleton, maximum supported size within the test's explicit budget,
+  invalid-input, and exceptional classes when they belong to the SUT's public
+  input domain.
+- Represent constrained domains with types and valid-by-construction values.
+  Draw a length before its payload, a protocol version before its dependent
+  fields, and consult model state before choosing a legal command.
+- Keep loops and recursion explicitly bounded. Sample the bound or depth from
+  a finite range and include both short and long cases deliberately.
+- Use `sample_with_boundaries` to give domain boundaries meaningful
+  probability without discarding the interior distribution.
+- Use `sample_weighted_index` for branch or command selection. Keep the
+  weights visible in one place and ensure prerequisite operations, trigger
+  operations, and observation operations all receive enough probability.
+- Prefer state-dependent command selection over generating mostly illegal
+  commands and rejecting them. Generate invalid commands intentionally only
+  when invalid-command behavior is part of the property.
+- Prefer operation sequences over arbitrary final states when the bug depends
+  on history. Check the model and invariant after each meaningful transition;
+  defer checks to finalization only when the API semantics require it.
 
-| Method | Description |
-|--------|-------------|
-| `Runner::new(seed: u64) -> Self` | Construct with a fixed seed. noprop never reads system time or environment on its own. |
-| `runner.run(cases, |ctx| { ... Ok(()) }) -> RunResult` | Uniform sampling (default). Use unless the property has a rare region uniform sampling would only hit by luck. |
-| `runner.run_feedback_guided(cases, |ctx| { ... }) -> RunResult` | Steer the search toward inputs that report new semantic features via `ctx.event` / `bucket` / `transition`. |
-| `runner.stats() -> Stats` | Observation counters for the most recent run. |
+Treat increasing `cases` as the last tuning lever. More cases do not repair a
+support hole, an unreachable command sequence, a vacuous invariant, or a
+distribution that assigns negligible mass to the target region.
 
-The property closure returns `Result<(), Box<dyn Error>>` (`TestResult`).
-Both a returned `Err` and a panic are treated as a failure and produce a
-`RunError`.
+### 4. Choose the search policy
 
-### `Stats`
+Use `Runner::run` by default. It provides a clear baseline and is the right
+choice when direct sampling and explicit bias can reach the important regions.
 
-| Field | Description |
-|-------|-------------|
-| `accepted_cases: usize` | Cases that were kept (the counter that closes the `cases` budget). |
-| `rejected_cases: usize` | Cases dropped via `reject_case` or a `sample_with_rejection` exhaustion. |
-| `total_samples: usize` | `sample_*` calls made, including those in rejected cases. |
-| `discovered_features: usize` | Distinct semantic features registered during a feedback-guided run (capped at 1024, currently). |
-| `max_corpus_size: usize` | Peak combined size (accepted + rejected) of the feedback-guided corpus. |
+Use `Runner::run_feedback_guided` only when all of these hold:
 
-### `TestCaseContext`
+- the failure requires semantic progress through a rare region;
+- ordinary generator bias would be awkward or insufficient;
+- the property can report stable, low-cardinality progress signals; and
+- mutating a previously interesting draw sequence is likely to advance the
+  property further.
 
-The only argument the property closure receives. Draws values, reports
-feedback, and can skip the current case.
+Do not use feedback-guided search to compensate for missing generator support:
+it cannot create values the generator cannot produce.
 
-| Method | Description |
-|--------|-------------|
-| `TestCaseContext::new(seed: u64) -> Self` | Direct construction (for doctests / experiments outside a `Runner`). |
-| `ctx.reject_case() -> !` | Unwind out of the current case; the runner discards it and moves on. Panic-based. |
-| `ctx.event(label: &'static str)` | Report a bounded-count occurrence. Counts saturate into buckets (1 / 2-3 / 4-7 / 8+). |
-| `ctx.bucket(label: &'static str, value: u64)` | Report a pre-discretized state value. Aim for roughly 3-10 buckets per label. |
-| `ctx.transition(label: &'static str, from: u64, to: u64)` | Report an abstract state transition; the `(from, to)` pair is part of the feature identity. |
+Report semantic feedback as follows:
 
-`event` / `bucket` / `transition` are allocation-free no-ops under
-`Runner::run`, so the same property closure can be exercised under both
-`run` and `run_feedback_guided`.
+- Use `ctx.event(label)` for finite milestones or noteworthy occurrences.
+- Use `ctx.bucket(label, bucket)` for a state value after mapping it into
+  roughly 3-10 meaningful buckets.
+- Use `ctx.transition(label, from, to)` for abstract state-machine changes.
+- Keep labels static and semantic. Do not report raw timestamps, sequence
+  numbers, byte counts, IDs, or other high-cardinality values as features.
 
-### `RunError` and `RunErrorKind`
+Treat feedback as a steering signal, not proof of coverage. Keep assertions
+and coverage gates independent of feature reporting.
 
-Failure value returned by `Runner::run` / `run_feedback_guided`.
+### 5. Use rejection at the narrowest scope
 
-| Method | Description |
-|--------|-------------|
-| `err.seed() -> u64` | The seed the failing runner was constructed with. |
-| `err.case_index() -> usize` | Zero-based index of the failing case. |
-| `err.generated() -> &[GeneratedValue]` | Value trace recorded during the failing case (source location, type name, `Debug` representation where available). |
-| `err.stats() -> Stats` | Counters at the point of failure. |
-| `err.kind() -> RunErrorKind` | `PropertyFailure` (the closure panicked or returned `Err`) or `TooManyRejections` (the internal global rejection limit was reached before the budget). |
+- Prefer valid-by-construction generation when a constraint can be expressed
+  directly.
+- Use `sample_with_rejection(ctx, max_attempts, ...)` for one constrained
+  draw. Choose `max_attempts` from the expected acceptance rate rather than
+  copying an arbitrary value.
+- Use `ctx.reject_case()` only when a precondition depends on the completed
+  case and the whole case is unsuitable.
+- Rework the generator when rejection is common. Frequent rejection wastes
+  the case budget and usually indicates that the sampled representation is
+  broader than the intended domain.
+- Never write an unbounded retry loop.
 
-`Display` and `Debug` print the seed, case index, value trace, and a
-`reproduce with: noprop::Runner::new(0x...).run(N, |ctx| ...)` hint that
-reruns the identical failure case.
+### 6. Prevent vacuous success
 
-### `GeneratedValue`
+Place assertions where the relevant behavior occurs, and separately count
+whether that location was reached. After the run, fail if the count is zero.
+Use `Cell`, `RefCell`, or atomics for cross-case observations because the
+property closure implements `Fn`.
 
-One entry in `RunError::generated()`.
+Count only evidence from cases that reach the intended check. Do not treat
+attempt count, feedback registration, or rejected cases as proof that the
+invariant ran. Do not reject a case after recording coverage evidence; a later
+rejection would let a discarded case inflate the gate.
 
-| Method | Description |
-|--------|-------------|
-| `type_name() -> &'static str` | Runtime type name of the recorded value (`"u32"`, `"String"`, …). |
-| `location() -> &'static Location<'static>` | Source location of the `sample_*` call. |
-| `value_repr() -> Option<String>` | `Debug` representation of the value (may be absent when the type has no useful `Debug`). |
-| `is_elided() -> bool` | Whether the trace entry was elided for output-size control. |
-| `elided_count() -> Option<usize>` | For elided entries, how many inner items were dropped (bytes / chars / …). |
+### 7. Validate the exploration strategy
 
-### `Ratio`
+- Confirm that every intended equivalence class and boundary is in the
+  generator support.
+- Confirm that all loops, recursive generators, and run-to-quiescence phases
+  have explicit bounds.
+- Inspect `runner.stats()` when rejection or feedback behavior matters.
+- Evaluate search changes across several fixed seeds and realistic case
+  budgets. Do not judge a distribution or feedback design from one lucky run.
+- When practical, inject or retain a known defect and verify that the property
+  detects it reliably. A property that only passes is not evidence that its
+  exploration strategy is effective.
+- Run the target project's formatting, tests, lints, and doctests in the form
+  required by that project.
 
-Exact rational probability. Passed to `sample_ratio` and
-`sample_with_boundaries`.
-
-| Method | Description |
-|--------|-------------|
-| `Ratio::new(numerator: u32, denominator: u32) -> Self` | General `m/n` form for compile-time literals. Panics (`#[track_caller]`) on `denominator == 0` or `numerator > denominator`. |
-| `Ratio::one_nth(n: u32) -> Self` | Single-argument shortcut for `1/N`. Panics on `n == 0`. |
-
-Both are `const fn`. For runtime values, clamp or validate yourself before
-calling `Ratio::new`; noprop deliberately does not ship a fallible or
-clamping constructor.
-
-## Sampling primitives
-
-All follow `fn sample_X(ctx: &mut TestCaseContext) -> X` and carry
-`#[track_caller]`.
-
-### Integers
-
-| Function | Output |
-|----------|--------|
-| `sample_bool(ctx)` | uniform `bool` |
-| `sample_u8` / `u16` / `u32` / `u64` / `u128` / `usize` | uniform of the named type |
-| `sample_i8` / `i16` / `i32` / `i64` / `i128` / `isize` | uniform of the named type |
-| `sample_usize_in(ctx, range)` | uniform in a `Range` / `RangeInclusive` / `RangeFrom` / etc. (bias-free bounded rejection) |
-
-`sample_usize_in(ctx, 0..n)` is the correct alternative to
-`sample_usize(ctx) % n` (the latter is biased and overflows at
-`usize::MAX`).
-
-### Floats
-
-| Function | Output |
-|----------|--------|
-| `sample_f32(ctx)` / `sample_f64(ctx)` | uniform **finite** value by default (`NaN` and `±∞` excluded via a small bounded rejection loop) |
-| `sample_f32_in(ctx, min, max)` / `sample_f64_in(ctx, min, max)` | uniform in `[min, max)` |
-
-To sample an arbitrary bit pattern (including `NaN`, infinities,
-subnormals), build it explicitly: `f32::from_bits(noprop::sample_u32(ctx))`.
-See `docs::generator_authoring` ("Sampling floats").
-
-### Bytes, chars, strings
-
-| Function | Output |
-|----------|--------|
-| `sample_bytes::<N>(ctx) -> [u8; N]` | fixed-length byte array |
-| `sample_bytes_vec(ctx, len) -> Vec<u8>` | byte buffer of the given length |
-| `sample_char(ctx) -> char` | any valid Unicode scalar (surrogates excluded via bounded rejection) |
-| `sample_ascii_char(ctx) -> char` | `0x00..=0x7F` (control characters included) |
-| `sample_ascii_printable_char(ctx) -> char` | `0x20..=0x7E` |
-| `sample_string(ctx, len)` / `sample_ascii_string(ctx, len)` / `sample_ascii_printable_string(ctx, len)` | strings of exactly `len` code points |
-
-Length is measured in code points, not UTF-8 bytes. For random-length
-strings, pair with `sample_usize_in` (length first, string second).
-
-### Selection, weighting, bias
-
-| Function | Description |
-|----------|-------------|
-| `sample_choice(ctx, &[T]) -> T` | uniform pick from a slice (`T: Clone`) |
-| `sample_weighted_index(ctx, &[u32]) -> usize` | index chosen with probability proportional to each weight; panics on empty slice or all-zero weights |
-| `sample_ratio(ctx, Ratio) -> bool` | returns `true` with probability `Ratio` |
-| `sample_with_boundaries(ctx, &[T], Ratio, sample) -> T` | with probability `Ratio` pick uniformly from the boundary slice, otherwise call `sample(ctx)` |
-
-### Bounded rejection sampling
-
-| Function | Description |
-|----------|-------------|
-| `sample_with_rejection(ctx, max_attempts, |ctx| Option<T>) -> T` | Redraw until the closure returns `Some`, up to `max_attempts` tries. On exhaustion the enclosing case is rejected via `TestCaseContext::reject_case()`, so this recipe requires a `Runner` around it. |
-
-An internal rejection sampler shared by `sample_usize_in`, `sample_ratio`,
-`sample_weighted_index`, `sample_choice`, and `sample_with_boundaries` is
-bounded at 64 attempts per call. The exhaustion probability is under
-`2⁻⁶⁴`; inside `Runner::run` the case is rejected, outside a runner the
-call panics.
-
-### Feedback (feedback-guided runs)
-
-`TestCaseContext::event` / `bucket` / `transition`; see the
-`TestCaseContext` table above and `docs::feedback_guided_search` for the
-design.
-
-### Seed helper
-
-| Function | Description |
-|----------|-------------|
-| `seed_from_env_or_time(var: &str) -> TestResult<u64>` | Read `var` (hex `0x…`, decimal, `0b…`, `0o…` with `_` separators); fall back to the system clock when unset. The only place noprop touches env / time. |
-
-## Typical patterns
-
-### Fixed seed, plain `Runner::run`
+## Start from this complete test shape
 
 ```rust
-noprop::Runner::new(0xDEAD_BEEF).run(256, |ctx| {
-    let a = noprop::sample_u32(ctx);
-    let b = noprop::sample_u32(ctx);
-    assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
-    Ok(())
-})?;
-```
+#[test]
+fn vec_matches_model() -> noprop::TestResult {
+    let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
+    let meaningful_pops = std::cell::Cell::new(0usize);
+    let mut runner = noprop::Runner::new(seed);
 
-### Reproducible seed via env variable
+    runner.run(256, |ctx| {
+        let mut model = Vec::<u32>::new();
+        let mut sut = Vec::<u32>::new();
+        let steps = noprop::sample_with_boundaries(
+            ctx,
+            &[0usize, 1, 32],
+            noprop::Ratio::one_nth(5),
+            |ctx| noprop::sample_usize_in(ctx, 0..=32),
+        );
 
-```rust
-let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
-noprop::Runner::new(seed).run(256, |ctx| {
-    // property body
-    Ok(())
-})?;
-```
-
-Paste the hex seed printed by a failure report into `MYAPP_SEED` to hit
-the same failing case index on the next run.
-
-### Stateful (model-based)
-
-```rust
-noprop::Runner::new(0).run(64, |ctx| {
-    let mut model: Vec<u32> = Vec::new();
-    let mut sut: Vec<u32> = Vec::new();
-    let steps = noprop::sample_usize_in(ctx, 0..=16);
-    for _ in 0..steps {
-        match noprop::sample_usize_in(ctx, 0..2) {
-            0 => {
-                let v = noprop::sample_u32(ctx);
-                model.push(v);
-                sut.push(v);
-            }
-            _ => {
-                assert_eq!(model.pop(), sut.pop(), "pop mismatch");
+        for step in 0..steps {
+            match noprop::sample_weighted_index(ctx, &[3, 2]) {
+                0 => {
+                    let value = noprop::sample_u32(ctx);
+                    model.push(value);
+                    sut.push(value);
+                }
+                _ => {
+                    let expected = model.pop();
+                    let actual = sut.pop();
+                    assert_eq!(actual, expected, "pop mismatch at step {step}");
+                    if expected.is_some() {
+                        meaningful_pops.set(meaningful_pops.get() + 1);
+                    }
+                }
             }
         }
-    }
+        Ok(())
+    })?;
+
+    assert!(
+        meaningful_pops.get() > 0,
+        "no case exercised a non-empty pop\n{runner}"
+    );
     Ok(())
-})?;
+}
 ```
 
-Cluster-level invariants, bounded run-to-quiescence, cross-step
-invariants with an append-only history, and stateful streaming APIs live
-as separate recipes in `docs::recipes`.
+Replace the model, SUT, commands, weights, bounds, and coverage gate from the
+domain analysis. Do not preserve the example's numbers without justification.
 
-### Feedback-guided run with a coverage gate
+## Keep these constraints in mind
 
-```rust
-use std::cell::Cell;
+- Keep properties and generators as plain Rust closures and functions; do not
+  introduce a macro or combinator DSL around noprop.
+- In new examples, prefer explicit `noprop::Runner`, `noprop::Ratio`, and
+  `noprop::sample_*` paths so the source of each testing primitive stays
+  visible. Respect the consuming project's style; do not rewrite existing
+  imports solely to enforce this preference.
+- Use `sample_usize_in`, not `sample_usize(ctx) % n`.
+- Use exact `Ratio` values and validate runtime-derived numerator and
+  denominator values before constructing them.
+- Require `panic = "unwind"`.
+- Expect seed-based reproduction rather than automatic shrinking or on-disk
+  failure persistence.
 
-let long_line_hits: Cell<usize> = Cell::new(0);
-let mut runner = noprop::Runner::new(0xFEED);
-runner.run_feedback_guided(256, |ctx| {
-    let len = noprop::sample_usize_in(ctx, 0..=24);
-    let _line = noprop::sample_string(ctx, len);
-    if len > 12 {
-        ctx.event("long-line");
-        long_line_hits.set(long_line_hits.get() + 1);
-    }
-    Ok(())
-})?;
-assert!(
-    long_line_hits.get() > 0,
-    "the `long-line` region must be reached at least once\n{runner}"
-);
-```
-
-The same `Cell` counter + run-after assert applies to `Runner::run`
-(uniform) whenever a state-dependent invariant would otherwise pass
-vacuously. See `docs::recipes` ("Assert a coverage gate after the run").
-
-### Choosing a rejection scope
-
-```rust
-// Per-draw bounded rejection: sample_with_rejection.
-noprop::Runner::new(0).run(64, |ctx| {
-    let odd_u32 = noprop::sample_with_rejection(ctx, 64, |ctx| {
-        let v = noprop::sample_u32(ctx);
-        (v % 2 == 1).then_some(v)
-    });
-    assert_eq!(odd_u32 % 2, 1);
-    Ok(())
-})?;
-
-// Case-wide skip: TestCaseContext::reject_case.
-noprop::Runner::new(0).run(64, |ctx| {
-    let n = noprop::sample_u32(ctx);
-    if n < 100 {
-        ctx.reject_case(); // not counted toward accepted_cases
-    }
-    // Only cases with n >= 100 reach here.
-    Ok(())
-})?;
-```
-
-## Conventions and gotchas
-
-- **Do not introduce macros or combinator DSLs.** Properties stay plain
-  Rust closures; branching is `if` / `match`, loops are `for`. `proptest!`
-  / `arbitrary`-style DSLs are outside noprop's design.
-- **Use `Ratio::new` / `Ratio::one_nth` at literal sites.** Both panic on
-  invalid inputs. noprop deliberately does not ship a fallible or
-  clamping constructor; clamp runtime values yourself before calling
-  `new`.
-- **`sample_with_rejection`'s `max_attempts` is always explicit.** There
-  is no library-wide default (crate internals happen to use 64
-  everywhere, but the user API restates it at every call).
-- **Use `sample_usize_in`, not `sample_usize(ctx) % max`.** The modulo
-  form is biased and overflows at `usize::MAX`.
-- **Failure messages carry the context, not just the value.** Include
-  the step index, mismatched values, and — for stateful properties —
-  the command history or the model state at the point of failure.
-- **Feedback-reporting closures also run under uniform `Runner::run`.**
-  `event` / `bucket` / `transition` are no-ops there, so a single
-  property body can be exercised under both entry points.
-- **`NonZero<_>` is a two-recipe pick, not a built-in primitive.** The
-  uniform recipe (rejection loop, `Runner`-only) and the biased recipe
-  (`if v == 0 { 1 } else { v }`, always terminates in one draw) trade
-  distribution uniformity against unconditional termination. See
-  `docs::generator_authoring` ("Sampling non-zero integers").
-- **Value trace comes from `Debug`.** `sample_*` records the produced
-  value's `Debug` representation. `Cell<_>` and other non-`Debug` types
-  render as elided entries in the trace.
-
-## Known limitations (v0.1)
-
-- **No automatic shrinking.** Reproduction is seed + case budget only;
-  regressions are hand-simplified from the value trace and inlined as
-  `#[test]`.
-- **No on-disk failure persistence.** The caller manages seeds. Recovery
-  is via printout or env variable.
-- **`panic = "unwind"` required.** `reject_case` uses panic-based
-  unwinding; `panic = "abort"` builds do not work.
-- **Feedback-guided caps are internal constants.** Currently 1024
-  distinct features globally and 64 features per case.
-- **`sample_with_rejection` restates `max_attempts` per call.** No
-  library-wide default is provided.
-
-## Where to look next
-
-- **crate rustdoc** (`https://docs.rs/noprop/`): the `pub` API and all
-  four doc modules render there.
-- **`docs::recipes`** (source: `docs/recipes.md`): task-oriented recipes.
-  Start here whenever the question is "how do I do X".
-- **`docs::generator_authoring`** (source: `docs/generator-authoring.md`):
-  authoring guide for user-defined `sample_*` helpers.
-- **`docs::generator_design`** (source: `docs/generator-design.md`):
-  support / distribution / termination decisions each generator has to
-  make.
-- **`docs::feedback_guided_search`** (source:
-  `docs/feedback-guided-search.md`): internal model of feedback-guided
-  runs (feature identity, corpus, registry cap).
-- **`examples/`**: `basics.rs`, `stateful.rs`, `feedback_guided.rs`,
-  `rejection.rs`, `reproduce.rs`. Each runs with
-  `cargo run --example <name>`.
+When a failure occurs, rerun the exact entry point, seed, case budget, and
+property closure printed by the failure report. Read
+[references/failure-diagnostics.md](references/failure-diagnostics.md) only
+when reproducing or interpreting an actual failure.
