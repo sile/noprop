@@ -751,8 +751,9 @@ impl SemanticCorpus {
         true
     }
 
-    /// Index of the weakest entry across both queues: fewest newly
-    /// registered features first; ties keep the earlier arrival.
+    /// Index of the weakest entry across both queues (the one to be
+    /// evicted): fewest newly registered features first; ties evict the
+    /// earliest arrival.
     fn weakest_overall(&self) -> usize {
         let mut weakest: Option<(&SemanticEntry, usize)> = None;
         for (i, entry) in self.accepted.iter().chain(self.rejected.iter()).enumerate() {
@@ -814,7 +815,9 @@ impl CorpusGuidedSearch {
     /// The search PRNG is consumed per candidate in this fixed order:
     /// the restart roll first (skipped while the corpus is empty),
     /// then — for exploratory candidates — the explore seed, the
-    /// rejected-queue roll (skipped while it is empty), the index roll,
+    /// rejected-queue roll (skipped when the rejected queue is empty,
+    /// and also skipped when the accepted queue is empty since the
+    /// rejected queue is then picked unconditionally), the index roll,
     /// and finally the mutation rolls. This fixed order keeps the run
     /// reproducible from the seed.
     fn next_context(&mut self) -> TestCaseContext {
