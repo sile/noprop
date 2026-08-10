@@ -975,7 +975,10 @@ fn sample_ascii_printable_char_raw(ctx: &mut TestCaseContext) -> char {
 ///
 /// # Panics
 ///
-/// Panics if `min` or `max` is not finite, or if `min >= max`.
+/// Panics if `min` or `max` is not finite, if `min >= max`, or if
+/// `max - min` overflows to infinity (in that case the finite-output
+/// guarantee cannot be honoured; split the range or sample at bit level
+/// via [`sample_f32`] / `f32::from_bits`).
 #[track_caller]
 pub fn sample_f32_in(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
     assert!(
@@ -983,6 +986,11 @@ pub fn sample_f32_in(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
         "sample_f32_in: min and max must be finite"
     );
     assert!(min < max, "sample_f32_in: min must be less than max");
+    let span = max - min;
+    assert!(
+        span.is_finite(),
+        "sample_f32_in: max - min must be finite (max - min = {span}); split the range"
+    );
     let loc = Location::caller();
     // Build a 24-bit uniform value in [0, 1): construct a float in
     // [1, 2) by injecting 23 random bits into the mantissa of a fixed
@@ -990,7 +998,7 @@ pub fn sample_f32_in(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
     // value in [0, 1) with 24-bit precision is equally likely).
     let bits = 0x3F80_0000 | (u32::from_le_bytes(raw_bytes(ctx)) >> 9);
     let unit = f32::from_bits(bits) - 1.0;
-    let v = min + (max - min) * unit;
+    let v = min + span * unit;
     ctx.record_generated(&v, loc);
     v
 }
@@ -1004,7 +1012,10 @@ pub fn sample_f32_in(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
 ///
 /// # Panics
 ///
-/// Panics if `min` or `max` is not finite, or if `min >= max`.
+/// Panics if `min` or `max` is not finite, if `min >= max`, or if
+/// `max - min` overflows to infinity (in that case the finite-output
+/// guarantee cannot be honoured; split the range or sample at bit level
+/// via [`sample_f64`] / `f64::from_bits`).
 #[track_caller]
 pub fn sample_f64_in(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
     assert!(
@@ -1012,11 +1023,16 @@ pub fn sample_f64_in(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
         "sample_f64_in: min and max must be finite"
     );
     assert!(min < max, "sample_f64_in: min must be less than max");
+    let span = max - min;
+    assert!(
+        span.is_finite(),
+        "sample_f64_in: max - min must be finite (max - min = {span}); split the range"
+    );
     let loc = Location::caller();
     // Same construction as sample_f32 but with 53-bit precision.
     let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(ctx)) >> 12);
     let unit = f64::from_bits(bits) - 1.0;
-    let v = min + (max - min) * unit;
+    let v = min + span * unit;
     ctx.record_generated(&v, loc);
     v
 }
@@ -1391,6 +1407,45 @@ mod tests {
     fn sample_f64_in_panics_on_nan() {
         let mut ctx = TestCaseContext::new(0);
         let _ = sample_f64_in(&mut ctx, 0.0, f64::NAN);
+    }
+
+    #[test]
+    #[should_panic(expected = "max - min must be finite")]
+    fn sample_f32_in_panics_when_span_overflows() {
+        // Individually-finite bounds whose difference overflows to +INF.
+        // Without the guard this would return NaN (for unit == 0.0) or
+        // +/-INF (for unit > 0.0), violating the finite-output contract.
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f32_in(&mut ctx, f32::MIN, f32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "max - min must be finite")]
+    fn sample_f64_in_panics_when_span_overflows() {
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f64_in(&mut ctx, f64::MIN, f64::MAX);
+    }
+
+    #[test]
+    fn sample_f32_in_stays_finite_at_widest_admissible_span() {
+        // The widest range whose span is still finite: 0.0..f32::MAX
+        // (span == f32::MAX). Every drawn value must be finite.
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..1000 {
+            let v = sample_f32_in(&mut ctx, 0.0, f32::MAX);
+            assert!(v.is_finite(), "expected finite, got {v}");
+            assert!((0.0..f32::MAX).contains(&v), "out of range: {v}");
+        }
+    }
+
+    #[test]
+    fn sample_f64_in_stays_finite_at_widest_admissible_span() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..1000 {
+            let v = sample_f64_in(&mut ctx, 0.0, f64::MAX);
+            assert!(v.is_finite(), "expected finite, got {v}");
+            assert!((0.0..f64::MAX).contains(&v), "out of range: {v}");
+        }
     }
 
     // === sample_f32 / sample_f64 (full finite domain) ===
