@@ -29,16 +29,18 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
-/// reproducible: rerunning `noprop::Runner::new(err.seed(), N)` with
-/// the `N` printed by the reproduce hint will hit the same failure
-/// again. The hint reuses the original iteration budget so the rerun
-/// also hits the same rejection cap.
+/// reproducible: rerunning
+/// `noprop::Runner::new(err.seed()).run(N, |ctx| ...)` (or
+/// `.run_feedback_guided(N, |ctx| ...)` for a feedback-guided failure)
+/// with the `N` printed by the reproduce hint will hit the same
+/// failure again. The hint reuses the original case budget so the
+/// rerun also hits the same rejection cap.
 ///
 /// A `TooManyRejections` failure — raised when
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
 /// the internal global limit is reached — reports the number of
 /// accepted cases that completed before the runner gave up as
-/// `case_index()`, so the same seed and iteration budget reproduce the
+/// `case_index()`, so the same seed and case budget reproduce the
 /// same exit.
 ///
 /// A feedback-guided failure report additionally carries the semantic
@@ -62,20 +64,21 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// list, so returning this from a `#[test]` function prints a
 /// self-contained failure report through the standard test harness.
 /// Both formats also print a reproduce hint reusing the original
-/// iteration budget:
+/// case budget. `run`'s hint prints:
 ///
 /// ```text
-/// reproduce with: noprop::Runner::new(0x..., N)
+/// reproduce with: noprop::Runner::new(0x...).run(N, |ctx| ...)
 /// ```
 ///
-/// The hint reuses the original iteration budget and names the failing
-/// entry point: `run`'s hint prints the bare constructor, while the
-/// feedback-guided hint appends
-/// `run_feedback_guided(|ctx| ...)`
-/// with the closure body left as a
-/// placeholder. In each case the original property closure must be
-/// supplied before rerunning; the re-run size never needs to be
-/// recomputed by hand.
+/// while a feedback-guided failure prints:
+///
+/// ```text
+/// reproduce with: noprop::Runner::new(0x...).run_feedback_guided(N, |ctx| ...)
+/// ```
+///
+/// In each case the closure body is a placeholder: the caller
+/// substitutes the original property closure before rerunning, and the
+/// re-run size never needs to be recomputed by hand.
 pub struct RunError {
     seed: u64,
     case_index: usize,
@@ -95,16 +98,16 @@ pub struct RunError {
     /// The runner entry point that produced this failure. Switches the
     /// reproduce hint.
     policy: SearchPolicy,
-    /// Semantic details of the failing case (corpus-guided runs only;
+    /// Semantic details of the failing case (feedback-guided runs only;
     /// `None` otherwise).
     semantic: Option<Box<SemanticFailureReport>>,
 }
 
-/// Semantic details carried by a corpus-guided failure report.
+/// Semantic details carried by a feedback-guided failure report.
 ///
-/// Boxed so `RunError` stays small: the fields are only populated on the
-/// corpus-guided failure path, and the uniform / targeted entry points
-/// never touch them.
+/// Boxed so `RunError` stays small: the fields are only populated on
+/// the feedback-guided failure path, and the uniform entry point never
+/// touches them.
 struct SemanticFailureReport {
     /// Semantic features the failing case reported.
     features: Vec<Feature>,
@@ -119,7 +122,7 @@ pub(crate) enum SearchPolicy {
     /// [`Runner::run`](crate::Runner::run).
     Uniform,
     /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
-    CorpusGuided,
+    FeedbackGuided,
 }
 
 /// The kind of a [`RunError`], for type-safe dispatch on the failure
@@ -194,7 +197,7 @@ impl RunError {
     }
 
     /// Attach the semantic features and candidate index of a failing
-    /// corpus-guided case. Used by
+    /// feedback-guided case. Used by
     /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
     /// and the too-many-rejections exit path.
     pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
@@ -298,7 +301,7 @@ impl RunError {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original case budget so reruns hit the same
-    /// rejection cap. In corpus-guided mode the closure body
+    /// rejection cap. In feedback-guided mode the closure body
     /// is a placeholder: the caller substitutes the original property
     /// closure.
     fn reproduce_command(&self) -> String {
@@ -307,7 +310,7 @@ impl RunError {
                 "noprop::Runner::new({:#018x}).run({}, |ctx| ...)",
                 self.seed, self.cases
             ),
-            SearchPolicy::CorpusGuided => format!(
+            SearchPolicy::FeedbackGuided => format!(
                 "noprop::Runner::new({:#018x}).run_feedback_guided({}, |ctx| ...)",
                 self.seed, self.cases
             ),

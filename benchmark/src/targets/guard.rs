@@ -1,5 +1,5 @@
 //! Guard target: reports effectively unbounded bucket values on every
-//! case to verify that the corpus-guided machinery stays bounded (the
+//! case to verify that the feedback-guided machinery stays bounded (the
 //! global feature registry saturates at 1024 and the corpus at 64)
 //! and deterministic across all variants. No mutant: detection is
 //! never expected, and every variant must complete the run.

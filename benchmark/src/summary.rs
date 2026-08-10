@@ -60,10 +60,10 @@ pub(crate) struct TaskSummary {
     pub candidate_times: Vec<usize>,
     /// Candidate-count bucket counts (index = `bucket_of`).
     pub candidate_buckets: [usize; 4],
-    /// Distinct observed features per trial (corpus-guided variants
+    /// Distinct observed features per trial (feedback-guided variants
     /// only; uniform / biased report 0).
     pub discovered_features: Vec<usize>,
-    /// Combined corpus size per trial (corpus-guided variants only).
+    /// Combined corpus size per trial (feedback-guided variants only).
     pub max_corpus_sizes: Vec<usize>,
 }
 
@@ -387,7 +387,7 @@ mod tests {
     fn accumulate_counts_candidate_executions_on_found() {
         let mut summaries = Summaries::new();
         let raw = ParsedRaw {
-            variant: "corpus-guided".to_string(),
+            variant: "feedback-guided".to_string(),
             workload: "w".to_string(),
             mutant: "m".to_string(),
             status: Status::Found,
@@ -400,7 +400,7 @@ mod tests {
         accumulate(&mut summaries, &raw);
         let entry = summaries
             .get(&(
-                "corpus-guided".to_string(),
+                "feedback-guided".to_string(),
                 "w".to_string(),
                 "m".to_string(),
             ))

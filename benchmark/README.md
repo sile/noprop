@@ -6,8 +6,8 @@ mutants of small workloads (high-frequency, boundary, combination,
 dependent, bst, stepping, stateful) under different generator
 variants, and how broad the generated inputs are (semantic buckets;
 reported by the dependent workload, whose base variant shows the full
-breadth). The guard workload checks that the corpus-guided machinery
-stays bounded.
+breadth). The guard workload checks that the feedback-guided search
+stays bounded (corpus size and feature registry).
 
 ```
 # Run a single task: print one raw-result JSON line.
@@ -24,7 +24,7 @@ cargo run -p benchmark --bin benchmark -- summary < raw.jsonl
 
 The `base` variant (ground-truth SUT) completes every property and is
 used to verify the workloads; the comparison variants are `uniform`,
-`biased`, `boundary-biased`, and `corpus-guided`. Raw results are
+`biased`, `boundary-biased`, and `feedback-guided`. Raw results are
 written as format-versioned JSON lines, so summaries can always be
 regenerated from a saved cohort. Smoke tests live in
 `tests/detection_benchmark.rs`.

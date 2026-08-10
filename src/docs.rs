@@ -4,7 +4,20 @@
 //! `include_str!`, so they are browsable on docs.rs and their Rust
 //! code examples run as doctests.
 
-/// Design of the corpus-guided search policy: semantic features, the
+/// Task-oriented recipes for common property shapes: the seed / run
+/// scaffolding, sampling primitives and collections, rejection scopes,
+/// stateful properties, feedback-guided search, and reproducing a
+/// failing seed.
+#[doc = include_str!("../docs/recipes.md")]
+pub mod recipes {}
+
+/// Design of the feedback-guided search policy: semantic features, the
 /// feature registry, corpus admission and eviction, and scheduling.
-#[doc = include_str!("../docs/corpus-guided-search.md")]
-pub mod corpus_guided_search {}
+#[doc = include_str!("../docs/feedback-guided-search.md")]
+pub mod feedback_guided_search {}
+
+/// Small design reference for writing `sample_*` generators: support,
+/// distribution, termination, rejection scope, and
+/// valid-by-construction.
+#[doc = include_str!("../docs/generator-design.md")]
+pub mod generator_design {}

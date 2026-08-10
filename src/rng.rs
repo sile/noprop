@@ -1,4 +1,4 @@
-//! Entropy source, generated-value trace, and corpus-guided search
+//! Entropy source, generated-value trace, and feedback-guided search
 //! machinery (draw recording / replay, semantic coverage) behind
 //! [`TestCaseContext`].
 
@@ -25,7 +25,7 @@ const DEDUP_TAIL: usize = 8;
 const MAX_CHOICES_PER_CASE: usize = 4096;
 
 /// Maximum number of semantic features one case may report in
-/// corpus-guided mode. Exceeding the cap discards the excess; an event
+/// feedback-guided mode. Exceeding the cap discards the excess; an event
 /// saturating to a higher bucket replaces its earlier feature and does
 /// not count as a new one.
 const MAX_FEATURES_PER_CASE: usize = 64;
@@ -56,7 +56,7 @@ const MAX_FEATURES_PER_CASE: usize = 64;
 ///
 /// When driven by a [`Runner`](crate::Runner), the context additionally
 /// records each case's draws and replays mutated variants for
-/// corpus-guided search; that machinery is invisible to property
+/// feedback-guided search; that machinery is invisible to property
 /// closures.
 ///
 /// # Examples
@@ -108,7 +108,7 @@ pub(crate) enum FeedbackState {
     SemanticCoverage(SemanticCoverage),
 }
 
-/// Per-case semantic feedback collected in corpus-guided mode.
+/// Per-case semantic feedback collected in feedback-guided mode.
 ///
 /// `features` holds the features the case reported so far, capped at
 /// [`MAX_FEATURES_PER_CASE`]. `event_counts` tracks per-label
@@ -180,7 +180,7 @@ impl SemanticCoverage {
     }
 }
 
-/// A semantic feature reported by a property in corpus-guided mode.
+/// A semantic feature reported by a property in feedback-guided mode.
 ///
 /// Feature identity is the `(label, kind)` pair: the same label used
 /// for a different bucket or transition is a different feature.
@@ -654,7 +654,7 @@ impl TestCaseContext {
         }
     }
 
-    /// Construct a context in recording mode for the corpus-guided
+    /// Construct a context in recording mode for the feedback-guided
     /// runner. Every draw is appended to the carried
     /// [`ChoiceSequence`], which the runner recovers via
     /// [`take_sequence`](Self::take_sequence) at the case boundary.
@@ -1182,7 +1182,7 @@ impl TestCaseContext {
         }
     }
 
-    /// Switch the context into corpus-guided feedback mode for the
+    /// Switch the context into feedback-guided feedback mode for the
     /// upcoming case. Called by
     /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
     /// before each case; the case-local feedback is drained via
@@ -1225,7 +1225,7 @@ impl TestCaseContext {
 /// alongside the closure's own return value. Recording is not woven
 /// into `TestCaseContext::new` or `Runner::run` because those production paths
 /// have no consumer for the sequence — [`RecordingSession`] is the
-/// only entry point that allocates one outside the targeted runner.
+/// only entry point that allocates one outside the feedback-guided runner.
 #[cfg(test)]
 pub(crate) struct RecordingSession {
     seed: u64,
@@ -1867,7 +1867,7 @@ mod tests {
 mod targeted_tests {
     use super::*;
 
-    // === semantic features (corpus-guided mode) ===
+    // === semantic features (feedback-guided mode) ===
 
     #[test]
     fn semantic_methods_are_noop_when_disabled() {
@@ -1897,7 +1897,7 @@ mod targeted_tests {
                     ]
                 );
             }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
+            other => panic!("expected feedback-guided feedback, got {other:?}"),
         }
     }
 
@@ -1919,7 +1919,7 @@ mod targeted_tests {
                     FeatureKind::Event(EventBucket::TwoThree)
                 ));
             }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
+            other => panic!("expected feedback-guided feedback, got {other:?}"),
         }
     }
 
@@ -1946,7 +1946,7 @@ mod targeted_tests {
             FeedbackState::SemanticCoverage(cov) => {
                 assert_eq!(cov.features().len(), 2);
             }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
+            other => panic!("expected feedback-guided feedback, got {other:?}"),
         }
     }
 
@@ -1961,7 +1961,7 @@ mod targeted_tests {
             FeedbackState::SemanticCoverage(cov) => {
                 assert_eq!(cov.features().len(), MAX_FEATURES_PER_CASE);
             }
-            other => panic!("expected corpus-guided feedback, got {other:?}"),
+            other => panic!("expected feedback-guided feedback, got {other:?}"),
         }
     }
 
