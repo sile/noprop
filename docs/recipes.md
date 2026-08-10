@@ -29,6 +29,10 @@ signatures.
 - [Bounded recursion and bounded loops](#bounded-recursion-and-bounded-loops)
 - [Choose a rejection scope](#choose-a-rejection-scope)
 - [Model-based (stateful) property](#model-based-stateful-property)
+- [Cluster-level invariant across multiple actors](#cluster-level-invariant-across-multiple-actors)
+- [Bounded run-to-quiescence](#bounded-run-to-quiescence)
+- [Cross-step invariant with append-only history](#cross-step-invariant-with-append-only-history)
+- [Stateful streaming API driven by a command loop](#stateful-streaming-api-driven-by-a-command-loop)
 - [Steer the search with feedback](#steer-the-search-with-feedback)
 - [Assert a coverage gate after the run](#assert-a-coverage-gate-after-the-run)
 - [Reproduce a failing seed](#reproduce-a-failing-seed)
@@ -474,7 +478,278 @@ failure.
 
 **See also.** The "Assert a coverage gate after the run" recipe
 (guarding a state-dependent invariant against silent success),
+the "Cluster-level invariant across multiple actors" recipe
+(the multi-SUT extension), the "Bounded run-to-quiescence" recipe
+(finalising a converging protocol), the "Cross-step invariant with
+append-only history" recipe (tracking a history alongside the SUT),
+the "Stateful streaming API driven by a command loop" recipe
+(the model-free variant),
 [`examples/stateful.rs`](https://github.com/sile/noprop/blob/main/examples/stateful.rs).
+
+## Cluster-level invariant across multiple actors
+
+**Goal.** Drive several instances of the same SUT together and assert
+a system-level invariant (broadcast reach, consensus, distributed
+state agreement) instead of a single-actor property.
+
+**Uses.** A `Vec<SUT>` (or similar) that holds every actor in one
+case, plus [`sample_usize_in`](crate::sample_usize_in) to pick which
+actor a step touches. Per-step advances the whole cluster and checks
+the invariant.
+
+```rust
+# fn body() -> noprop::TestResult {
+noprop::Runner::new(0).run(64, |ctx| {
+    let n = noprop::sample_usize_in(ctx, 2..=5);
+    // One "node" per actor; the cluster is the Vec.
+    let mut nodes: Vec<u32> = vec![0; n];
+
+    let broadcasts = noprop::sample_usize_in(ctx, 0..=8);
+    for round in 0..broadcasts {
+        let v = noprop::sample_u32(ctx);
+        // Advance every node together (an atomic broadcast, as a
+        // stand-in for whatever the real protocol does per step).
+        for node in nodes.iter_mut() {
+            *node = v;
+        }
+        // System-level invariant: after each broadcast every node
+        // agrees on the value.
+        assert!(
+            nodes.iter().all(|&x| x == v),
+            "round {round}: nodes disagree ({nodes:?})"
+        );
+    }
+    Ok(())
+})?;
+# Ok(())
+# }
+# body().unwrap();
+```
+
+**Notes.** Keep the actor type simple (a plain integer, a `Vec<u8>`
+buffer) so the recipe stays focused on the cluster-level shape rather
+than on any specific protocol. Real protocols usually deliver messages
+asynchronously — pair this recipe with the "Bounded run-to-quiescence"
+recipe below to drain a message queue before checking the invariant,
+and with the "Cross-step invariant with append-only history" recipe
+when a per-step invariant needs to observe how state evolved over
+time. `plumtree`'s `tests/pbt.rs` runs 2–6 node clusters (each test
+picks a range with `sample_usize_in`) with this shape.
+
+**See also.** The "Model-based (stateful) property" recipe (the
+single-actor baseline), the "Bounded run-to-quiescence" recipe below,
+the "Cross-step invariant with append-only history" recipe (per-step
+invariants over a persistent log), the "Stateful streaming API driven
+by a command loop" recipe (model-free streaming variant).
+
+## Bounded run-to-quiescence
+
+**Goal.** Drive a protocol until it settles, but never longer than a
+declared bound — the run terminates for every seed, and a run that
+would have looped forever fails with a clear message.
+
+**Uses.** A `for _ in 0..max_rounds` loop with a `did_something` flag,
+an early `break` when nothing changes, and a final assert that the
+loop exited through the quiescence branch rather than the bound.
+
+```rust
+# fn body() -> noprop::TestResult {
+noprop::Runner::new(0).run(64, |ctx| {
+    let n = noprop::sample_usize_in(ctx, 2..=5);
+    // Toy cluster: each slot is "pending" and clears itself when
+    // processed. A real protocol would enqueue / deliver messages.
+    let mut pending: Vec<bool> = (0..n).map(|_| noprop::sample_bool(ctx)).collect();
+
+    let max_rounds = 16;
+    let mut converged = false;
+    for _round in 0..max_rounds {
+        let mut did_something = false;
+        for slot in pending.iter_mut() {
+            if *slot {
+                *slot = false;
+                did_something = true;
+            }
+        }
+        if !did_something {
+            converged = true;
+            break;
+        }
+    }
+    // The bound is a safety net; the tiny protocol above must settle
+    // well within max_rounds. A run that fails this assert has hit
+    // either an infinite loop or a bound that is too tight.
+    assert!(
+        converged,
+        "did not reach quiescence within {max_rounds} rounds"
+    );
+    Ok(())
+})?;
+# Ok(())
+# }
+# body().unwrap();
+```
+
+**Notes.** Pick `max_rounds` well above the worst-case round count
+the protocol needs — the point of the bound is to catch runaway
+loops, not to prune legitimate long convergences. Report the state
+that failed to settle in the assert message so the failure is
+diagnosable without a rerun.
+
+**See also.** The "Model-based (stateful) property" recipe (the
+single-actor baseline), the "Cluster-level invariant across multiple
+actors" recipe above (the multi-SUT shape this recipe finalises),
+the "Cross-step invariant with append-only history" recipe (tracking
+what changed at each round), the "Stateful streaming API driven by a
+command loop" recipe (a different way to bound a long-running SUT).
+
+## Cross-step invariant with append-only history
+
+**Goal.** Check an invariant that spans time — "once committed, an
+entry never changes" — by keeping an append-only history next to the
+SUT and re-checking it at every step.
+
+**Uses.** A local `BTreeMap` (or similar) that mirrors the
+append-only view of the SUT, updated inside the step loop, and a
+per-step assert that every previously recorded entry is still
+present unchanged.
+
+```rust
+# use std::collections::BTreeMap;
+# fn body() -> noprop::TestResult {
+noprop::Runner::new(0).run(64, |ctx| {
+    // committed_history: index -> term. Append-only: once written,
+    // never changed. Kept in the closure alongside the SUT so the
+    // invariant can look back at earlier steps.
+    let mut committed_history: BTreeMap<u64, u32> = BTreeMap::new();
+    let mut next_index: u64 = 0;
+    let mut current_term: u32 = 1;
+
+    let steps = noprop::sample_usize_in(ctx, 0..=16);
+    for _ in 0..steps {
+        match noprop::sample_usize_in(ctx, 0..3) {
+            0 => {
+                // Commit the next entry at the current term.
+                committed_history.insert(next_index, current_term);
+                next_index += 1;
+            }
+            1 => {
+                // Advance to a new term (no entry committed this step).
+                current_term += 1;
+            }
+            _ => {
+                // No-op step — invariant still runs below.
+            }
+        }
+        // Cross-step invariant: every previously committed
+        // (index, term) pair is still present unchanged. A bug that
+        // silently rewrote an entry would fail here on the very next
+        // step, not at the end of the run.
+        for (&idx, &term) in &committed_history {
+            assert_eq!(
+                committed_history.get(&idx),
+                Some(&term),
+                "entry at {idx} changed"
+            );
+        }
+    }
+    Ok(())
+})?;
+# Ok(())
+# }
+# body().unwrap();
+```
+
+**Notes.** The history lives inside the closure, alongside the SUT —
+not as a second SUT to compare against. Re-checking every recorded
+entry at every step is quadratic in the number of committed entries,
+which is fine for the typical case counts of a property test
+(`steps` bounded, `history` bounded by `steps`); for a very long
+history keep only the entries the invariant actually needs. Because
+the invariant only fires when history is non-empty, gate the run
+with the "Assert a coverage gate after the run" recipe to make sure
+at least one case reached a committed entry — otherwise the run may
+silently pass on cases where nothing ever got committed. `noraft`'s
+`tests/prop_cluster.rs` (`cluster_invariants_hold`) keeps a
+`committed_history: BTreeMap<u64, Term>` this way to check state
+machine safety and leader completeness across a 3–5 node cluster.
+
+**See also.** The "Assert a coverage gate after the run" recipe
+(force a run to fail when history stays empty), the "Model-based
+(stateful) property" recipe (the single-actor baseline), the
+"Cluster-level invariant across multiple actors" recipe (multi-SUT
+extension), the "Bounded run-to-quiescence" recipe (bounding step
+count for a settling protocol), the "Stateful streaming API driven
+by a command loop" recipe (model-free variant).
+
+## Stateful streaming API driven by a command loop
+
+**Goal.** Test a streaming API — one that does not have a single
+"correct model" to compare against, but that accumulates side-effects
+in a buffer — by driving it with a random command loop and asserting
+the invariant on the final output alone.
+
+**Uses.** A random command loop for the streaming interface
+(feed / flush / reset-style calls), a single terminator call once the
+loop ends, and one assert on the accumulated output.
+
+```rust
+# fn body() -> noprop::TestResult {
+noprop::Runner::new(0).run(64, |ctx| {
+    // Streaming SUT: an append-only byte buffer. Loop over random
+    // Feed / Flush commands, then finalise once outside the loop.
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut fed: Vec<u8> = Vec::new();
+
+    let steps = noprop::sample_usize_in(ctx, 0..=8);
+    for _ in 0..steps {
+        match noprop::sample_usize_in(ctx, 0..2) {
+            0 => {
+                // Feed: append some random bytes.
+                let n = noprop::sample_usize_in(ctx, 0..=4);
+                let bytes = noprop::sample_bytes_vec(ctx, n);
+                fed.extend_from_slice(&bytes);
+                buffer.extend_from_slice(&bytes);
+            }
+            _ => {
+                // Flush: no-op here, but a real streaming API might
+                // emit a boundary marker or reset internal buffering.
+            }
+        }
+    }
+    // Terminator: called once, outside the loop. Real APIs finalise
+    // padding, flush buffered bytes, and hand back the output here.
+    let output = std::mem::take(&mut buffer);
+
+    // The only invariant checked: the whole output round-trips the
+    // full sequence of fed bytes.
+    assert_eq!(
+        output, fed,
+        "streaming output did not round-trip fed bytes"
+    );
+    Ok(())
+})?;
+# Ok(())
+# }
+# body().unwrap();
+```
+
+**Notes.** The two-stage shape — random command loop, then one
+terminator — matters: an API that requires a `finish()` call to emit
+its trailing bytes will fail the round-trip if the terminator is
+inside the loop. Keep the invariant on the *final* output only;
+per-step assertions in a streaming pipeline usually can't tell
+whether the byte the SUT just emitted is correct or is waiting for
+more input. `noflate`'s `pbt/tests/pbt.rs`
+(`stateful_encoder_command_loop_roundtrips`) drives an encoder with
+`enum Cmd { Feed(Vec<u8>), SyncFlush, ResetHistory }` in the loop
+and calls `encoder.finish()` once afterwards, matching this shape.
+
+**See also.** The "Model-based (stateful) property" recipe (the
+model-driven counterpart), the "Cluster-level invariant across
+multiple actors" recipe (multi-SUT extension), the "Bounded
+run-to-quiescence" recipe (bounding a settling protocol), the
+"Cross-step invariant with append-only history" recipe (recipes
+that keep per-step state alongside the SUT).
 
 ## Steer the search with feedback
 
