@@ -114,8 +114,8 @@ an *exact* length; combine with `sample_usize_in` for a random length
 shape).
 
 **See also.** [`sample_usize_in`](crate::sample_usize_in),
-[`sample_string`](crate::sample_string), the module docstrings on
-`src/generator.rs`.
+[`sample_string`](crate::sample_string),
+[`crate::docs::generator_authoring`].
 
 ## Build `Vec`, `Option`, maps, and sets
 
@@ -281,8 +281,8 @@ substitute — it wraps `u32::MAX` back to `0`. For signed types the
 full `NonZero<i_>` domain is `MIN..=-1 ∪ 1..=MAX`, so only the
 rejection recipe covers both signs uniformly.
 
-**See also.** The "Sampling non-zero integers" section of the
-`src/generator.rs` module docstring.
+**See also.** The "Sampling non-zero integers" section of
+[`crate::docs::generator_authoring`].
 
 ## Write a dependent generator
 
@@ -314,7 +314,7 @@ same seed.
 
 **See also.**
 [`sample_usize_in`](crate::sample_usize_in), the "Composing
-generators" section of the `src/generator.rs` module docstring.
+generators" section of [`crate::docs::generator_authoring`].
 
 ## Bounded recursion and bounded loops
 

@@ -3,7 +3,9 @@
 This document explains the small set of decisions every noprop
 generator has to make. It is a working reference for users writing
 their own `sample_*` helpers, not a research plan or a roadmap for
-future tuning.
+future tuning. For the how-to side (composing primitives, bounded
+rejection, `NonZero` recipes, floats), see
+[`crate::docs::generator_authoring`].
 
 ## Support
 
@@ -125,7 +127,8 @@ Two typical shapes:
   bounded rejection over `sample_u32` (uniform, may reject) or map the
   underlying integer's zero to `1` explicitly (biased, always
   terminates in one draw). The two recipes are spelled out in the
-  `src/generator.rs` module docstring — pick the one whose trade-off
+  "Sampling non-zero integers" section of
+  [`crate::docs::generator_authoring`] — pick the one whose trade-off
   matches the property.
 
 When the constraint is expensive to satisfy at construction time —

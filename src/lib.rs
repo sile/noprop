@@ -115,6 +115,10 @@
 //! - [`docs::generator_design`] — the small design decisions every
 //!   `sample_*` generator has to make (support, distribution,
 //!   termination, rejection scope, valid-by-construction).
+//! - [`docs::generator_authoring`] — how-to guide for writing
+//!   `sample_*` helpers: composing primitives, bounded rejection,
+//!   the shared `sample_below` migration note, `NonZero` recipes,
+//!   and the finite-by-default float samplers.
 //! - [`docs::feedback_guided_search`] — the design of
 //!   [`Runner::run_feedback_guided`], the corpus admission and
 //!   eviction rules, and how the feature registry is bounded.

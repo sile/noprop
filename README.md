@@ -87,6 +87,10 @@ Documentation
 - **[Generator design](docs/generator-design.md)** — the small design
   decisions every `sample_*` generator has to make (support,
   distribution, termination, rejection scope, valid-by-construction).
+- **[Generator authoring](docs/generator-authoring.md)** — how-to guide
+  for writing `sample_*` helpers: composing primitives, bounded
+  rejection, the shared `sample_below` migration note, `NonZero`
+  recipes, and the finite-by-default float samplers.
 - **[Feedback-guided search design](docs/feedback-guided-search.md)** —
   the design of `Runner::run_feedback_guided`, the corpus admission
   and eviction rules, and how the feature registry is bounded.
@@ -95,6 +99,7 @@ Documentation
 
 The doc modules ([`docs::recipes`](https://docs.rs/noprop/latest/noprop/docs/recipes/),
 [`docs::generator_design`](https://docs.rs/noprop/latest/noprop/docs/generator_design/),
+[`docs::generator_authoring`](https://docs.rs/noprop/latest/noprop/docs/generator_authoring/),
 [`docs::feedback_guided_search`](https://docs.rs/noprop/latest/noprop/docs/feedback_guided_search/))
 render the same Markdown on docs.rs, so the recipes and design notes
 appear alongside the API rustdoc.
