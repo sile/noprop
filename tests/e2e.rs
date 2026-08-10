@@ -377,7 +377,7 @@ fn sample_usize_in_records_only_the_chosen_value() {
 #[test]
 fn sample_ratio_records_only_the_chosen_bool() {
     let result = noprop::Runner::new(5).run(1, |ctx| {
-        let _b = noprop::sample_ratio(ctx, noprop::Ratio::ONE_THIRD);
+        let _b = noprop::sample_ratio(ctx, noprop::Ratio::one_nth(3));
         panic!("stop");
     });
     let err = result.expect_err("expected Err");
@@ -394,7 +394,7 @@ fn sample_with_boundaries_records_bool_and_value() {
         let _v = noprop::sample_with_boundaries(
             ctx,
             &[0, 1500, u32::MAX],
-            noprop::Ratio::ONE_TENTH,
+            noprop::Ratio::one_nth(10),
             noprop::sample_u32,
         );
         panic!("stop");
@@ -417,7 +417,7 @@ fn sample_with_boundaries_is_reproducible_across_runs() {
             let v = noprop::sample_with_boundaries(
                 ctx,
                 &[u32::MAX],
-                noprop::Ratio::ONE_HALF,
+                noprop::Ratio::one_nth(2),
                 noprop::sample_u32,
             );
             assert!(v != u32::MAX, "hit boundary");
@@ -454,7 +454,7 @@ fn selection_primitives_are_reproducible_across_runs() {
         noprop::Runner::new(seed).run(64, |ctx| {
             let idx = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1]);
             let n = noprop::sample_usize_in(ctx, 0..=100);
-            let flip = noprop::sample_ratio(ctx, noprop::Ratio::ONE_QUARTER);
+            let flip = noprop::sample_ratio(ctx, noprop::Ratio::one_nth(4));
             // Fail on a pattern that is common enough to hit within 64
             // cases but does not always fire, so the case index
             // matters.

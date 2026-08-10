@@ -227,7 +227,7 @@ let mut ctx = noprop::TestCaseContext::new(0);
 let port = noprop::sample_with_boundaries(
     &mut ctx,
     &[0u16, 1500, u16::MAX],
-    noprop::Ratio::ONE_TENTH,
+    noprop::Ratio::one_nth(10),
     noprop::sample_u16,
 );
 // 10% of the time `port` is one of {0, 1500, u16::MAX};
@@ -235,7 +235,7 @@ let port = noprop::sample_with_boundaries(
 let _ = port;
 ```
 
-**Notes.** The probability is exact rational (`Ratio::new(1, 10)` is
+**Notes.** The probability is exact rational (`Ratio::one_nth(10)` is
 one-in-ten, not `0.10`-close). Choose boundaries that map to distinct
 outcomes in the code under test — otherwise the extra probability
 mass on the boundary set does nothing observable.
