@@ -464,7 +464,16 @@ command history or the abstract model state at the point of failure.
 The stateful `examples/stateful.rs` example shows this pattern applied
 to a realistic subject (an LRU cache with a plausible-looking bug).
 
-**See also.**
+When an invariant fires only after the state reaches a specific shape
+(a non-empty pop, a committed entry, a fully drained buffer), a case
+that ends before that shape leaves the invariant unchecked and the run
+passes silently. Gate such invariants with the "Assert a coverage gate
+after the run" recipe below — a `Cell` counter incremented at the
+invariant site plus a run-after assert turns silent success into a
+failure.
+
+**See also.** The "Assert a coverage gate after the run" recipe
+(guarding a state-dependent invariant against silent success),
 [`examples/stateful.rs`](https://github.com/sile/noprop/blob/main/examples/stateful.rs).
 
 ## Steer the search with feedback
@@ -508,51 +517,100 @@ byte count) makes every case novel and defeats the corpus. The
 [`docs::feedback_guided_search`](crate::docs::feedback_guided_search)
 design doc explains the corpus admission and eviction rules.
 
-**See also.**
+**See also.** The "Assert a coverage gate after the run" recipe below
+(force a run to fail when the steered region was never reached),
 [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
 [`docs::feedback_guided_search`](crate::docs::feedback_guided_search),
 [`examples/feedback_guided.rs`](https://github.com/sile/noprop/blob/main/examples/feedback_guided.rs).
 
 ## Assert a coverage gate after the run
 
-**Goal.** Make "the search must reach this region" a test failure, not
-a silent pass.
+**Goal.** Force at least one case to exercise the invariant (or the
+region) that the run is meant to check, so a run where no case reached
+it fails instead of silently passing.
 
-**Uses.** A `std::cell::Cell` counter, the feedback method that steers
-toward the region, and a run-after assert. The `Runner`'s `Display`
-embeds the seed and stats so the failure is reproducible.
+**Uses.** A `std::cell::Cell` counter incremented at the site where
+the invariant actually runs, and a run-after
+`assert!(counter > 0, ...)` that turns a zero count into a failure.
+The [`Runner`](crate::Runner)'s `Display` embeds the seed and stats
+so the failure is reproducible.
 
 ```rust
 # use std::cell::Cell;
 # fn body() -> noprop::TestResult {
-let long_line_hits: Cell<usize> = Cell::new(0);
-let mut runner = noprop::Runner::new(0xFEED);
-runner.run_feedback_guided(256, |ctx| {
-    let len = noprop::sample_usize_in(ctx, 0..=24);
-    let _line = noprop::sample_string(ctx, len);
-    if len > 12 {
-        ctx.event("long-line");
-        long_line_hits.set(long_line_hits.get() + 1);
+let non_empty_pops: Cell<usize> = Cell::new(0);
+let mut runner = noprop::Runner::new(0);
+runner.run(64, |ctx| {
+    let mut model: Vec<u32> = Vec::new();
+    let mut sut: Vec<u32> = Vec::new();
+    let mut reached_non_empty_pop = false;
+
+    let steps = noprop::sample_usize_in(ctx, 0..=16);
+    for _ in 0..steps {
+        match noprop::sample_usize_in(ctx, 0..2) {
+            0 => {
+                let v = noprop::sample_u32(ctx);
+                model.push(v);
+                sut.push(v);
+            }
+            _ => {
+                let m = model.pop();
+                let s = sut.pop();
+                assert_eq!(m, s, "pop mismatch");
+                if m.is_some() {
+                    reached_non_empty_pop = true;
+                }
+            }
+        }
+    }
+    if reached_non_empty_pop {
+        non_empty_pops.set(non_empty_pops.get() + 1);
     }
     Ok(())
 })?;
 assert!(
-    long_line_hits.get() > 0,
-    "the `long-line` region must be reached at least once\n{runner}"
+    non_empty_pops.get() > 0,
+    "no case reached a non-empty pop; the pop-mismatch invariant was vacuous\n{runner}"
 );
 # Ok(())
 # }
 # body().unwrap();
 ```
 
-**Notes.** A time-derived seed makes rare-region gates unstable — the
-region may be reached under most seeds but not this one, and the test
-is then a flake. Gate on regions the *generator* can reach reliably
-(build the generator so the region is inside its support), and keep
-the accepted-only count separate from the total attempt count so the
-assertion counts what it means.
+**Notes.** An invariant that fires only when the state reaches a
+specific shape (a non-empty container, a committed entry, a fully
+consumed buffer) can pass vacuously — every case may end before the
+shape appears, and the invariant is never actually checked. Gate the
+invariant with a counter that increments only where the invariant
+runs, and turn a zero count into a run-after failure. The mechanism is
+orthogonal to the search policy: it works the same under
+[`Runner::run`](crate::Runner::run) and
+[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
 
-**See also.**
+Count only the accepted cases — the counter must increment where the
+invariant actually runs, and the assertion should compare that count
+against zero rather than the total attempt count. Rejection scopes
+([`sample_with_rejection`](crate::sample_with_rejection),
+[`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case))
+may discard cases mid-run; a rejected case that ended before the
+invariant fired must not contribute to "the region was reached"
+evidence.
+
+The same counter + run-after assert plugs into
+[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided) as
+well: increment inside the same branch that calls `ctx.event(...)` so
+the assert confirms the steered region was actually reached. When the
+region is rare and the seed comes from
+[`seed_from_env_or_time`](crate::seed_from_env_or_time), the region
+may be reached under most seeds but not the one this run drew, and
+the gate becomes a flake — gate only on regions the *generator* can
+reach reliably (build the generator so the region is inside its
+support).
+
+**See also.** The "Model-based (stateful) property" recipe (the
+gated invariant is the same pop-mismatch check as its main example),
+the "Steer the search with feedback" recipe (feedback-guided use of
+the same gate mechanism),
 [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
 [`examples/feedback_guided.rs`](https://github.com/sile/noprop/blob/main/examples/feedback_guided.rs).
 
