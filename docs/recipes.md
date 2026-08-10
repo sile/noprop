@@ -533,8 +533,9 @@ asynchronously — pair this recipe with the "Bounded run-to-quiescence"
 recipe below to drain a message queue before checking the invariant,
 and with the "Cross-step invariant with append-only history" recipe
 when a per-step invariant needs to observe how state evolved over
-time. `plumtree`'s `tests/pbt.rs` runs 2–6 node clusters (each test
-picks a range with `sample_usize_in`) with this shape.
+time. Gossip protocols, broadcast trees, consensus algorithms (leader
+election, log replication), replicated state stores (CRDTs), and
+other peer-to-peer or clustered systems typically follow this shape.
 
 **See also.** The "Model-based (stateful) property" recipe (the
 single-actor baseline), the "Bounded run-to-quiescence" recipe below,
@@ -617,38 +618,38 @@ present unchanged.
 # use std::collections::BTreeMap;
 # fn body() -> noprop::TestResult {
 noprop::Runner::new(0).run(64, |ctx| {
-    // committed_history: index -> term. Append-only: once written,
-    // never changed. Kept in the closure alongside the SUT so the
-    // invariant can look back at earlier steps.
-    let mut committed_history: BTreeMap<u64, u32> = BTreeMap::new();
-    let mut next_index: u64 = 0;
-    let mut current_term: u32 = 1;
+    // history: seq -> value. Append-only: once written, never
+    // changed. Kept in the closure alongside the SUT so the invariant
+    // can look back at earlier steps.
+    let mut history: BTreeMap<u64, u32> = BTreeMap::new();
+    let mut next_seq: u64 = 0;
+    let mut current_value: u32 = 1;
 
     let steps = noprop::sample_usize_in(ctx, 0..=16);
     for _ in 0..steps {
         match noprop::sample_usize_in(ctx, 0..3) {
             0 => {
-                // Commit the next entry at the current term.
-                committed_history.insert(next_index, current_term);
-                next_index += 1;
+                // Append the next entry at the current value.
+                history.insert(next_seq, current_value);
+                next_seq += 1;
             }
             1 => {
-                // Advance to a new term (no entry committed this step).
-                current_term += 1;
+                // Rotate the value for the next append (no append this step).
+                current_value += 1;
             }
             _ => {
                 // No-op step — invariant still runs below.
             }
         }
-        // Cross-step invariant: every previously committed
-        // (index, term) pair is still present unchanged. A bug that
-        // silently rewrote an entry would fail here on the very next
-        // step, not at the end of the run.
-        for (&idx, &term) in &committed_history {
+        // Cross-step invariant: every previously appended (seq, value)
+        // pair is still present unchanged. A bug that silently
+        // rewrote an entry would fail here on the very next step, not
+        // at the end of the run.
+        for (&seq, &value) in &history {
             assert_eq!(
-                committed_history.get(&idx),
-                Some(&term),
-                "entry at {idx} changed"
+                history.get(&seq),
+                Some(&value),
+                "entry at {seq} changed"
             );
         }
     }
@@ -661,17 +662,23 @@ noprop::Runner::new(0).run(64, |ctx| {
 
 **Notes.** The history lives inside the closure, alongside the SUT —
 not as a second SUT to compare against. Re-checking every recorded
-entry at every step is quadratic in the number of committed entries,
+entry at every step is quadratic in the number of appended entries,
 which is fine for the typical case counts of a property test
 (`steps` bounded, `history` bounded by `steps`); for a very long
 history keep only the entries the invariant actually needs. Because
 the invariant only fires when history is non-empty, gate the run
 with the "Assert a coverage gate after the run" recipe to make sure
-at least one case reached a committed entry — otherwise the run may
-silently pass on cases where nothing ever got committed. `noraft`'s
-`tests/prop_cluster.rs` (`cluster_invariants_hold`) keeps a
-`committed_history: BTreeMap<u64, Term>` this way to check state
-machine safety and leader completeness across a 3–5 node cluster.
+at least one case reached an appended entry — otherwise the run may
+silently pass on cases where nothing ever got appended.
+
+The "once appended, never rewritten" invariant appears wherever a
+system keeps an append-only log: event sourcing / audit logs,
+write-ahead and commit logs (Kafka, PostgreSQL WAL), version control
+(a git commit hash never changes), LSM-tree SSTables and immutable
+memtables, CRDT operation logs, blockchain blocks, and consensus
+committed logs (Raft's `committed_history` is a common example).
+The recipe applies unchanged; only the entry type and the meaning of
+"an append" branch differ.
 
 **See also.** The "Assert a coverage gate after the run" recipe
 (force a run to fail when history stays empty), the "Model-based
@@ -739,10 +746,11 @@ its trailing bytes will fail the round-trip if the terminator is
 inside the loop. Keep the invariant on the *final* output only;
 per-step assertions in a streaming pipeline usually can't tell
 whether the byte the SUT just emitted is correct or is waiting for
-more input. `noflate`'s `pbt/tests/pbt.rs`
-(`stateful_encoder_command_loop_roundtrips`) drives an encoder with
-`enum Cmd { Feed(Vec<u8>), SyncFlush, ResetHistory }` in the loop
-and calls `encoder.finish()` once afterwards, matching this shape.
+more input. Streaming compressors and encoders (deflate, gzip),
+incremental hashers (`update` / `finalize`), buffered writers, and
+network protocol codecs that feed bytes in and emit framed messages
+(HTTP, TLS record layer, WebSocket, RTMP) typically follow this
+shape.
 
 **See also.** The "Model-based (stateful) property" recipe (the
 model-driven counterpart), the "Cluster-level invariant across
