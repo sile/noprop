@@ -1,13 +1,12 @@
 //! Imperative property-based testing library with no dependencies, no
 //! macros, no unsafe, and no implicit I/O.
 //!
-//! Properties are plain
-//! `Fn(&mut TestCaseContext) -> Result<(), Box<dyn Error>>` closures
-//! that use ordinary Rust control flow — `if` / `match` / `for` — to
-//! draw values and check them, so a test reads like the code it
-//! exercises. Every `noprop::sample_*` call records the produced
-//! value at its source location, so a failure surfaces the actual
-//! generated input without extra plumbing.
+//! A property is a plain Rust closure that samples values with
+//! `noprop::sample_*` and asserts on the results. Ordinary control
+//! flow — `if` / `match` / `for` — expresses any generator directly,
+//! so a test reads like the code it exercises. Every `sample_*` call
+//! records the produced value at its source location, so a failure
+//! surfaces the actual generated input without extra plumbing.
 //!
 //! # Quick start
 //!
