@@ -106,9 +106,9 @@ pub struct Stats {
 ///
 /// A constructor is used (instead of struct-literal construction) so
 /// that runner-wide configuration (default rejection budget, feedback
-/// mode, snapshot directory, …) can be added later without breaking
-/// existing call sites. Observability data ([`Stats`]) is exposed via
-/// [`Runner::stats`] after `run` returns.
+/// mode, …) can be added later without breaking existing call sites.
+/// Observability data ([`Stats`]) is exposed via [`Runner::stats`]
+/// after `run` returns.
 ///
 /// # Configuring the seed
 ///

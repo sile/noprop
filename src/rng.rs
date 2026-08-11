@@ -87,9 +87,12 @@ pub struct TestCaseContext {
     /// reads this directly for
     /// [`Stats::total_samples`](crate::Stats::total_samples); the
     /// feedback-guided runner builds a fresh context per case and sums
-    /// this externally. Counted once per top-level `sample_*`
-    /// invocation (dedup / elision happens after the counter is
-    /// incremented, so folded runs are still fully counted).
+    /// this externally. Counted per `record_generated` call - most
+    /// primitives record exactly once per invocation, but composite
+    /// helpers such as `sample_with_boundaries` record twice (the
+    /// ratio's `bool` plus the chosen value). Dedup / elision happens
+    /// after the counter is incremented, so folded runs are still
+    /// fully counted.
     total_samples: usize,
     /// Scalar / semantic feedback collected during the current case.
     /// Always [`FeedbackState::Disabled`] when constructed via

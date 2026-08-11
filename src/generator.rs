@@ -508,9 +508,10 @@ pub fn sample_ratio(ctx: &mut TestCaseContext, ratio: Ratio) -> bool {
 /// recipe is not byte-equivalent: the ratio draws through the shared
 /// rejection sampler.)
 ///
-/// The call records the ratio's `bool` as a trace entry; the chosen
-/// value (boundary or `sample`'s draw) is a second entry. A
-/// hand-written recipe records only one value.
+/// The call records two trace entries — the ratio's `bool` and the
+/// chosen value (boundary or `sample`'s draw) — matching what a
+/// hand-written recipe (`if sample_ratio { sample_choice } else
+/// { sample }`) would also record.
 ///
 /// # Examples
 ///
@@ -577,9 +578,9 @@ where
 ///
 /// Uses the shared rejection sampler on the sum of weights, so the
 /// exact number of RNG bytes consumed depends on that sum. Adding a
-/// zero-weighted variant to the slice does change the sampler input
-/// (the slice length grows) even though it never affects the returned
-/// index distribution.
+/// zero-weighted variant to the slice does not change the RNG stream
+/// (the sampler is called with the same sum), and never affects the
+/// returned index distribution either.
 ///
 /// # Examples
 ///

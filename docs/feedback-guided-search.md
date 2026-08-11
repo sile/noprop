@@ -153,12 +153,18 @@ and mutates it. Accepted picks are uniform among entries; with
 probability 1/8 (currently) the rejected queue is picked instead when
 it is non-empty.
 
-Mutation rewrites each draw with probability 1/4 (currently):
-bounded-domain draws (Bounded / Choice) get a fresh value inside their
-recorded constraint, while constraint-free draws (Raw: raw bytes, string
-payload, …) are regenerated as a whole. A mutated candidate then
-replays its draws under the exploratory replay rules described in the
-next section.
+Mutation rewrites each draw with probability 1/4 (currently). The
+rewrite depends on the draw's recorded metadata:
+
+- **Bounded / Choice** — a fresh value is drawn inside the recorded
+  domain (`sample_below` on the recorded bound / length).
+- **Integer** — a fresh value of the same width is written to the
+  draw (`sample_u{8,16,32,64,128}` / `sample_i*` primitives).
+- **Raw** — constraint-free draws (raw bytes, string payload, …) are
+  regenerated as a whole.
+
+A mutated candidate then replays its draws under the exploratory
+replay rules described in the next section.
 
 ## Exploratory Replay
 

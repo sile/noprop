@@ -361,9 +361,11 @@ for _ in 0..steps {
 }
 ```
 
-**Notes.** Any recursion or loop needs a decreasing budget. Without
-one, a hostile choice sequence could keep the case running past any
-per-case draw cap. The `for _ in 0..n` shape is enough for a command
+**Notes.** Any recursion or loop needs a decreasing budget: `Runner::run`
+does not enforce a per-case draw cap (the `MAX_CHOICES_PER_CASE` cap
+only applies to exploratory replay under `run_feedback_guided`), so a
+hostile choice sequence could otherwise keep the case running without
+termination. The `for _ in 0..n` shape is enough for a command
 sequence; a `while` loop needs an explicit maximum step count.
 
 **See also.** [`sample_usize_in`](crate::sample_usize_in),
