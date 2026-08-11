@@ -25,6 +25,38 @@ fn run_returns_ok_when_property_holds() -> noprop::TestResult {
 }
 
 #[test]
+fn runner_display_includes_seed_and_every_stats_field() {
+    // Runner's Display formatter is documented as not an API contract
+    // (machine checks should use Runner::stats), but the string is
+    // embedded in assertion messages (see the coverage-gate recipe in
+    // examples/feedback_guided.rs). Guard against a regression that
+    // drops a stats field, renames a label, or drifts the seed
+    // format.
+    let mut runner = noprop::Runner::new(0xDEAD_BEEF);
+    runner
+        .run(3, |ctx| {
+            let _ = noprop::sample_u32(ctx);
+            Ok(())
+        })
+        .expect("run must succeed");
+
+    let s = format!("{runner}");
+    assert!(
+        s.contains("0x00000000deadbeef"),
+        "seed must appear in {{:#018x}} form: {s}"
+    );
+    for label in [
+        "accepted: 3",
+        "rejected: 0",
+        "total_samples: 3",
+        "discovered_features: 0",
+        "max_corpus_size: 0",
+    ] {
+        assert!(s.contains(label), "missing '{label}' in Display output: {s}");
+    }
+}
+
+#[test]
 fn test_result_chains_config_and_runner_via_question_mark() {
     // A `#[test] -> noprop::TestResult` fn composes
     // seed_from_env_or_time (io::Error-based) and Runner::run
