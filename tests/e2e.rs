@@ -545,6 +545,27 @@ fn always_reject_is_reproducible_from_seed() {
 }
 
 #[test]
+fn too_many_rejections_generated_carries_last_rejected_iteration_trace() {
+    // RunError::generated() documents that for TooManyRejections it
+    // returns the (discarded) trace of the last rejected iteration -
+    // not empty. A property that samples one value and then rejects
+    // must hit the cap with generated() carrying that one trace
+    // entry.
+    let err = noprop::Runner::new(0xB5_B5_B5_B5)
+        .run(1, |ctx| {
+            let _marker = noprop::sample_u32(ctx);
+            ctx.reject_case();
+        })
+        .expect_err("always-rejecting property must hit the rejection cap");
+    assert_eq!(err.kind(), noprop::RunErrorKind::TooManyRejections);
+    assert_eq!(
+        err.generated().len(),
+        1,
+        "trace must carry the one sample_u32 entry from the last rejected iteration"
+    );
+}
+
+#[test]
 fn rejection_state_overrides_user_catch_returning_ok() -> noprop::TestResult {
     // User code catches the private marker and returns Ok(()) — the
     // runner must still treat the iteration as rejected.

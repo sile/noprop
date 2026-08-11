@@ -1338,6 +1338,34 @@ mod tests {
     }
 
     #[test]
+    fn rejection_cap_accepts_exactly_at_the_boundary() {
+        // The runner fires TooManyRejections when `rejected >
+        // rejection_cap`, so the last non-fatal state is `rejected
+        // == cap`. Reject exactly `rejection_limit(cases)` times and
+        // then accept once; the run must succeed with
+        // `rejected == cap`, showing the boundary is inclusive on
+        // the success side (fixes a coverage gap - only `> cap` was
+        // previously tested).
+        let cases = 1;
+        let cap = rejection_limit(cases);
+        let count = std::cell::Cell::new(0usize);
+        let mut runner = Runner::new(1);
+        runner
+            .run(cases, |ctx| {
+                let n = count.get();
+                count.set(n + 1);
+                if n < cap {
+                    ctx.reject_case();
+                }
+                Ok(())
+            })
+            .expect("rejecting exactly rejection_limit(cases) times must not exceed the cap");
+        let stats = runner.stats();
+        assert_eq!(stats.accepted_cases, cases);
+        assert_eq!(stats.rejected_cases, cap);
+    }
+
+    #[test]
     fn stats_corpus_fields_on_too_many_rejections() {
         // Every case rejects, so the run ends with too-many-rejections
         // after the rejection cap. Each rejected case reports a fresh
