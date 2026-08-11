@@ -90,26 +90,6 @@ so the enclosing [`Runner::run`](crate::Runner::run) discards the
 iteration and moves on. Prefer valid-by-construction generators when
 the accepted rate is very low.
 
-## Note on `sample_below` migration
-
-[`sample_usize_in`](crate::sample_usize_in),
-[`sample_ratio`](crate::sample_ratio),
-[`sample_weighted_index`](crate::sample_weighted_index),
-[`sample_choice`](crate::sample_choice), and
-[`sample_with_boundaries`](crate::sample_with_boundaries) (which
-composes the latter two) all share an internal rejection sampler that
-is bounded at 64 attempts per call. The rejection rate is at worst
-~50% (only when the requested domain is just above a power of
-two), so the probability of exhausting all 64 attempts is `< 2⁻⁶⁴`
-— astronomically unreachable in practice. If it does trigger, the
-outcome depends on where the call sits: inside a
-[`Runner::run`](crate::Runner::run) the APIs above indirectly
-reject the iteration (via
-[`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case));
-outside a runner the call panics with a Runner-only message. This is
-a semantic change from the previous unbounded loop, kept explicit
-here rather than repeated in every affected function's rustdoc.
-
 ## Sampling non-zero integers
 
 noprop deliberately does not ship dedicated `sample_non_zero_*`

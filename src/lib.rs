@@ -106,8 +106,7 @@
 //!   termination, rejection scope, valid-by-construction).
 //! - [`docs::generator_authoring`] — how-to guide for writing
 //!   `sample_*` helpers: composing primitives, bounded rejection,
-//!   the shared `sample_below` migration note, `NonZero` recipes,
-//!   and the finite-by-default float samplers.
+//!   `NonZero` recipes, and the finite-by-default float samplers.
 //! - [`docs::feedback_guided_search`] — the design of
 //!   [`Runner::run_feedback_guided`], the corpus admission and
 //!   eviction rules, and how the feature registry is bounded.
