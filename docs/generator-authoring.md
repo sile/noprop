@@ -99,7 +99,7 @@ the accepted rate is very low.
 [`sample_with_boundaries`](crate::sample_with_boundaries) (which
 composes the latter two) all share an internal rejection sampler that
 is bounded at 64 attempts per call. The rejection rate is at worst
-~50% (only when the requested domain is barely under a power of
+~50% (only when the requested domain is just above a power of
 two), so the probability of exhausting all 64 attempts is `< 2⁻⁶⁴`
 — astronomically unreachable in practice. If it does trigger, the
 outcome depends on where the call sits: inside a

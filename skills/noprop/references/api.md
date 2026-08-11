@@ -79,7 +79,9 @@ Draw a length separately when variable-size data is required.
 | `sample_f32(ctx)` / `sample_f64(ctx)` | A finite value over the full finite domain. |
 | `sample_f32_in(ctx, min, max)` / `sample_f64_in(ctx, min, max)` | A value in the requested finite half-open range. |
 
-Bounded float samplers panic unless both bounds are finite and `min < max`.
+Bounded float samplers panic unless both bounds are finite, `min < max`, and
+`max - min` is also finite (a bound pair such as `f32::MIN..f32::MAX` overflows
+the subtraction to infinity and cannot satisfy the finite-output contract).
 Construct `f32::from_bits(sample_u32(ctx))` or
 `f64::from_bits(sample_u64(ctx))` when arbitrary bit patterns, including NaN
 and infinities, belong in the support.
