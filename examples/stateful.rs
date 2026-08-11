@@ -35,13 +35,10 @@ impl LruCache {
     }
 
     fn get(&mut self, key: u32) -> Option<u32> {
-        let (value, _) = self.entries.get(&key).copied()?;
+        let entry = self.entries.get_mut(&key)?;
         self.clock += 1;
-        self.entries
-            .get_mut(&key)
-            .expect("the key was just looked up")
-            .1 = self.clock;
-        Some(value)
+        entry.1 = self.clock;
+        Some(entry.0)
     }
 
     fn put(&mut self, key: u32, value: u32) {

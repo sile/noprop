@@ -151,11 +151,10 @@ enum ErrorKind {
     Panic { message: String },
     /// The internal global rejection limit was reached before
     /// `Runner::run`'s `cases` budget of accepted cases completed.
-    /// Rejected
-    /// cases do not count toward the budget, but the
-    /// runner keeps track of total attempts (accepted + rejected) via
-    /// a crate-private constant so a generator that always rejects
-    /// still terminates.
+    /// Rejected cases do not count toward the budget, but the runner
+    /// keeps track of total attempts (accepted + rejected) via a
+    /// crate-private constant so a generator that always rejects still
+    /// terminates.
     TooManyRejections {
         rejected_cases: usize,
         last_reject_location: &'static Location<'static>,
