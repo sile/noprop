@@ -450,12 +450,19 @@ fn selection_primitives_are_reproducible_across_runs() {
     let run = || {
         noprop::Runner::new(seed).run(64, |ctx| {
             let idx = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1]);
-            let n = noprop::sample_usize_in(ctx, 0..=100);
+            // `n` participates in the choice sequence so the test
+            // still exercises `sample_usize_in`, but is deliberately
+            // absent from the failure condition — including it would
+            // make P(no failure in 64 cases) too high (~37% under the
+            // previous `n < 25` factor), turning the test flaky on any
+            // internal RNG change.
+            let _n = noprop::sample_usize_in(ctx, 0..=100);
             let flip = noprop::sample_ratio(ctx, noprop::Ratio::one_nth(4));
-            // Fail on a pattern that is common enough to hit within 64
-            // cases but does not always fire, so the case index
-            // matters.
-            assert!(!(flip && idx == 0 && n < 25), "hit forbidden pattern");
+            // P(fail per case) = 1/4 * 1/4 = 1/16, so P(no failure in
+            // 64 cases) = (15/16)^64 ≈ 1.6% - safe headroom against
+            // future RNG-stream shifts while still leaving the case
+            // index seed-dependent.
+            assert!(!(flip && idx == 0), "hit forbidden pattern");
             Ok(())
         })
     };

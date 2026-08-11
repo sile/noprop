@@ -1815,8 +1815,12 @@ mod tests {
             }
         }
         let expected = total / 10;
+        // ±10% (100 out of 1000) is ~3σ for a Bernoulli(0.1) with
+        // n=10_000 (σ ≈ 30), so the fixed-seed run has comfortable
+        // headroom while still catching regressions that halve the
+        // biasing.
         assert!(
-            trues.abs_diff(expected) < expected / 2,
+            trues.abs_diff(expected) < expected / 10,
             "sample_ratio(Ratio::one_nth(10)) frequency off: {trues}/{total}"
         );
     }
@@ -1875,8 +1879,10 @@ mod tests {
             }
         }
         let expected = total / 10;
+        // ±10% (~3σ) - see sample_ratio_biased_matches_expected_frequency
+        // for the rationale.
         assert!(
-            boundary.abs_diff(expected) < expected / 2,
+            boundary.abs_diff(expected) < expected / 10,
             "sample_with_boundaries(one_nth(10)) frequency off: {boundary}/{total}"
         );
     }
@@ -2003,11 +2009,12 @@ mod tests {
         for _ in 0..total {
             counts[sample_weighted_index(&mut ctx, &weights)] += 1;
         }
-        // Expected 2000 / 4000 / 6000. Allow ±30% slack.
+        // Expected 2000 / 4000 / 6000. Allow ±10% slack (roughly 3σ
+        // for the smallest bucket, which is the tightest constraint).
         for (i, (&c, &w)) in counts.iter().zip(weights.iter()).enumerate() {
             let expected = total * w as usize / 6;
             assert!(
-                c.abs_diff(expected) * 100 < expected * 30,
+                c.abs_diff(expected) < expected / 10,
                 "index {i}: got {c}, expected ~{expected}"
             );
         }
