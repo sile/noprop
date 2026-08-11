@@ -33,3 +33,16 @@ These numbers measure only the chosen workloads, mutants, seed
 cohort, and case budget. They are not a complete measure of
 generator quality: a generator that wins on one target may lose on
 another, and detection speed says nothing about shrinking quality.
+
+Code style
+----------
+
+`benchmark/` is a self-contained internal harness: it reads its own
+JSON output, its writers and readers move together, and it is not a
+user-facing crate. Prefer concise, readable code over defensive
+depth. Enforce internal invariants with `debug_assert!` or trust
+them, and skip range-check plumbing that only guards against
+manually-corrupted output. Panics on such inputs are acceptable —
+they are a developer-facing signal, not a user-visible failure. The
+`examples/` directory follows the opposite policy (users copy from
+it), so validation there is warranted even when it looks over-cautious.
