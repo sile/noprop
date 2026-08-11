@@ -23,8 +23,7 @@ pub mod feedback_guided_search {}
 pub mod generator_design {}
 
 /// Authoring guide for `sample_*` generators: composing primitives,
-/// bounded rejection sampling, the shared `sample_below` migration
-/// note, `NonZero<_>` recipes, and the finite-by-default float
-/// samplers.
+/// bounded rejection sampling, `NonZero<_>` recipes, and the
+/// finite-by-default float samplers.
 #[doc = include_str!("../docs/generator-authoring.md")]
 pub mod generator_authoring {}
