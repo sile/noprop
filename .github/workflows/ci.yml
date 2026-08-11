@@ -27,6 +27,17 @@ jobs:
       # with other target selectors.
       - run: cargo test --all --lib --bins --tests --examples
       - run: cargo test --doc
+      # `cargo test --examples` builds each example's binary but does
+      # not execute its `main()` (no example carries `#[test]`), so the
+      # run-time asserts inside each example never run under
+      # `cargo test`. Invoke each explicitly so a broken assertion (or
+      # a broken invariant an example demonstrates) fails CI.
+      - name: Passing examples must exit 0
+        run: |
+          cargo run --example basics
+          cargo run --example rejection
+          cargo run --example stateful
+          cargo run --example feedback_guided
       # The reproduce example demonstrates a failure and exits
       # non-zero by design; verify that expectation.
       - name: Reproduce example must fail
