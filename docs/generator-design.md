@@ -136,12 +136,18 @@ e.g. "any two lists that share at least one element" — rejection is
 often the pragmatic choice. Note when the accept rate is low
 (≤ ~10%) so the caller can enlarge `max_attempts` accordingly.
 
-## Recording the value, not just the byte source
+## Recording the drawn value
 
-Every user-defined `sample_*` should record its produced value into
-the trace so failures show what the generator returned, not the raw
-byte source. The primitives (`sample_u32`, `sample_string`, …) already
-record; wrappers only need to record when they transform the value:
+The primitives (`sample_u32`, `sample_string`, …) record their drawn
+value into the failure trace on every call. `record_generated` is
+crate-private — user-defined wrappers cannot add their own trace
+entry, so what the trace shows is the primitives' raw draws along
+the wrapper's call path.
+
+Marking a wrapper `#[track_caller]` attributes those primitive
+entries to the user's call site (where the wrapper was invoked)
+rather than to a line inside the wrapper — so a failure trace points
+at where the caller asked for the value:
 
 ```rust
 use std::num::NonZeroU32;
@@ -155,6 +161,8 @@ fn sample_non_zero_u32(ctx: &mut TestCaseContext) -> NonZeroU32 {
 }
 ```
 
-`#[track_caller]` puts the trace entry at the user's call site, not
-inside the wrapper — so a failure trace points at where the caller
-asked for the value.
+The trace here shows the raw `u32` the primitive returned, not the
+`NonZeroU32` the wrapper produced; a reader reconstructs the
+returned value from the wrapper's mapping. See the "Sampling
+non-zero integers" section of [`crate::docs::generator_authoring`]
+for the two `NonZero<_>` recipes and their trace trade-offs.
