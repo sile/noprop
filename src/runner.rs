@@ -633,7 +633,13 @@ fn too_many_rejections(
     if matches!(policy, SearchPolicy::FeedbackGuided) {
         let features = match ctx.take_feedback() {
             FeedbackState::SemanticCoverage(mut cov) => cov.take_features(),
-            _ => Vec::new(),
+            // Unreachable: run_feedback_guided calls enable_corpus_guided
+            // on every case's fresh context before invoking the closure,
+            // so the feedback state is always SemanticCoverage on this
+            // path.
+            FeedbackState::Disabled => unreachable!(
+                "feedback-guided runner must have enabled SemanticCoverage on this context"
+            ),
         };
         let last_candidate = runner.stats.accepted_cases + runner.stats.rejected_cases;
         return err.with_semantic(features, last_candidate);
