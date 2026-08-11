@@ -1455,6 +1455,20 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "must be finite")]
+    fn sample_f64_in_panics_on_infinity() {
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f64_in(&mut ctx, 0.0, f64::INFINITY);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be less than")]
+    fn sample_f64_in_panics_when_min_equals_max() {
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_f64_in(&mut ctx, 5.0, 5.0);
+    }
+
+    #[test]
     #[should_panic(expected = "max - min must be finite")]
     fn sample_f32_in_panics_when_span_overflows() {
         // Individually-finite bounds whose difference overflows to +INF.
