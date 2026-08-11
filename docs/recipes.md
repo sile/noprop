@@ -910,11 +910,11 @@ the same gate mechanism),
 The failure report prints, on both `Debug` and `Display`:
 
 ```text
-noprop failure at case 3 (seed=0x00ff00ff00ff00ff): high bit set: 0xd7...
+noprop failure at case 3 (seed=0x00ff00ff00ff00ff): high bit set: 0xe268430a
 reproduce with: noprop::Runner::new(0x00ff00ff00ff00ff).run(64, |ctx| ...)
 stats: accepted=3, rejected=0, total_samples=4, discovered_features=0, max_corpus_size=0
 Generated values:
-  <call-site>: 0xd7abcdef
+  - u32 = 3798483722  (at examples/reproduce.rs:17)
 ```
 
 Recovery is manual and mechanical:
