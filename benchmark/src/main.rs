@@ -246,7 +246,7 @@ fn print_summary(summaries: &summary::Summaries) {
             .unwrap_or_else(|| "-".to_string());
         println!(
             "variant={variant} workload={workload} mutant={mutant} \
-             trials={} found={} not_found={} gave_up={} aborted={} \
+             trials={} found={} not_found={} gave_up={} \
              detection_rate={detection_rate:.3} median={median} quartiles={quartiles} \
              buckets=[{}] candidate_median={candidate_median} \
              candidate_quartiles={candidate_quartiles} candidate_buckets=[{}] \
@@ -255,7 +255,6 @@ fn print_summary(summaries: &summary::Summaries) {
             s.found,
             s.not_found,
             s.gave_up,
-            s.aborted,
             buckets.join(","),
             candidate_buckets.join(",")
         );

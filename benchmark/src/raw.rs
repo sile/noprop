@@ -15,10 +15,6 @@ pub(crate) enum Status {
     NotFound,
     /// The run gave up (rejection cap exceeded) before completing.
     GaveUp,
-    /// The harness itself failed (configuration error, not a property
-    /// failure). No workload generates this today; the status keeps
-    /// the summary schema stable for future harness errors.
-    Aborted,
 }
 
 impl Status {
@@ -27,7 +23,6 @@ impl Status {
             Status::Found => "found",
             Status::NotFound => "not_found",
             Status::GaveUp => "gave_up",
-            Status::Aborted => "aborted",
         }
     }
 }

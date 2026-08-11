@@ -47,7 +47,6 @@ pub(crate) struct TaskSummary {
     pub found: usize,
     pub not_found: usize,
     pub gave_up: usize,
-    pub aborted: usize,
     /// Iterations-to-detection across `found` trials, in aggregation
     /// order; sorted by `median_detection` / `quartiles` on read.
     pub detection_times: Vec<usize>,
@@ -138,7 +137,6 @@ pub(crate) fn accumulate(summaries: &mut Summaries, raw: &ParsedRaw) {
         }
         Status::NotFound => entry.not_found += 1,
         Status::GaveUp => entry.gave_up += 1,
-        Status::Aborted => entry.aborted += 1,
     }
 }
 
@@ -203,7 +201,6 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<ParsedRaw>, String> {
         "found" => Status::Found,
         "not_found" => Status::NotFound,
         "gave_up" => Status::GaveUp,
-        "aborted" => Status::Aborted,
         other => return Err(format!("unknown status {other:?}")),
     };
     // `detected_at` is either a number (found) or null (other statuses).
