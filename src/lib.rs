@@ -119,15 +119,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod seed;
 mod error;
 mod generator;
 mod rng;
 mod runner;
+mod seed;
 
 pub mod docs;
 
-pub use seed::seed_from_env_or_time;
 pub use error::{RunError, RunErrorKind, RunResult, TestResult};
 pub use generator::{
     Ratio, sample_ascii_char, sample_ascii_printable_char, sample_ascii_printable_string,
@@ -139,3 +138,4 @@ pub use generator::{
 };
 pub use rng::{GeneratedValue, TestCaseContext};
 pub use runner::{Runner, Stats};
+pub use seed::seed_from_env_or_time;
