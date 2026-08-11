@@ -1,7 +1,16 @@
-//! End-to-end integration tests for the noprop runner.
+//! End-to-end tests for noprop's observable runner behavior.
 //!
-//! These tests exercise the public API as an external user would:
-//! everything is referenced via `noprop::` full qualification, with no
+//! Put a test here when `Runner` or the execution pipeline is part of
+//! the system under test: case execution, rejection, failure reporting,
+//! generated traces, statistics, reproducibility, or feedback-guided
+//! search.
+//!
+//! Properties where `Runner` merely drives generated inputs for a
+//! sampling primitive belong in `tests/pbt.rs`. Private implementation
+//! tests and minimized regression witnesses belong in the corresponding
+//! `src/` module.
+//!
+//! Everything is referenced via `noprop::` full qualification, with no
 //! `use noprop::*` shortcuts, matching the convention documented for
 //! all noprop example code.
 
