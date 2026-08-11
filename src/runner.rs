@@ -133,9 +133,9 @@ pub struct Stats {
 ///
 /// The env var name shown above is a project-specific placeholder;
 /// pick a name that fits the calling project. The helper accepts
-/// decimal values as well as `0x` / `0b` / `0o` prefixed values with
-/// optional `_` separators, so the hex seed printed by a failure
-/// report can be pasted into the environment variable directly. The
+/// decimal values and `0x`-prefixed hex values with optional `_`
+/// separators, so the hex seed printed by a failure report can be
+/// pasted into the environment variable directly. The
 /// helper surfaces a
 /// boxed error — via `?` — when the variable
 /// is set to something that cannot be parsed, so a mistyped

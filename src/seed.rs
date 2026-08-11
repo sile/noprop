@@ -1,11 +1,12 @@
-//! Environment-variable helpers for populating [`Runner::seed`].
+//! Environment-variable helper for obtaining the seed
+//! [`Runner::new`](crate::Runner::new) takes.
 //!
-//! The helpers are opt-in and are read only when the caller invokes
-//! them, so the "no implicit I/O" contract of the rest of the crate is
-//! preserved — `TestCaseContext::new` and `Runner::run` never touch the environment
-//! or the clock on their own.
+//! The helper is opt-in and is read only when the caller invokes it,
+//! so the "no implicit I/O" contract of the rest of the crate is
+//! preserved — `TestCaseContext::new` and `Runner::run` never touch
+//! the environment or the clock on their own.
 //!
-//! The [`Runner::seed`](crate::Runner) rustdoc shows the intended
+//! The [`Runner::new`](crate::Runner::new) rustdoc shows the intended
 //! calling shape.
 
 use std::env;
@@ -14,33 +15,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::TestResult;
 
-/// Parse `raw` as a seed or iteration count.
+/// Parse `raw` as a seed value.
 ///
-/// Accepts a plain decimal value, or a `0x` / `0b` / `0o` prefixed
-/// value with optional `_` separators (e.g. `0xDEAD_BEEF`, `1_000_000`),
-/// so the hex seed printed by failure reports can be pasted into an
-/// environment variable directly.
-fn parse_number<T>(var: &str, raw: &str) -> TestResult<T>
-where
-    T: FromNumber,
-{
+/// Accepts a plain decimal `u64` or a `0x`-prefixed hex value, with
+/// optional `_` separators (e.g. `1_000_000`, `0xDEAD_BEEF`). Hex is
+/// the format failure reports print (`{:#018x}`), so a seed pasted
+/// from a failure report parses back verbatim.
+fn parse_seed(var: &str, raw: &str) -> TestResult<u64> {
     let trimmed = raw.trim();
-    let (radix, digits) = if let Some(rest) = trimmed.strip_prefix("0x") {
-        (16, rest)
-    } else if let Some(rest) = trimmed.strip_prefix("0b") {
-        (2, rest)
-    } else if let Some(rest) = trimmed.strip_prefix("0o") {
-        (8, rest)
-    } else {
-        (10, trimmed)
+    let (radix, digits) = match trimmed.strip_prefix("0x") {
+        Some(rest) => (16, rest),
+        None => (10, trimmed),
     };
     let cleaned: String = digits.chars().filter(|c| *c != '_').collect();
-    T::from_str_radix(&cleaned, radix).map_err(|err| {
+    u64::from_str_radix(&cleaned, radix).map_err(|err| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
                 "environment variable {var:?} has an invalid value {raw:?}: {err}; \
-                 expected a decimal integer or a 0x / 0b / 0o prefixed value (e.g. 0xDEAD_BEEF, 1_000_000)"
+                 expected a decimal integer or a 0x-prefixed hex value (e.g. 1_000_000, 0xDEAD_BEEF)"
             ),
         )
         .into()
@@ -56,8 +49,8 @@ where
 ///   `SystemTime::now() - UNIX_EPOCH` in nanoseconds, cast to `u64`.
 ///   If the system clock is before the Unix epoch the fallback is `0`
 ///   (still a legitimate seed for the internal PRNG).
-/// - `var` set to a valid `u64` (decimal, or `0x` / `0b` / `0o`
-///   prefixed, with optional `_` separators) — returns that value.
+/// - `var` set to a valid `u64` (decimal or `0x`-prefixed hex, with
+///   optional `_` separators) — returns that value.
 /// - `var` set to a value that fails to parse — returns a boxed
 ///   [`io::Error`] naming the variable, the raw value, and the parse
 ///   error, with the accepted prefixes illustrated.
@@ -73,30 +66,13 @@ where
 /// ```
 pub fn seed_from_env_or_time(var: &str) -> TestResult<u64> {
     match env::var(var) {
-        Ok(raw) => parse_number(var, &raw),
+        Ok(raw) => parse_seed(var, &raw),
         Err(env::VarError::NotPresent) => Ok(time_seed()),
         Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("environment variable {var:?} is not valid UTF-8"),
         )
         .into()),
-    }
-}
-
-/// Numbers the env helpers can parse from a string.
-trait FromNumber: Sized {
-    fn from_str_radix(src: &str, radix: u32) -> Result<Self, std::num::ParseIntError>;
-}
-
-impl FromNumber for u64 {
-    fn from_str_radix(src: &str, radix: u32) -> Result<Self, std::num::ParseIntError> {
-        u64::from_str_radix(src, radix)
-    }
-}
-
-impl FromNumber for usize {
-    fn from_str_radix(src: &str, radix: u32) -> Result<Self, std::num::ParseIntError> {
-        usize::from_str_radix(src, radix)
     }
 }
 
@@ -115,47 +91,32 @@ mod tests {
 
     // env::set_var is `unsafe` in Rust 2024 and the crate forbids
     // unsafe_code, so the tests exercise the pieces that don't touch
-    // process-wide state: parse_number for the accepted forms and
+    // process-wide state: parse_seed for the accepted forms and
     // error kinds, and time_seed for the fallback path. The public
-    // helpers are a small amount of glue over these + std::env::var.
+    // helper is a small amount of glue over these + std::env::var.
 
     #[test]
-    fn parse_number_accepts_decimal() {
-        let v: u64 = parse_number("SEED", "42").unwrap();
-        assert_eq!(v, 42);
+    fn parse_seed_accepts_decimal() {
+        assert_eq!(parse_seed("SEED", "42").unwrap(), 42);
     }
 
     #[test]
-    fn parse_number_accepts_hex_prefix() {
-        let v: u64 = parse_number("SEED", "0xDEAD_BEEF").unwrap();
-        assert_eq!(v, 0xDEAD_BEEF);
+    fn parse_seed_accepts_hex_prefix() {
+        assert_eq!(parse_seed("SEED", "0xDEAD_BEEF").unwrap(), 0xDEAD_BEEF);
     }
 
     #[test]
-    fn parse_number_accepts_binary_and_octal_prefixes() {
-        let b: u64 = parse_number("SEED", "0b1010").unwrap();
-        assert_eq!(b, 0b1010);
-        let o: u64 = parse_number("SEED", "0o17").unwrap();
-        assert_eq!(o, 0o17);
+    fn parse_seed_accepts_underscore_separators() {
+        assert_eq!(parse_seed("SEED", "1_000_000").unwrap(), 1_000_000);
+        assert_eq!(
+            parse_seed("SEED", "0xDEAD_BEEF_CAFE").unwrap(),
+            0xDEAD_BEEF_CAFE
+        );
     }
 
     #[test]
-    fn parse_number_accepts_underscore_separators() {
-        let v: u64 = parse_number("SEED", "1_000_000").unwrap();
-        assert_eq!(v, 1_000_000);
-        let h: u64 = parse_number("SEED", "0xDEAD_BEEF_CAFE").unwrap();
-        assert_eq!(h, 0xDEAD_BEEF_CAFE);
-    }
-
-    #[test]
-    fn parse_number_accepts_valid_usize() {
-        let v: usize = parse_number("ITER", "128").unwrap();
-        assert_eq!(v, 128);
-    }
-
-    #[test]
-    fn parse_number_reports_invalid_value_with_context() {
-        let err = parse_number::<u64>("SEED", "not-a-number").unwrap_err();
+    fn parse_seed_reports_invalid_value_with_context() {
+        let err = parse_seed("SEED", "not-a-number").unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("SEED"),
@@ -166,15 +127,9 @@ mod tests {
             "raw value must be in the message: {msg}"
         );
         assert!(
-            msg.contains("0x") && msg.contains("0b"),
-            "prefix examples must be in the message: {msg}"
+            msg.contains("0x"),
+            "prefix example must be in the message: {msg}"
         );
-    }
-
-    #[test]
-    fn parse_number_reports_negative_for_usize() {
-        let err = parse_number::<usize>("ITER", "-1").unwrap_err();
-        assert!(err.to_string().contains("ITER"));
     }
 
     #[test]
@@ -193,7 +148,7 @@ mod tests {
     // environment. This exercises env::var(NotPresent) → time_seed.
     #[test]
     fn seed_from_env_or_time_falls_back_when_variable_unset() {
-        let name = "NOPROP_CONFIG_TESTS_ABSOLUTELY_UNSET_SEED_9F3A_2E7B";
+        let name = "NOPROP_SEED_TESTS_ABSOLUTELY_UNSET_9F3A_2E7B";
         let a = seed_from_env_or_time(name).expect("unset var must fall back");
         let b = seed_from_env_or_time(name).expect("unset var must fall back");
         // Two calls should both return a value (may or may not differ

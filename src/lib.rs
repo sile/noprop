@@ -119,7 +119,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod config;
+mod seed;
 mod error;
 mod generator;
 mod rng;
@@ -127,7 +127,7 @@ mod runner;
 
 pub mod docs;
 
-pub use config::seed_from_env_or_time;
+pub use seed::seed_from_env_or_time;
 pub use error::{RunError, RunErrorKind, RunResult, TestResult};
 pub use generator::{
     Ratio, sample_ascii_char, sample_ascii_printable_char, sample_ascii_printable_string,

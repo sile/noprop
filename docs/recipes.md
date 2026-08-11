@@ -60,8 +60,8 @@ noprop::Runner::new(0xDEAD_BEEF).run(256, |ctx| {
 })?;
 
 // An env-controlled seed lets a failure report be replayed by
-// setting the variable. The env helper accepts decimal, `0x...`,
-// `0b...`, and `0o...` with optional `_` separators, so the hex seed
+// setting the variable. The env helper accepts decimal and
+// `0x`-prefixed hex with optional `_` separators, so the hex seed
 // printed by a failure report can be pasted in verbatim.
 let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
 noprop::Runner::new(seed).run(256, |_ctx| Ok(()))?;
