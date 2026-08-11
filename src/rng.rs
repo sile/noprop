@@ -1831,6 +1831,101 @@ mod tests {
     }
 
     #[test]
+    fn replay_flags_parent_mismatch() {
+        // Recording: outer wrapping inner (nested spans).
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let outer = ctx.begin_attempt();
+            let inner = ctx.begin_attempt();
+            ctx.end_attempt(inner, AttemptVerdict::Accepted);
+            ctx.end_attempt(outer, AttemptVerdict::Accepted);
+        });
+        // Replay: two top-level (siblings) instead of nested. The
+        // second begin_attempt tries to open a span whose recorded
+        // parent is Some(0), but current_parent is None (the outer
+        // span was already closed).
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let outer = ctx.begin_attempt();
+            ctx.end_attempt(outer, AttemptVerdict::Accepted);
+            let sibling = ctx.begin_attempt();
+            ctx.end_attempt(sibling, AttemptVerdict::Accepted);
+        });
+        assert!(
+            matches!(
+                result,
+                Err(ReplayError::SpanMismatch {
+                    at_span: 1,
+                    reason: SpanMismatchReason::ParentMismatch,
+                })
+            ),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn replay_flags_start_draw_mismatch() {
+        // Recording: one draw, then a span that opens at draw offset 1.
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let mut a = [0u8; 4];
+            ctx.fill(&mut a);
+            let id = ctx.begin_attempt();
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        // Replay: open the span first (at draw offset 0). The recorded
+        // start_draw is 1, so begin_attempt flags the mismatch.
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let id = ctx.begin_attempt();
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
+            let mut a = [0u8; 4];
+            ctx.fill(&mut a);
+        });
+        assert!(
+            matches!(
+                result,
+                Err(ReplayError::SpanMismatch {
+                    at_span: 0,
+                    reason: SpanMismatchReason::StartDrawMismatch {
+                        expected: 1,
+                        actual: 0,
+                    },
+                })
+            ),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn replay_flags_end_draw_mismatch() {
+        // Recording: span wrapping one draw (end_draw = 1).
+        let ((), seq) = RecordingSession::new(1).run(|ctx| {
+            let id = ctx.begin_attempt();
+            let mut a = [0u8; 4];
+            ctx.fill(&mut a);
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
+        });
+        // Replay: close the span before doing the draw, so end_draw is
+        // 0 where the recording expects 1.
+        let result = ReplaySession::new(seq).run(|ctx| {
+            let id = ctx.begin_attempt();
+            ctx.end_attempt(id, AttemptVerdict::Accepted);
+            let mut a = [0u8; 4];
+            ctx.fill(&mut a);
+        });
+        assert!(
+            matches!(
+                result,
+                Err(ReplayError::SpanMismatch {
+                    at_span: 0,
+                    reason: SpanMismatchReason::EndDrawMismatch {
+                        expected: 1,
+                        actual: 0,
+                    },
+                })
+            ),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
     fn replay_flags_span_sequence_exhausted() {
         let ((), seq) = RecordingSession::new(1).run(|ctx| {
             let id = ctx.begin_attempt();
