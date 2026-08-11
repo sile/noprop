@@ -16,23 +16,17 @@ fn run_returns_ok_when_property_holds() -> noprop::TestResult {
 }
 
 #[test]
-fn test_result_propagates_config_and_run_failures() {
-    // A single `#[test] -> noprop::TestResult` must propagate the
-    // config-helper failure, the property-closure failure, and the
-    // runner failure through `?`. The config path is exercised with an
-    // unset variable (fallback) so no env mutation is needed; the
-    // property and runner paths fail deterministically.
+fn test_result_chains_config_and_runner_via_question_mark() {
+    // A `#[test] -> noprop::TestResult` fn composes
+    // seed_from_env_or_time (io::Error-based) and Runner::run
+    // (RunError-based) through `?`. This exercises the type-level
+    // composition on the success path; the failure paths of each
+    // component are covered independently (see e.g.
+    // run_returns_err_on_failed_assertion for the runner side and
+    // src/seed.rs's parse tests for the config side).
     let result: noprop::TestResult = (|| {
         let seed = noprop::seed_from_env_or_time("NOPROP_E2E_ABSOLUTELY_UNSET_SEED_7C4A_1B2D")?;
-        noprop::Runner::new(seed).run(4, |ctx| {
-            let x = noprop::sample_u32(ctx);
-            if x == u32::MAX {
-                // Practically unreachable, but keeps the closure
-                // fallible like a real property.
-                return Err("unexpected".into());
-            }
-            Ok(())
-        })?;
+        noprop::Runner::new(seed).run(4, |_ctx| Ok(()))?;
         Ok(())
     })();
     assert!(
