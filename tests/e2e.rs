@@ -52,7 +52,10 @@ fn runner_display_includes_seed_and_every_stats_field() {
         "discovered_features: 0",
         "max_corpus_size: 0",
     ] {
-        assert!(s.contains(label), "missing '{label}' in Display output: {s}");
+        assert!(
+            s.contains(label),
+            "missing '{label}' in Display output: {s}"
+        );
     }
 }
 
