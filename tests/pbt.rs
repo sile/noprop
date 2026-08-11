@@ -415,3 +415,297 @@ fn sample_with_boundaries_matches_explicit_recipe() -> noprop::TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn integer_primitives_match_little_endian_bytes() -> noprop::TestResult {
+    // Each sample_u* / sample_i* / sample_usize / sample_isize
+    // primitive must equal the same-width sample_bytes::<N>
+    // reinterpreted via <T>::from_le_bytes on the same seed. This
+    // locks the width, endianness, and signed-conversion of every
+    // integer adapter deterministically (no statistical thresholds),
+    // and the follow-up sample_u64 comparison catches a regression
+    // that drifted the byte count.
+    //
+    // Types are compared in explicit blocks (no macro), so the width
+    // and signedness of each adapter read as their own line.
+    const USIZE_BYTES: usize = std::mem::size_of::<usize>();
+    const ISIZE_BYTES: usize = std::mem::size_of::<isize>();
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(6)).run(256, |ctx| {
+        // Each block derives its own pair of fresh contexts from the
+        // outer stream so every type gets the same input regardless of
+        // what earlier blocks consumed.
+
+        // u8
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_u8(&mut a),
+                u8::from_le_bytes(noprop::sample_bytes::<1>(&mut b)),
+                "u8: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "u8 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // u16
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_u16(&mut a),
+                u16::from_le_bytes(noprop::sample_bytes::<2>(&mut b)),
+                "u16: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "u16 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // u32
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_u32(&mut a),
+                u32::from_le_bytes(noprop::sample_bytes::<4>(&mut b)),
+                "u32: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "u32 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // u64
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                u64::from_le_bytes(noprop::sample_bytes::<8>(&mut b)),
+                "u64: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "u64 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // u128
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_u128(&mut a),
+                u128::from_le_bytes(noprop::sample_bytes::<16>(&mut b)),
+                "u128: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "u128 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // usize
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_usize(&mut a),
+                usize::from_le_bytes(noprop::sample_bytes::<USIZE_BYTES>(&mut b)),
+                "usize: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "usize follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // i8
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_i8(&mut a),
+                i8::from_le_bytes(noprop::sample_bytes::<1>(&mut b)),
+                "i8: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "i8 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // i16
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_i16(&mut a),
+                i16::from_le_bytes(noprop::sample_bytes::<2>(&mut b)),
+                "i16: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "i16 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // i32
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_i32(&mut a),
+                i32::from_le_bytes(noprop::sample_bytes::<4>(&mut b)),
+                "i32: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "i32 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // i64
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_i64(&mut a),
+                i64::from_le_bytes(noprop::sample_bytes::<8>(&mut b)),
+                "i64: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "i64 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // i128
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_i128(&mut a),
+                i128::from_le_bytes(noprop::sample_bytes::<16>(&mut b)),
+                "i128: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "i128 follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        // isize
+        {
+            let seed = noprop::sample_u64(ctx);
+            let mut a = noprop::TestCaseContext::new(seed);
+            let mut b = noprop::TestCaseContext::new(seed);
+            assert_eq!(
+                noprop::sample_isize(&mut a),
+                isize::from_le_bytes(noprop::sample_bytes::<ISIZE_BYTES>(&mut b)),
+                "isize: seed={seed:#x}"
+            );
+            assert_eq!(
+                noprop::sample_u64(&mut a),
+                noprop::sample_u64(&mut b),
+                "isize follow-up bytes diverged: seed={seed:#x}"
+            );
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn string_primitives_preserve_generated_length_and_alphabet() -> noprop::TestResult {
+    // For each string primitive, verify the length and character-set
+    // invariants documented in its rustdoc. Lengths 0, 1, and MAX_LEN
+    // are exercised explicitly (mixed in via sample_with_boundaries)
+    // since a uniform draw over `0..=MAX_LEN` rarely hits either
+    // extreme.
+    const MAX_LEN: usize = 64;
+    let len_zero_seen = Cell::new(false);
+    let len_one_seen = Cell::new(false);
+    let len_max_seen = Cell::new(false);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(7)).run(256, |ctx| {
+        let len = noprop::sample_with_boundaries(
+            ctx,
+            &[0, 1, MAX_LEN],
+            noprop::Ratio::one_nth(4),
+            |c| noprop::sample_usize_in(c, 0..=MAX_LEN),
+        );
+
+        if len == 0 {
+            len_zero_seen.set(true);
+        } else if len == 1 {
+            len_one_seen.set(true);
+        } else if len == MAX_LEN {
+            len_max_seen.set(true);
+        }
+
+        // sample_string: valid UTF-8 String of `len` Unicode code
+        // points. String type already guarantees UTF-8 validity, so
+        // the invariant here is chars().count() == len.
+        let s1 = noprop::sample_string(ctx, len);
+        assert_eq!(s1.chars().count(), len, "sample_string(len={len})");
+
+        // sample_ascii_string: `len` chars, 1 byte per char, is_ascii.
+        let s2 = noprop::sample_ascii_string(ctx, len);
+        assert_eq!(
+            s2.chars().count(),
+            len,
+            "sample_ascii_string chars count(len={len})"
+        );
+        assert_eq!(s2.len(), len, "sample_ascii_string byte len(len={len})");
+        assert!(
+            s2.is_ascii(),
+            "sample_ascii_string(len={len}) not ASCII: {s2:?}"
+        );
+
+        // sample_ascii_printable_string: `len` chars in 0x20..=0x7E.
+        // Assert per-char range rather than is_ascii alone, since the
+        // documented alphabet is stricter.
+        let s3 = noprop::sample_ascii_printable_string(ctx, len);
+        assert_eq!(
+            s3.chars().count(),
+            len,
+            "sample_ascii_printable_string chars(len={len})"
+        );
+        assert_eq!(
+            s3.len(),
+            len,
+            "sample_ascii_printable_string bytes(len={len})"
+        );
+        for c in s3.chars() {
+            let n = c as u32;
+            assert!(
+                (0x20..=0x7E).contains(&n),
+                "sample_ascii_printable_string(len={len}) non-printable {c:?}: {s3:?}"
+            );
+        }
+        Ok(())
+    })?;
+
+    assert!(len_zero_seen.get(), "length 0 was not exercised");
+    assert!(len_one_seen.get(), "length 1 was not exercised");
+    assert!(len_max_seen.get(), "length MAX_LEN was not exercised");
+    Ok(())
+}
