@@ -195,8 +195,7 @@ fn sample_ratio_matches_explicit_recipe() -> noprop::TestResult {
         } else if numerator == denominator {
             true
         } else {
-            noprop::sample_usize_in(&mut expected_ctx, 0..denominator as usize)
-                < numerator as usize
+            noprop::sample_usize_in(&mut expected_ctx, 0..denominator as usize) < numerator as usize
         };
         assert_eq!(
             actual, expected,
@@ -377,12 +376,8 @@ fn sample_with_boundaries_matches_explicit_recipe() -> noprop::TestResult {
         let mut actual_ctx = noprop::TestCaseContext::new(seed);
         let mut expected_ctx = noprop::TestCaseContext::new(seed);
 
-        let actual = noprop::sample_with_boundaries(
-            &mut actual_ctx,
-            &boundaries,
-            ratio,
-            noprop::sample_u32,
-        );
+        let actual =
+            noprop::sample_with_boundaries(&mut actual_ctx, &boundaries, ratio, noprop::sample_u32);
         let expected = if noprop::sample_ratio(&mut expected_ctx, ratio) {
             noprop::sample_choice(&mut expected_ctx, &boundaries)
         } else {
@@ -646,12 +641,10 @@ fn string_primitives_preserve_generated_length_and_alphabet() -> noprop::TestRes
     let len_max_seen = Cell::new(false);
 
     noprop::Runner::new(ROOT_SEED.wrapping_add(7)).run(256, |ctx| {
-        let len = noprop::sample_with_boundaries(
-            ctx,
-            &[0, 1, MAX_LEN],
-            noprop::Ratio::one_nth(4),
-            |c| noprop::sample_usize_in(c, 0..=MAX_LEN),
-        );
+        let len =
+            noprop::sample_with_boundaries(ctx, &[0, 1, MAX_LEN], noprop::Ratio::one_nth(4), |c| {
+                noprop::sample_usize_in(c, 0..=MAX_LEN)
+            });
 
         if len == 0 {
             len_zero_seen.set(true);
@@ -883,10 +876,7 @@ fn bounded_float_primitives_stay_in_half_open_ranges_f32() -> noprop::TestResult
             min.is_finite() && max.is_finite(),
             "class={class:?}: non-finite endpoint min={min:e} max={max:e}"
         );
-        assert!(
-            min < max,
-            "class={class:?}: min={min:e} not < max={max:e}"
-        );
+        assert!(min < max, "class={class:?}: min={min:e} not < max={max:e}");
         assert!(
             (max - min).is_finite(),
             "class={class:?}: max - min overflowed to inf (min={min:e}, max={max:e})"
@@ -934,10 +924,7 @@ fn bounded_float_primitives_stay_in_half_open_ranges_f64() -> noprop::TestResult
             min.is_finite() && max.is_finite(),
             "class={class:?}: non-finite endpoint min={min:e} max={max:e}"
         );
-        assert!(
-            min < max,
-            "class={class:?}: min={min:e} not < max={max:e}"
-        );
+        assert!(min < max, "class={class:?}: min={min:e} not < max={max:e}");
         assert!(
             (max - min).is_finite(),
             "class={class:?}: max - min overflowed to inf (min={min:e}, max={max:e})"
