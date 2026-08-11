@@ -871,27 +871,28 @@ fn mutate_sequence(sequence: &mut ChoiceSequence, prng: &mut XoshiroState) {
         }
         match meta {
             ChoiceMeta::Bounded { bound } => {
-                if draw.len() != 8 {
-                    // Bounded/Choice draws are exactly eight bytes (the
-                    // rejection-sampling core draws a u64); anything
-                    // else cannot be rewritten in place.
-                    continue;
-                }
-                // bound <= 1 never occurs (sample_below returns early
-                // for n == 1 without drawing), kept as a defensive
-                // guard against a future primitive that records a
-                // singleton domain.
-                if *bound <= 1 {
+                // Bounded draws come from sample_below's rejection
+                // core (a u64), so their width is always 8; and
+                // sample_below returns early for n == 1 without
+                // drawing, so bound is always > 1. debug_assert on
+                // the invariants so a future primitive that violates
+                // either fails tests loudly; in release, silently
+                // skip the mutation so the draw stays as-is.
+                debug_assert_eq!(draw.len(), 8, "Bounded draw width should be 8");
+                debug_assert!(*bound > 1, "Bounded draw with bound <= 1 should not exist");
+                if draw.len() != 8 || *bound <= 1 {
                     continue;
                 }
                 let new_value = prng.sample_below(*bound);
                 draw[..8].copy_from_slice(&new_value.to_le_bytes());
             }
             ChoiceMeta::Choice { len } => {
-                if draw.len() != 8 {
-                    continue;
-                }
-                if *len <= 1 {
+                // Same invariants as Bounded: 8-byte width, len > 1
+                // (sample_choice with a singleton slice would also
+                // early-return via sample_below).
+                debug_assert_eq!(draw.len(), 8, "Choice draw width should be 8");
+                debug_assert!(*len > 1, "Choice draw with len <= 1 should not exist");
+                if draw.len() != 8 || *len <= 1 {
                     continue;
                 }
                 let new_value = prng.sample_below(*len as u64);
