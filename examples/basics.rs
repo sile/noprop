@@ -118,7 +118,10 @@ fn main() -> noprop::TestResult {
     // A uniform draw hits domain boundaries (0, `u16::MAX`, ...) with
     // vanishing probability. `sample_with_boundaries` mixes a few
     // candidates in with an exact probability, so each boundary gets
-    // exercised — here each one takes a different code path.
+    // exercised — port==0 lands on `format_config`'s non-zero-port
+    // error path (which uniform sampling would reach roughly 1 in 65
+    // thousand cases), and 1500 / u16::MAX are two domain-corner
+    // witnesses on the success path.
     noprop::Runner::new(seed).run(256, |ctx| {
         let port = noprop::sample_with_boundaries(
             ctx,
@@ -126,8 +129,6 @@ fn main() -> noprop::TestResult {
             noprop::Ratio::one_nth(10),
             noprop::sample_u16,
         );
-        // The three boundary candidates each map to a distinct
-        // outcome of format_config.
         match port {
             0 => {
                 assert_eq!(
