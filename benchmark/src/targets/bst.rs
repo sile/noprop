@@ -10,7 +10,6 @@
 //! so duplicates appear within the first cases.
 
 use super::{Observe, Task, Workload};
-use noprop::TestCaseContext;
 
 /// Minimal binary search tree used as the SUT.
 #[derive(Default)]
@@ -125,7 +124,7 @@ fn collect(node: &Option<Box<Node>>, out: &mut Vec<u32>) {
 fn run(
     sut_mutant: bool,
     biased: bool,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
     let mut bst = Bst::default();
@@ -190,12 +189,12 @@ pub(crate) const WORKLOAD: Workload = Workload {
     }],
 };
 
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(false, false, ctx, obs)
 }
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, false, ctx, obs)
 }
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, true, ctx, obs)
 }

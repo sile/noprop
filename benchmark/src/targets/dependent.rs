@@ -10,7 +10,6 @@
 //! one that shows the generator's full breadth.
 
 use super::{Observe, Task, Workload};
-use noprop::TestCaseContext;
 
 /// Shrunken `trun` box: bit 0 of `flags` means a duration field
 /// follows, bit 1 means a size field follows.
@@ -36,7 +35,7 @@ fn run(
     sut_mutant: bool,
     biased: bool,
     bb: bool,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     obs: &Observe,
 ) -> Result<(), String> {
     let flags = if biased {
@@ -101,15 +100,15 @@ pub(crate) const WORKLOAD: Workload = Workload {
     }],
 };
 
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(false, false, false, ctx, obs)
 }
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, false, false, ctx, obs)
 }
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, true, false, ctx, obs)
 }
-fn run_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_bb(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, false, true, ctx, obs)
 }

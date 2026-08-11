@@ -12,8 +12,6 @@
 
 use std::time::Instant;
 
-use noprop::{RunErrorKind, RunResult, Runner, Stats, TestCaseContext};
-
 use crate::raw::{RawResult, Status};
 use crate::targets::{Observe, Property, Task};
 
@@ -24,16 +22,16 @@ pub(crate) enum Variant {
     /// complete the property for any input. Not part of the
     /// comparison; use via the `run` subcommand.
     Base,
-    /// Uniform generation under `Runner::run`.
+    /// Uniform generation under `noprop::Runner::run`.
     Uniform,
     /// Explicitly biased generation (`match` + weighted choice) under
-    /// `Runner::run`.
+    /// `noprop::Runner::run`.
     Biased,
     /// Generic type-level boundary mix over the integer primitives
-    /// under `Runner::run`.
+    /// under `noprop::Runner::run`.
     BoundaryBiased,
     /// Feedback-guided search admitting purely on feature novelty
-    /// (`Runner::run_feedback_guided`).
+    /// (`noprop::Runner::run_feedback_guided`).
     FeedbackGuided,
 }
 
@@ -80,10 +78,10 @@ pub(crate) fn run_task(
     let observe = Observe::default();
 
     let start = Instant::now();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     let outcome = run_variant(&mut runner, task, variant, &observe, cases);
     let wall_clock_ns = start.elapsed().as_nanos();
-    let stats: Stats = runner.stats();
+    let stats: noprop::Stats = runner.stats();
     let observations = observe.take();
 
     let (status, detected_at) = classify(&outcome);
@@ -113,21 +111,21 @@ pub(crate) fn run_task(
 /// uniform / biased / bb properties (feedback-reporting under the
 /// respective generation); the feedback-guided variant reuses the
 /// uniform property, whose feedback methods are no-ops under
-/// `Runner::run`.
+/// `noprop::Runner::run`.
 fn run_variant(
-    runner: &mut Runner,
+    runner: &mut noprop::Runner,
     task: &Task,
     variant: Variant,
     observe: &Observe,
     cases: usize,
-) -> RunResult {
+) -> noprop::RunResult {
     let property: Property = match variant {
         Variant::Base => task.base,
         Variant::Biased => task.biased,
         Variant::BoundaryBiased => task.bb,
         _ => task.uniform,
     };
-    let run = |ctx: &mut TestCaseContext| property(ctx, observe).map_err(Into::into);
+    let run = |ctx: &mut noprop::TestCaseContext| property(ctx, observe).map_err(Into::into);
     match variant {
         Variant::Base | Variant::Uniform | Variant::Biased | Variant::BoundaryBiased => {
             runner.run(cases, run)
@@ -138,12 +136,12 @@ fn run_variant(
 
 /// Classify the run outcome: property failure (found), rejection-cap
 /// exhaustion (gave_up), or a clean pass (not_found).
-fn classify(outcome: &RunResult) -> (Status, Option<usize>) {
+fn classify(outcome: &noprop::RunResult) -> (Status, Option<usize>) {
     match outcome {
         Ok(()) => (Status::NotFound, None),
         Err(err) => match err.kind() {
-            RunErrorKind::TooManyRejections => (Status::GaveUp, None),
-            RunErrorKind::PropertyFailure => {
+            noprop::RunErrorKind::TooManyRejections => (Status::GaveUp, None),
+            noprop::RunErrorKind::PropertyFailure => {
                 // `case_index` is the accepted case that failed; the
                 // cases-to-detection count includes it.
                 (Status::Found, Some(err.case_index() + 1))

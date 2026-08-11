@@ -7,7 +7,6 @@
 //!
 //! Run with: `cargo run --example stateful`
 
-use noprop::TestCaseContext;
 use std::collections::{HashMap, VecDeque};
 
 /// An LRU cache standing in for a real system (a session store, a
@@ -111,7 +110,7 @@ impl Model {
 
 /// Pick the next command: reads and writes of small integer keys, so
 /// cache hits, misses, and evictions all occur within a run.
-fn sample_command(ctx: &mut TestCaseContext) -> (u32, Option<u32>) {
+fn sample_command(ctx: &mut noprop::TestCaseContext) -> (u32, Option<u32>) {
     let key = noprop::sample_usize_in(ctx, 0..8) as u32;
     let write = noprop::sample_bool(ctx);
     let value = write.then(|| noprop::sample_u32(ctx));

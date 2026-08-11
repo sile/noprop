@@ -13,7 +13,6 @@
 //!   the explicitly biased generator reaches it.
 
 use super::{Observe, Task, Workload};
-use noprop::TestCaseContext;
 
 /// SUT: `process(x)` succeeds unless `x == 0` under the mutant.
 fn process(x: u32, mutant: bool) -> Result<(), ()> {
@@ -44,7 +43,7 @@ fn process_range(v: usize, mutant: bool) -> Result<(), ()> {
 fn run(
     sut_mutant: bool,
     biased: bool,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
     let x = if biased {
@@ -62,7 +61,11 @@ fn run(
     process(x, sut_mutant).map_err(|_| format!("process failed for x={x}"))
 }
 
-fn run_bb(sut_mutant: bool, ctx: &mut TestCaseContext, _obs: &Observe) -> Result<(), String> {
+fn run_bb(
+    sut_mutant: bool,
+    ctx: &mut noprop::TestCaseContext,
+    _obs: &Observe,
+) -> Result<(), String> {
     let x = crate::bb::u32(ctx);
     let zeros = x.leading_zeros();
     ctx.bucket("leading_zeros", zeros as u64);
@@ -72,7 +75,7 @@ fn run_bb(sut_mutant: bool, ctx: &mut TestCaseContext, _obs: &Observe) -> Result
 fn run_domain(
     sut_mutant: bool,
     biased: bool,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
     let x = if biased {
@@ -91,7 +94,7 @@ fn run_domain(
 
 fn run_domain_bb(
     sut_mutant: bool,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
     let x = crate::bb::u32(ctx);
@@ -103,7 +106,7 @@ fn run_domain_bb(
 fn run_range(
     sut_mutant: bool,
     biased: bool,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
     let v = if biased {
@@ -122,7 +125,11 @@ fn run_range(
     process_range(v, sut_mutant).map_err(|_| format!("process failed for v={v}"))
 }
 
-fn run_range_bb(sut_mutant: bool, ctx: &mut TestCaseContext, _obs: &Observe) -> Result<(), String> {
+fn run_range_bb(
+    sut_mutant: bool,
+    ctx: &mut noprop::TestCaseContext,
+    _obs: &Observe,
+) -> Result<(), String> {
     // The bounded range draw is not wrapped by the generic mix, so
     // this generator is identical to the uniform one.
     let v = noprop::sample_usize_in(ctx, 0..1024);
@@ -159,41 +166,41 @@ pub(crate) const WORKLOAD: Workload = Workload {
     ],
 };
 
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(false, false, ctx, obs)
 }
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, false, ctx, obs)
 }
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, true, ctx, obs)
 }
-fn run_bb_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_bb_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_bb(true, ctx, obs)
 }
 
-fn run_domain_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_domain_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_domain(false, false, ctx, obs)
 }
-fn run_domain_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_domain_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_domain(true, false, ctx, obs)
 }
-fn run_domain_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_domain_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_domain(true, true, ctx, obs)
 }
-fn run_domain_bb_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_domain_bb_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_domain_bb(true, ctx, obs)
 }
 
-fn run_range_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_range_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_range(false, false, ctx, obs)
 }
-fn run_range_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_range_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_range(true, false, ctx, obs)
 }
-fn run_range_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_range_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_range(true, true, ctx, obs)
 }
-fn run_range_bb_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_range_bb_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run_range_bb(true, ctx, obs)
 }

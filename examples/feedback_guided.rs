@@ -6,7 +6,6 @@
 //!
 //! Run with: `cargo run --example feedback_guided`
 
-use noprop::TestCaseContext;
 use std::cell::Cell;
 
 /// Ingest a log line into a fixed-size buffer, truncating lines that
@@ -30,7 +29,7 @@ fn main() -> noprop::TestResult {
     // long lines while the uniform run stays flat.
     fn observe(seed: u64, guided: bool) -> Vec<usize> {
         let observed: Cell<Vec<usize>> = Cell::new(Vec::new());
-        let property = |ctx: &mut TestCaseContext| {
+        let property = |ctx: &mut noprop::TestCaseContext| {
             let len = noprop::sample_usize_in(ctx, 0..=24);
             let line = noprop::sample_string(ctx, len);
             let mut buf = [0u8; BUF_SIZE];

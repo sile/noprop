@@ -18,7 +18,7 @@ mod stepping;
 /// buckets reached by the dependent workload); workloads that do not
 /// measure anything ignore it. It is passed as an argument instead of a
 /// captured cell so properties stay plain function pointers.
-pub(crate) type Property = fn(&mut TestCaseContext, &Observe) -> Result<(), String>;
+pub(crate) type Property = fn(&mut noprop::TestCaseContext, &Observe) -> Result<(), String>;
 
 /// One named mutant of a workload: the base SUT must pass the property
 /// for any generated input, while the mutant SUT fails for known
@@ -76,8 +76,6 @@ impl Observe {
             .collect()
     }
 }
-
-use noprop::TestCaseContext;
 
 /// Look up a workload by name.
 pub(crate) fn workload(name: &str) -> Option<&'static Workload> {

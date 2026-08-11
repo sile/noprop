@@ -8,8 +8,6 @@
 //! are intentionally not wrapped, so the wrappers measure what an
 //! automatic type-level bias can and cannot reach.
 
-use noprop::TestCaseContext;
-
 /// 1 in `MIX_DENOMINATOR` draws is a boundary candidate.
 const MIX_DENOMINATOR: usize = 16;
 
@@ -17,7 +15,7 @@ const MIX_DENOMINATOR: usize = 16;
 /// type-level boundary set `[0, 1, MAX, MAX - 1]` (`MIN` is 0 for
 /// unsigned integers, and `-1` saturates to `MAX`), otherwise uniform
 /// over the full range.
-pub(crate) fn u32(ctx: &mut TestCaseContext) -> u32 {
+pub(crate) fn u32(ctx: &mut noprop::TestCaseContext) -> u32 {
     if noprop::sample_usize_in(ctx, 0..MIX_DENOMINATOR) == 0 {
         noprop::sample_choice(ctx, &[0, 1, u32::MAX, u32::MAX - 1])
     } else {
@@ -26,7 +24,7 @@ pub(crate) fn u32(ctx: &mut TestCaseContext) -> u32 {
 }
 
 /// Draw one `u64`: same boundary mix as [`u32()`], over the `u64` set.
-pub(crate) fn u64(ctx: &mut TestCaseContext) -> u64 {
+pub(crate) fn u64(ctx: &mut noprop::TestCaseContext) -> u64 {
     if noprop::sample_usize_in(ctx, 0..MIX_DENOMINATOR) == 0 {
         noprop::sample_choice(ctx, &[0, 1, u64::MAX, u64::MAX - 1])
     } else {

@@ -3,7 +3,6 @@
 //! variant steers toward the failing half and detects it earlier.
 
 use super::{Observe, Task, Workload};
-use noprop::TestCaseContext;
 
 /// SUT: `process(x)` succeeds for even `x`.
 fn process(x: u32, mutant: bool) -> Result<(), ()> {
@@ -13,7 +12,12 @@ fn process(x: u32, mutant: bool) -> Result<(), ()> {
     Ok(())
 }
 
-fn run(sut_mutant: bool, x: u32, ctx: &mut TestCaseContext, _obs: &Observe) -> Result<(), String> {
+fn run(
+    sut_mutant: bool,
+    x: u32,
+    ctx: &mut noprop::TestCaseContext,
+    _obs: &Observe,
+) -> Result<(), String> {
     // Feedback: the mutant fails for odd x, so the event observes
     // which parity was reached. This call draws no random bytes, so
     // the generator stream is unchanged.
@@ -23,7 +27,7 @@ fn run(sut_mutant: bool, x: u32, ctx: &mut TestCaseContext, _obs: &Observe) -> R
 
 /// Draw one input value: 90% odd, 10% even when biased (the failing
 /// half is over-represented), otherwise uniform.
-fn draw(biased: bool, ctx: &mut TestCaseContext) -> u32 {
+fn draw(biased: bool, ctx: &mut noprop::TestCaseContext) -> u32 {
     if biased {
         let odd = noprop::sample_usize_in(ctx, 0..10) < 9;
         let mut v = noprop::sample_u32(ctx);
@@ -38,16 +42,16 @@ fn draw(biased: bool, ctx: &mut TestCaseContext) -> u32 {
     }
 }
 
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(false, draw(false, ctx), ctx, obs)
 }
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, draw(false, ctx), ctx, obs)
 }
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, draw(true, ctx), ctx, obs)
 }
-fn run_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_bb(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     run(true, crate::bb::u32(ctx), ctx, obs)
 }
 

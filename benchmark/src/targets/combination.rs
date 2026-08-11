@@ -3,7 +3,6 @@
 //! biased variant steers both draws toward the witness values.
 
 use super::{Observe, Task, Workload};
-use noprop::TestCaseContext;
 
 /// SUT: `process(x, y)` succeeds unless the pair is `(1, 2)` under the
 /// mutant.
@@ -16,7 +15,7 @@ fn process(x: u32, y: u32, mutant: bool) -> Result<(), ()> {
 
 /// Draw one input value: 50% the witness value when biased, otherwise
 /// uniform.
-fn draw(witness: Option<u32>, ctx: &mut TestCaseContext) -> u32 {
+fn draw(witness: Option<u32>, ctx: &mut noprop::TestCaseContext) -> u32 {
     match witness {
         Some(w) if noprop::sample_bool(ctx) => w,
         _ => noprop::sample_u32(ctx),
@@ -27,7 +26,7 @@ fn run(
     sut_mutant: bool,
     x: u32,
     y: u32,
-    ctx: &mut TestCaseContext,
+    ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
     // Feedback: the mutant fails for the exact pair (1, 2), so the
@@ -38,22 +37,22 @@ fn run(
     process(x, y, sut_mutant).map_err(|_| format!("process failed for ({x}, {y})"))
 }
 
-fn run_base(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_base(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     let x = draw(None, ctx);
     let y = draw(None, ctx);
     run(false, x, y, ctx, obs)
 }
-fn run_uniform(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_uniform(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     let x = draw(None, ctx);
     let y = draw(None, ctx);
     run(true, x, y, ctx, obs)
 }
-fn run_biased(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_biased(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     let x = draw(Some(1), ctx);
     let y = draw(Some(2), ctx);
     run(true, x, y, ctx, obs)
 }
-fn run_bb(ctx: &mut TestCaseContext, obs: &Observe) -> Result<(), String> {
+fn run_bb(ctx: &mut noprop::TestCaseContext, obs: &Observe) -> Result<(), String> {
     let x = crate::bb::u32(ctx);
     let y = crate::bb::u32(ctx);
     run(true, x, y, ctx, obs)
