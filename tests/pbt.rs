@@ -131,3 +131,287 @@ fn sample_usize_in_stays_within_generated_ranges() -> noprop::TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn sample_usize_in_full_range_matches_sample_usize() -> noprop::TestResult {
+    // The full range `..` has no non-vacuous inclusion assertion, so
+    // cover it with a differential oracle against sample_usize on
+    // identical seeds. The follow-up sample_u64 comparison catches
+    // regressions that return the same first value but consume a
+    // different number of bytes.
+    noprop::Runner::new(ROOT_SEED.wrapping_add(1)).run(256, |ctx| {
+        let seed = noprop::sample_u64(ctx);
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = noprop::sample_usize_in(&mut actual_ctx, ..);
+        let expected = noprop::sample_usize(&mut expected_ctx);
+        assert_eq!(
+            actual, expected,
+            "seed={seed:#x}: full-range sample_usize_in must match sample_usize"
+        );
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x}: follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn sample_ratio_matches_explicit_recipe() -> noprop::TestResult {
+    // sample_ratio(Ratio::new(n, d)) must equal:
+    //   n == 0            => false (drawless)
+    //   n == d            => true  (drawless)
+    //   otherwise         => sample_usize_in(0..d as usize) < n as usize
+    // Verify the value AND the follow-up byte stream on identical
+    // seeds, and ensure all three coverage classes are exercised.
+    let zero_seen = Cell::new(false);
+    let full_seen = Cell::new(false);
+    let mid_seen = Cell::new(false);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(2)).run(256, |ctx| {
+        let denominator = noprop::sample_usize_in(ctx, 1..=32) as u32;
+        let numerator = noprop::sample_usize_in(ctx, 0..=denominator as usize) as u32;
+        let seed = noprop::sample_u64(ctx);
+
+        if numerator == 0 {
+            zero_seen.set(true);
+        } else if numerator == denominator {
+            full_seen.set(true);
+        } else {
+            mid_seen.set(true);
+        }
+
+        let ratio = noprop::Ratio::new(numerator, denominator);
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = noprop::sample_ratio(&mut actual_ctx, ratio);
+        let expected = if numerator == 0 {
+            false
+        } else if numerator == denominator {
+            true
+        } else {
+            noprop::sample_usize_in(&mut expected_ctx, 0..denominator as usize)
+                < numerator as usize
+        };
+        assert_eq!(
+            actual, expected,
+            "seed={seed:#x} numerator={numerator} denominator={denominator}"
+        );
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x} numerator={numerator} denominator={denominator}: \
+             follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+
+    assert!(zero_seen.get(), "0% ratio was not exercised");
+    assert!(full_seen.get(), "100% ratio was not exercised");
+    assert!(mid_seen.get(), "middle ratio was not exercised");
+    Ok(())
+}
+
+#[test]
+fn sample_choice_matches_index_recipe() -> noprop::TestResult {
+    // sample_choice(choices) must equal choices[sample_usize_in(0..len)].
+    // Length 1 is a drawless case (sample_below(1) early-returns
+    // without drawing); length >= 2 goes through the sampler.
+    // Distinct values guarantee choices[i] uniquely identifies i, so
+    // an off-by-one in the index arithmetic is caught even if the
+    // byte stream matches.
+    let len_one_seen = Cell::new(false);
+    let len_many_seen = Cell::new(false);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(3)).run(256, |ctx| {
+        let len = noprop::sample_usize_in(ctx, 1..=8);
+        let choices: Vec<u32> = (0..len as u32).collect();
+        let seed = noprop::sample_u64(ctx);
+
+        if len == 1 {
+            len_one_seen.set(true);
+        } else {
+            len_many_seen.set(true);
+        }
+
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = noprop::sample_choice(&mut actual_ctx, &choices);
+        let idx = noprop::sample_usize_in(&mut expected_ctx, 0..choices.len());
+        let expected = choices[idx];
+
+        assert_eq!(actual, expected, "seed={seed:#x} len={len}");
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x} len={len}: follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+
+    assert!(len_one_seen.get(), "len == 1 (drawless) was not exercised");
+    assert!(len_many_seen.get(), "len >= 2 was not exercised");
+    Ok(())
+}
+
+#[test]
+fn sample_weighted_index_matches_cumulative_weight_model() -> noprop::TestResult {
+    // sample_weighted_index draws an offset < sum(weights) and returns
+    // the index of the weight bucket containing that offset. Verify
+    // against a hand-written linear scan on identical seeds. Cover
+    // zero-weight slots (must be skipped), single-nonzero vectors,
+    // and multi-nonzero vectors.
+    let zero_weight_seen = Cell::new(false);
+    let single_nonzero_seen = Cell::new(false);
+    let multi_nonzero_seen = Cell::new(false);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(4)).run(256, |ctx| {
+        let len = noprop::sample_usize_in(ctx, 1..=6);
+        let mut weights: Vec<u32> = Vec::with_capacity(len);
+        for _ in 0..len {
+            weights.push(noprop::sample_usize_in(ctx, 0..=8) as u32);
+        }
+        // Guarantee at least one positive weight so
+        // sample_weighted_index does not panic on "all weights zero".
+        if weights.iter().all(|&w| w == 0) {
+            weights[0] = 1;
+        }
+        let seed = noprop::sample_u64(ctx);
+
+        let nonzero_count = weights.iter().filter(|&&w| w > 0).count();
+        if weights.contains(&0) {
+            zero_weight_seen.set(true);
+        }
+        if nonzero_count == 1 {
+            single_nonzero_seen.set(true);
+        } else if nonzero_count >= 2 {
+            multi_nonzero_seen.set(true);
+        }
+
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = noprop::sample_weighted_index(&mut actual_ctx, &weights);
+
+        // Explicit model: draw offset in [0, sum), then linear scan.
+        // sample_usize_in(0..sum) drives the same sample_below(sum)
+        // core, so the byte stream matches.
+        let total: u64 = weights.iter().map(|&w| w as u64).sum();
+        let offset = noprop::sample_usize_in(&mut expected_ctx, 0..total as usize) as u64;
+        let mut pick = offset;
+        let mut expected = weights.len();
+        for (i, &w) in weights.iter().enumerate() {
+            let w = w as u64;
+            if pick < w {
+                expected = i;
+                break;
+            }
+            pick -= w;
+        }
+
+        assert_eq!(actual, expected, "seed={seed:#x} weights={weights:?}");
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x} weights={weights:?}: follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+
+    assert!(zero_weight_seen.get(), "zero-weight slot was not exercised");
+    assert!(
+        single_nonzero_seen.get(),
+        "single-nonzero-weight vector was not exercised"
+    );
+    assert!(
+        multi_nonzero_seen.get(),
+        "multi-nonzero-weight vector was not exercised"
+    );
+    Ok(())
+}
+
+#[test]
+fn sample_with_boundaries_matches_explicit_recipe() -> noprop::TestResult {
+    // sample_with_boundaries(bounds, ratio, sample) must equal:
+    //   if sample_ratio(ratio) { sample_choice(bounds) } else { sample() }
+    // on the same seed and consume the same bytes for the follow-up.
+    // Cover ratio 0% / 100% / middle and boundary-slice singleton /
+    // multi-element cases.
+    let ratio_zero_seen = Cell::new(false);
+    let ratio_full_seen = Cell::new(false);
+    let ratio_mid_seen = Cell::new(false);
+    let bounds_singleton_seen = Cell::new(false);
+    let bounds_multi_seen = Cell::new(false);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(5)).run(256, |ctx| {
+        let denominator = noprop::sample_usize_in(ctx, 1..=16) as u32;
+        let numerator = noprop::sample_usize_in(ctx, 0..=denominator as usize) as u32;
+        let ratio = noprop::Ratio::new(numerator, denominator);
+
+        let bounds_len = noprop::sample_usize_in(ctx, 1..=4);
+        // Distinct values so the boundary branch can be distinguished
+        // from the fallback branch by value.
+        let boundaries: Vec<u32> = (0..bounds_len as u32).map(|i| i * 100).collect();
+
+        let seed = noprop::sample_u64(ctx);
+
+        if numerator == 0 {
+            ratio_zero_seen.set(true);
+        } else if numerator == denominator {
+            ratio_full_seen.set(true);
+        } else {
+            ratio_mid_seen.set(true);
+        }
+        if bounds_len == 1 {
+            bounds_singleton_seen.set(true);
+        } else {
+            bounds_multi_seen.set(true);
+        }
+
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = noprop::sample_with_boundaries(
+            &mut actual_ctx,
+            &boundaries,
+            ratio,
+            noprop::sample_u32,
+        );
+        let expected = if noprop::sample_ratio(&mut expected_ctx, ratio) {
+            noprop::sample_choice(&mut expected_ctx, &boundaries)
+        } else {
+            noprop::sample_u32(&mut expected_ctx)
+        };
+
+        assert_eq!(
+            actual, expected,
+            "seed={seed:#x} ratio={numerator}/{denominator} boundaries={boundaries:?}"
+        );
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x} ratio={numerator}/{denominator} boundaries={boundaries:?}: \
+             follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+
+    assert!(ratio_zero_seen.get(), "ratio 0% was not exercised");
+    assert!(ratio_full_seen.get(), "ratio 100% was not exercised");
+    assert!(ratio_mid_seen.get(), "ratio middle was not exercised");
+    assert!(
+        bounds_singleton_seen.get(),
+        "singleton boundaries slice was not exercised"
+    );
+    assert!(
+        bounds_multi_seen.get(),
+        "multi-element boundaries slice was not exercised"
+    );
+    Ok(())
+}
