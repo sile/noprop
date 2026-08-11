@@ -1150,6 +1150,17 @@ impl TestCaseContext {
         self.inside_runner = true;
     }
 
+    /// `true` when this context was constructed inside a
+    /// [`Runner::run`](crate::Runner::run) or
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
+    /// invocation. Callers that would trigger an iteration rejection
+    /// (e.g. `sample_with_rejection` on exhaustion) can query this to
+    /// tailor their panic message rather than propagating the generic
+    /// `reject_case` "not inside a Runner" panic.
+    pub(crate) fn is_inside_runner(&self) -> bool {
+        self.inside_runner
+    }
+
     /// Report reaching a finite event for the current case.
     ///
     /// Only meaningful in feedback-guided mode:

@@ -130,6 +130,22 @@ where
             }
         }
     }
+    // Exhausted. Inside a Runner, unwind to reject the iteration as
+    // documented. Outside a Runner the raw `reject_case` panic would
+    // read as "reject_case can only be called inside a Runner", which
+    // is technically true but does not name the primitive the user
+    // actually called; emit a sample_with_rejection-specific message
+    // instead so `sample_char` / `sample_string` / `sample_f32` etc.
+    // (which all go through here) surface a helpful diagnostic.
+    if !ctx.is_inside_runner() {
+        panic!(
+            "noprop::sample_with_rejection: all {max_attempts} attempts were rejected. \
+             Outside a Runner::run or Runner::run_feedback_guided closure there is no \
+             iteration boundary to unwind to, so exhaustion cannot be reported as a \
+             rejection. Wrap the call in a Runner, raise max_attempts, or ensure at \
+             least one attempt returns Some(_)."
+        );
+    }
     ctx.reject_case()
 }
 
@@ -2230,6 +2246,18 @@ mod tests {
     fn sample_with_rejection_panics_on_zero_max_attempts() {
         let mut ctx = TestCaseContext::new(0);
         let _: u32 = sample_with_rejection(&mut ctx, 0, |_| Some(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "noprop::sample_with_rejection")]
+    fn sample_with_rejection_exhaustion_outside_runner_names_the_primitive() {
+        // When every attempt is rejected and the context is not inside
+        // a Runner, the panic must identify sample_with_rejection as
+        // the culprit rather than surfacing the internal reject_case
+        // "not inside a Runner" message, which would misdirect a user
+        // who never called reject_case.
+        let mut ctx = TestCaseContext::new(0);
+        let _: u32 = sample_with_rejection(&mut ctx, 3, |_ctx| None);
     }
 
     #[test]
