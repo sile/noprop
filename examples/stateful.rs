@@ -119,14 +119,17 @@ fn sample_command(ctx: &mut TestCaseContext) -> (u32, Option<u32>) {
 }
 
 fn main() -> noprop::TestResult {
-    // `transition` reports each model step to the feedback-guided
-    // search, so `run_feedback_guided` steers toward longer command
-    // chains instead of restarting the cache from scratch every case.
+    // `transition` reports each model step's cache-size change to the
+    // feedback-guided search, so `run_feedback_guided` steers toward
+    // command chains that exercise different fullness transitions
+    // (grow / stay / evict) instead of restarting the cache from
+    // scratch every case.
     let seed = noprop::seed_from_env_or_time("NOPROP_SEED")?;
     let mut runner = noprop::Runner::new(seed);
     runner.run_feedback_guided(256, |ctx| {
         let mut model = Model::new(4);
         let mut sut = LruCache::new(4);
+        let mut prev_size = 0usize;
 
         for step in 0..64 {
             let (key, write) = sample_command(ctx);
@@ -149,8 +152,14 @@ fn main() -> noprop::TestResult {
                     );
                 }
             }
-            let state = model.order.iter().copied().collect::<Vec<_>>();
-            ctx.transition("lru", step as u64, state.len() as u64);
+            // (prev_size, size) both live in 0..=capacity (4), so the
+            // whole run reports at most (capacity + 1)^2 = 25 distinct
+            // features — a bounded (from, to) pair rather than the
+            // per-step counter that would grow the feature registry
+            // without bound.
+            let size = model.order.len();
+            ctx.transition("lru-size", prev_size as u64, size as u64);
+            prev_size = size;
         }
         Ok(())
     })?;
