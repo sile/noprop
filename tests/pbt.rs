@@ -709,3 +709,258 @@ fn string_primitives_preserve_generated_length_and_alphabet() -> noprop::TestRes
     assert!(len_max_seen.get(), "length MAX_LEN was not exercised");
     Ok(())
 }
+
+/// Range shapes the bounded-float property covers. Each variant is
+/// generated valid-by-construction: `min.is_finite()`,
+/// `max.is_finite()`, `min < max`, and `(max - min).is_finite()`.
+#[derive(Debug, Clone, Copy)]
+enum FloatRangeClass {
+    /// Adjacent representable values (`base`, `base.next_up()`); the
+    /// half-open contract has exactly one representable value inside.
+    Adjacent,
+    /// `(-magnitude, magnitude)` for magnitudes small enough that the
+    /// span stays finite.
+    CrossZero,
+    /// Around signed zero, `MIN_POSITIVE`, and the smallest subnormals.
+    Subnormal,
+    /// Wide ranges that cover most of the finite domain (span is still
+    /// finite).
+    Wide,
+    /// Two same-sign finite draws sorted into `min < max`.
+    General,
+}
+
+const FLOAT_RANGE_CLASSES: [FloatRangeClass; 5] = [
+    FloatRangeClass::Adjacent,
+    FloatRangeClass::CrossZero,
+    FloatRangeClass::Subnormal,
+    FloatRangeClass::Wide,
+    FloatRangeClass::General,
+];
+
+/// Valid-by-construction f32 range for the given class, or `None` if
+/// the underlying draw hit an edge that would make the class produce
+/// an invalid range (e.g. `Adjacent` when base is `f32::MAX`). The
+/// rejection rate is bounded and small, so every class still hits its
+/// coverage target within the test's case budget.
+fn generate_f32_range(
+    ctx: &mut noprop::TestCaseContext,
+    class: FloatRangeClass,
+) -> Option<(f32, f32)> {
+    match class {
+        FloatRangeClass::Adjacent => {
+            let base = noprop::sample_f32(ctx);
+            if base == f32::MAX {
+                return None;
+            }
+            Some((base, base.next_up()))
+        }
+        FloatRangeClass::CrossZero => {
+            let m = noprop::sample_f32(ctx).abs();
+            if m == 0.0 || m >= f32::MAX / 2.0 {
+                return None;
+            }
+            Some((-m, m))
+        }
+        FloatRangeClass::Subnormal => {
+            let candidates: &[(f32, f32)] = &[
+                (0.0, f32::MIN_POSITIVE),
+                (0.0, f32::from_bits(1)),
+                (f32::from_bits(1), f32::MIN_POSITIVE),
+                (-f32::MIN_POSITIVE, 0.0),
+                (-f32::MIN_POSITIVE, f32::MIN_POSITIVE),
+            ];
+            let idx = noprop::sample_usize_in(ctx, 0..candidates.len());
+            Some(candidates[idx])
+        }
+        FloatRangeClass::Wide => {
+            let candidates: &[(f32, f32)] = &[
+                (0.0, f32::MAX),
+                (-f32::MAX / 2.0, f32::MAX / 2.0),
+                (-1.0e30, 1.0e30),
+            ];
+            let idx = noprop::sample_usize_in(ctx, 0..candidates.len());
+            Some(candidates[idx])
+        }
+        FloatRangeClass::General => {
+            let a = noprop::sample_f32(ctx);
+            let b = noprop::sample_f32(ctx);
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            if lo == hi {
+                if hi == f32::MAX {
+                    Some((lo.next_down(), hi))
+                } else {
+                    Some((lo, hi.next_up()))
+                }
+            } else {
+                Some((lo, hi))
+            }
+        }
+    }
+}
+
+/// f64 mirror of `generate_f32_range`.
+fn generate_f64_range(
+    ctx: &mut noprop::TestCaseContext,
+    class: FloatRangeClass,
+) -> Option<(f64, f64)> {
+    match class {
+        FloatRangeClass::Adjacent => {
+            let base = noprop::sample_f64(ctx);
+            if base == f64::MAX {
+                return None;
+            }
+            Some((base, base.next_up()))
+        }
+        FloatRangeClass::CrossZero => {
+            let m = noprop::sample_f64(ctx).abs();
+            if m == 0.0 || m >= f64::MAX / 2.0 {
+                return None;
+            }
+            Some((-m, m))
+        }
+        FloatRangeClass::Subnormal => {
+            let candidates: &[(f64, f64)] = &[
+                (0.0, f64::MIN_POSITIVE),
+                (0.0, f64::from_bits(1)),
+                (f64::from_bits(1), f64::MIN_POSITIVE),
+                (-f64::MIN_POSITIVE, 0.0),
+                (-f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+            ];
+            let idx = noprop::sample_usize_in(ctx, 0..candidates.len());
+            Some(candidates[idx])
+        }
+        FloatRangeClass::Wide => {
+            let candidates: &[(f64, f64)] = &[
+                (0.0, f64::MAX),
+                (-f64::MAX / 2.0, f64::MAX / 2.0),
+                (-1.0e300, 1.0e300),
+            ];
+            let idx = noprop::sample_usize_in(ctx, 0..candidates.len());
+            Some(candidates[idx])
+        }
+        FloatRangeClass::General => {
+            let a = noprop::sample_f64(ctx);
+            let b = noprop::sample_f64(ctx);
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            if lo == hi {
+                if hi == f64::MAX {
+                    Some((lo.next_down(), hi))
+                } else {
+                    Some((lo, hi.next_up()))
+                }
+            } else {
+                Some((lo, hi))
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_float_primitives_stay_in_half_open_ranges_f32() -> noprop::TestResult {
+    // For every FloatRangeClass, verify sample_f32_in returns a
+    // finite value in `[min, max)`. Range generation is
+    // valid-by-construction and never depends on sample_f32_in
+    // itself, so a defect in sample_f32_in cannot silently narrow the
+    // input range. Assertion messages include the bit patterns of
+    // min / max / value so signed-zero, subnormal, and adjacent-value
+    // failures are diagnosable from the failure report.
+    let seen: Cell<[bool; FLOAT_RANGE_CLASSES.len()]> =
+        Cell::new([false; FLOAT_RANGE_CLASSES.len()]);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(8)).run(1024, |ctx| {
+        let idx = noprop::sample_usize_in(ctx, 0..FLOAT_RANGE_CLASSES.len());
+        let class = FLOAT_RANGE_CLASSES[idx];
+
+        let Some((min, max)) = generate_f32_range(ctx, class) else {
+            return Ok(());
+        };
+
+        // Range-generator invariants — separate assertions so a
+        // range-gen defect is distinguishable from a sample_f32_in
+        // defect in the failure message.
+        assert!(
+            min.is_finite() && max.is_finite(),
+            "class={class:?}: non-finite endpoint min={min:e} max={max:e}"
+        );
+        assert!(
+            min < max,
+            "class={class:?}: min={min:e} not < max={max:e}"
+        );
+        assert!(
+            (max - min).is_finite(),
+            "class={class:?}: max - min overflowed to inf (min={min:e}, max={max:e})"
+        );
+
+        let value = noprop::sample_f32_in(ctx, min, max);
+        assert!(
+            value.is_finite() && min <= value && value < max,
+            "class={class:?} min={min:e} ({:#010x}) max={max:e} ({:#010x}) \
+             value={value:e} ({:#010x})",
+            min.to_bits(),
+            max.to_bits(),
+            value.to_bits()
+        );
+
+        let mut s = seen.get();
+        s[idx] = true;
+        seen.set(s);
+        Ok(())
+    })?;
+
+    for (i, hit) in seen.get().iter().enumerate() {
+        assert!(*hit, "class {:?} was not exercised", FLOAT_RANGE_CLASSES[i]);
+    }
+    Ok(())
+}
+
+#[test]
+fn bounded_float_primitives_stay_in_half_open_ranges_f64() -> noprop::TestResult {
+    // f64 mirror of the f32 test; kept as a separate function so a
+    // failure in one type does not obscure the other in the failure
+    // report.
+    let seen: Cell<[bool; FLOAT_RANGE_CLASSES.len()]> =
+        Cell::new([false; FLOAT_RANGE_CLASSES.len()]);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(9)).run(1024, |ctx| {
+        let idx = noprop::sample_usize_in(ctx, 0..FLOAT_RANGE_CLASSES.len());
+        let class = FLOAT_RANGE_CLASSES[idx];
+
+        let Some((min, max)) = generate_f64_range(ctx, class) else {
+            return Ok(());
+        };
+
+        assert!(
+            min.is_finite() && max.is_finite(),
+            "class={class:?}: non-finite endpoint min={min:e} max={max:e}"
+        );
+        assert!(
+            min < max,
+            "class={class:?}: min={min:e} not < max={max:e}"
+        );
+        assert!(
+            (max - min).is_finite(),
+            "class={class:?}: max - min overflowed to inf (min={min:e}, max={max:e})"
+        );
+
+        let value = noprop::sample_f64_in(ctx, min, max);
+        assert!(
+            value.is_finite() && min <= value && value < max,
+            "class={class:?} min={min:e} ({:#018x}) max={max:e} ({:#018x}) \
+             value={value:e} ({:#018x})",
+            min.to_bits(),
+            max.to_bits(),
+            value.to_bits()
+        );
+
+        let mut s = seen.get();
+        s[idx] = true;
+        seen.set(s);
+        Ok(())
+    })?;
+
+    for (i, hit) in seen.get().iter().enumerate() {
+        assert!(*hit, "class {:?} was not exercised", FLOAT_RANGE_CLASSES[i]);
+    }
+    Ok(())
+}
