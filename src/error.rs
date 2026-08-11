@@ -303,6 +303,20 @@ impl RunError {
     pub fn kind(&self) -> RunErrorKind {
         RunErrorKind::of(&self.kind)
     }
+
+    /// The one-based ordinal of the failing candidate across accepted
+    /// and rejected attempts, or `None` for
+    /// [`Runner::run`](crate::Runner::run) failures.
+    ///
+    /// Populated only under
+    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
+    /// where a case can be accepted, rejected, or the failing
+    /// candidate itself. See the class-level docstring for how this
+    /// relates to [`case_index`](Self::case_index) and the
+    /// `TooManyRejections` special case.
+    pub fn candidate_index(&self) -> Option<usize> {
+        self.semantic.as_ref().map(|s| s.candidate_index)
+    }
 }
 
 impl RunError {

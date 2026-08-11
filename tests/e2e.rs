@@ -997,6 +997,34 @@ fn run_feedback_guided_reports_property_failure() {
 }
 
 #[test]
+fn candidate_index_accessor_matches_semantics() {
+    // The public accessor returns Some(candidate_ordinal) for
+    // feedback-guided failures and None for uniform failures. This
+    // guards the accessor contract independent of the Debug format
+    // (existing candidate_index tests scrape Debug output).
+    let uniform_err = noprop::Runner::new(1)
+        .run(4, |_ctx| panic!("uniform fail"))
+        .expect_err("uniform run must fail");
+    assert_eq!(
+        uniform_err.candidate_index(),
+        None,
+        "Runner::run failures do not carry a candidate index"
+    );
+
+    let feedback_err = noprop::Runner::new(1)
+        .run_feedback_guided(4, |ctx| {
+            ctx.event("e");
+            panic!("feedback fail on first attempt");
+        })
+        .expect_err("feedback-guided run must fail");
+    assert_eq!(
+        feedback_err.candidate_index(),
+        Some(1),
+        "the first attempt is candidate 1 (one-based)"
+    );
+}
+
+#[test]
 fn run_feedback_guided_candidate_index_is_one_based() {
     // The candidate index counts every attempt (accepted, rejected,
     // and the failing case itself) and is one-based, unlike the
