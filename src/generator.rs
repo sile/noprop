@@ -1017,7 +1017,15 @@ pub fn sample_f32_in(ctx: &mut TestCaseContext, min: f32, max: f32) -> f32 {
     // value in [0, 1) with 24-bit precision is equally likely).
     let bits = 0x3F80_0000 | (u32::from_le_bytes(raw_bytes(ctx)) >> 9);
     let unit = f32::from_bits(bits) - 1.0;
-    let v = min + span * unit;
+    // `min + span * unit` is bounded by `min + span * (1 - 2⁻²³) < max`
+    // in real arithmetic, but the final float rounding can push the
+    // result up to `max` itself (up to half of the draws when
+    // `span == ulp(min)`, ~6% when `span` sits at the bottom of an
+    // exponent band). Clamp with `next_down(max)` so the [min, max)
+    // half-open contract holds. The excess mass this adds to the
+    // clamped value is at most one 24-bit unit of the domain and never
+    // exits `[min, max)`.
+    let v = (min + span * unit).min(max.next_down());
     ctx.record_generated(&v, loc);
     v
 }
@@ -1048,10 +1056,12 @@ pub fn sample_f64_in(ctx: &mut TestCaseContext, min: f64, max: f64) -> f64 {
         "sample_f64_in: max - min must be finite (max - min = {span}); split the range"
     );
     let loc = Location::caller();
-    // Same construction as sample_f32 but with 53-bit precision.
+    // Same construction as sample_f32 but with 53-bit precision. The
+    // same next_down clamp applies for the same rounding reason (see
+    // sample_f32_in).
     let bits = 0x3FF0_0000_0000_0000 | (u64::from_le_bytes(raw_bytes(ctx)) >> 12);
     let unit = f64::from_bits(bits) - 1.0;
-    let v = min + span * unit;
+    let v = (min + span * unit).min(max.next_down());
     ctx.record_generated(&v, loc);
     v
 }
@@ -1463,6 +1473,49 @@ mod tests {
             let v = sample_f64_in(&mut ctx, 0.0, f64::MAX);
             assert!(v.is_finite(), "expected finite, got {v}");
             assert!((0.0..f64::MAX).contains(&v), "out of range: {v}");
+        }
+    }
+
+    #[test]
+    fn sample_f32_in_stays_strictly_below_max_at_ulp_span() {
+        // Regression: `min + span * unit` used to round up to `max`
+        // itself when `span == ulp(min)` - up to ~50% of draws exited
+        // the documented [min, max) contract. Verify the next_down
+        // clamp holds the upper bound strictly.
+        let mut ctx = TestCaseContext::new(1);
+        let min = 1.0f32;
+        let max = 1.0f32 + 2f32.powi(-23);
+        for _ in 0..10_000 {
+            let v = sample_f32_in(&mut ctx, min, max);
+            assert!(v >= min, "v={v} < min={min}");
+            assert!(v < max, "v={v} reached the excluded upper bound {max}");
+        }
+    }
+
+    #[test]
+    fn sample_f32_in_stays_strictly_below_max_across_exponent_band() {
+        // Regression: at min=2^20, max=2^20+1 the ulp is 2^-3 = 0.125,
+        // so ~6% of draws used to round up to `max`. Verify the clamp
+        // catches those too.
+        let mut ctx = TestCaseContext::new(1);
+        let (min, max) = (2f32.powi(20), 2f32.powi(20) + 1.0);
+        for _ in 0..10_000 {
+            let v = sample_f32_in(&mut ctx, min, max);
+            assert!(v < max, "v={v} reached the excluded upper bound {max}");
+        }
+    }
+
+    #[test]
+    fn sample_f64_in_stays_strictly_below_max_at_ulp_span() {
+        // Same regression as sample_f32_in_stays_strictly_below_max_
+        // at_ulp_span but at 53-bit precision.
+        let mut ctx = TestCaseContext::new(1);
+        let min = 1.0f64;
+        let max = 1.0f64 + 2f64.powi(-52);
+        for _ in 0..10_000 {
+            let v = sample_f64_in(&mut ctx, min, max);
+            assert!(v >= min, "v={v} < min={min}");
+            assert!(v < max, "v={v} reached the excluded upper bound {max}");
         }
     }
 
