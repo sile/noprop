@@ -156,8 +156,8 @@ it is non-empty.
 Mutation rewrites each draw with probability 1/4 (currently). The
 rewrite depends on the draw's recorded metadata:
 
-- **Bounded / Choice** — a fresh value is drawn inside the recorded
-  domain (`sample_below` on the recorded bound / length).
+- **Bounded / Choice** — a fresh value is drawn uniformly inside the
+  recorded domain (the recorded bound, or length for Choice draws).
 - **Integer** — a fresh value of the same width is written to the
   draw (`sample_u{8,16,32,64,128}` / `sample_i*` primitives).
 - **Raw** — constraint-free draws (raw bytes, string payload, …) are

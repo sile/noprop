@@ -73,11 +73,7 @@ users write their own:
   the recursive call, and return a base-case value when it hits zero.
 
 Internally, noprop's shared bounded-domain sampler — the crate-private
-core used by [`sample_usize_in`](crate::sample_usize_in),
-[`sample_ratio`](crate::sample_ratio),
-[`sample_weighted_index`](crate::sample_weighted_index),
-[`sample_choice`](crate::sample_choice), and
-[`sample_with_boundaries`](crate::sample_with_boundaries) — is bounded
+core every finite-domain selection primitive draws through — is bounded
 at 64 attempts per call. The per-attempt rejection rate is at worst ~50%
 (when the requested domain is just above a power of two), so the
 probability of exhausting all 64 attempts is `< 2⁻⁶⁴` — astronomically

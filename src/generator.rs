@@ -153,10 +153,8 @@ where
 
 /// Sample a uniform `u64` in `[0, n)` using rejection sampling.
 ///
-/// Uses `u64` as a pointer-width-independent working domain so the same
-/// draw pattern applies to every finite-domain selection primitive
-/// (`sample_usize_in`, `sample_ratio`, `sample_weighted_index`,
-/// `sample_choice`).
+/// Uses `u64` as a pointer-width-independent working domain, so every
+/// finite-domain selection primitive draws with the same pattern.
 /// Draws are consumed from the RNG only via [`raw_bytes`], so rejected
 /// attempts do not appear in the value trace (rejection span metadata
 /// is still recorded in Recording mode).
@@ -849,6 +847,14 @@ pub fn sample_ascii_char(ctx: &mut TestCaseContext) -> char {
 /// [`sample_choice`] to keep the distribution uniform; for this bound
 /// the per-attempt rejection rate is `< 2⁻⁵⁸`, so a rejected attempt
 /// is effectively never observed.
+///
+/// # Determinism note
+///
+/// Each character consumes an 8-byte bounded draw (a rejected attempt,
+/// which is effectively never observed, consumes another 8 bytes).
+/// This is a deliberate correction over the earlier `% 95` mapping of a
+/// 4-byte draw, which was biased; for the same seed the value stream
+/// therefore differs from earlier releases.
 #[track_caller]
 pub fn sample_ascii_printable_char(ctx: &mut TestCaseContext) -> char {
     let loc = Location::caller();
@@ -1314,10 +1320,14 @@ mod tests {
     fn sample_ascii_printable_char_matches_unbiased_core() {
         // 95 does not divide 2^64, so an unbiased printable draw must
         // come from the shared rejection-sampling core. Two same-seed
-        // contexts advance in lockstep: the direct `sample_below(95)`
-        // stream must equal the char primitive's stream. A `% 95`
-        // mapping is reintroduced this fails, because it consumes a
-        // different number of RNG bytes per char and drifts off-stream.
+        // contexts advance in lockstep — each draws the same PRNG value
+        // per character — so the direct `sample_below(95)` stream must
+        // equal the char primitive's stream. The old `% 95` mapping
+        // reduced only the low 32 bits of the draw, so the same draw
+        // maps to a different character with probability 94/95, failing
+        // this test on the first draw. A biased `% 95` over the full
+        // 64-bit draw would not be detected here; that property rests
+        // on the shared rejection-sampling core.
         let mut core = TestCaseContext::new(0x9E37_79B9_7F4A_7C15);
         let mut sampler = TestCaseContext::new(0x9E37_79B9_7F4A_7C15);
         for _ in 0..1024 {
