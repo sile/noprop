@@ -160,6 +160,88 @@ fn sample_usize_in_full_range_matches_sample_usize() -> noprop::TestResult {
     Ok(())
 }
 
+#[test]
+fn sample_usize_in_excluded_start_matches_inclusive_recipe() -> noprop::TestResult {
+    // Differential oracle for the excluded start-bound success path
+    // (the `checked_add(1)` in sample_usize_in): every excluded-start
+    // form must equal its inclusive/half-open equivalent on identical
+    // seeds, in value and in follow-up bytes. A regression that shifts
+    // the excluded-start offset (e.g. checked_add(1) -> checked_add(2))
+    // changes the sampled width and is caught deterministically.
+    //
+    // `s` is boundary-biased so the extreme arithmetic is exercised
+    // (s == 0 -> lo == 1; s == usize::MAX - 1 -> lo == usize::MAX); the
+    // s == usize::MAX empty-range panic is covered by the unit test
+    // sample_usize_in_panics_on_excluded_max_start. Coverage counters
+    // fail the test if any end-bound form is missed.
+    const FORMS: usize = 3; // (Excluded(s), Included(e)) / (Excluded(s), Excluded(e)) / (Excluded(s), Unbounded)
+    let form_seen: Cell<[bool; FORMS]> = Cell::new([false; FORMS]);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(11)).run(1024, |ctx| {
+        let form = noprop::sample_usize_in(ctx, 0..FORMS);
+        let a = sample_usize_boundary_biased(ctx);
+        let b = sample_usize_boundary_biased(ctx);
+        let (s, e) = if a <= b { (a, b) } else { (b, a) };
+
+        // Non-empty conditions (lo = s + 1, hi as per end bound):
+        //   Included(e): s + 1 <= e        (s < e)
+        //   Excluded(e): s + 1 <= e - 1    (s + 2 <= e)
+        //   Unbounded:   s + 1 <= usize::MAX (s < usize::MAX)
+        let valid = match form {
+            0 => s < e,
+            1 => s.checked_add(2).is_some_and(|lo| lo <= e),
+            _ => s < usize::MAX,
+        };
+        if !valid {
+            return Ok(());
+        }
+
+        let mut forms = form_seen.get();
+        forms[form] = true;
+        form_seen.set(forms);
+
+        let seed = noprop::sample_u64(ctx);
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = match form {
+            0 => noprop::sample_usize_in(
+                &mut actual_ctx,
+                (std::ops::Bound::Excluded(s), std::ops::Bound::Included(e)),
+            ),
+            1 => noprop::sample_usize_in(
+                &mut actual_ctx,
+                (std::ops::Bound::Excluded(s), std::ops::Bound::Excluded(e)),
+            ),
+            _ => noprop::sample_usize_in(
+                &mut actual_ctx,
+                (
+                    std::ops::Bound::Excluded(s),
+                    std::ops::Bound::<usize>::Unbounded,
+                ),
+            ),
+        };
+        let expected = match form {
+            0 => noprop::sample_usize_in(&mut expected_ctx, s + 1..=e),
+            1 => noprop::sample_usize_in(&mut expected_ctx, s + 1..e),
+            _ => noprop::sample_usize_in(&mut expected_ctx, s + 1..),
+        };
+
+        assert_eq!(actual, expected, "seed={seed:#x} s={s} e={e} form={form}");
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x} s={s} e={e} form={form}: follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+
+    for (i, hit) in form_seen.get().iter().enumerate() {
+        assert!(*hit, "excluded-start form index {i} was not exercised");
+    }
+    Ok(())
+}
+
 /// Draw a `u64` biased toward the extreme values that a uniform
 /// draw essentially never hits (`0`, `1`, `u64::MAX - 1`,
 /// `u64::MAX`), so range boundaries are actually exercised.
@@ -298,6 +380,88 @@ fn sample_u64_in_full_range_matches_sample_u64() -> noprop::TestResult {
         );
         Ok(())
     })?;
+    Ok(())
+}
+
+#[test]
+fn sample_u64_in_excluded_start_matches_inclusive_recipe() -> noprop::TestResult {
+    // Differential oracle for the excluded start-bound success path
+    // (the `checked_add(1)` in sample_u64_in): every excluded-start
+    // form must equal its inclusive/half-open equivalent on identical
+    // seeds, in value and in follow-up bytes. A regression that shifts
+    // the excluded-start offset (e.g. checked_add(1) -> checked_add(2))
+    // changes the sampled width and is caught deterministically.
+    //
+    // `s` is boundary-biased so the extreme arithmetic is exercised
+    // (s == 0 -> lo == 1; s == u64::MAX - 1 -> lo == u64::MAX); the
+    // s == u64::MAX empty-range panic is covered by the unit test
+    // sample_u64_in_panics_on_excluded_max_start. Coverage counters
+    // fail the test if any end-bound form is missed.
+    const FORMS: usize = 3; // (Excluded(s), Included(e)) / (Excluded(s), Excluded(e)) / (Excluded(s), Unbounded)
+    let form_seen: Cell<[bool; FORMS]> = Cell::new([false; FORMS]);
+
+    noprop::Runner::new(ROOT_SEED.wrapping_add(10)).run(1024, |ctx| {
+        let form = noprop::sample_usize_in(ctx, 0..FORMS);
+        let a = sample_u64_boundary_biased(ctx);
+        let b = sample_u64_boundary_biased(ctx);
+        let (s, e) = if a <= b { (a, b) } else { (b, a) };
+
+        // Non-empty conditions (lo = s + 1, hi as per end bound):
+        //   Included(e): s + 1 <= e        (s < e)
+        //   Excluded(e): s + 1 <= e - 1    (s + 2 <= e)
+        //   Unbounded:   s + 1 <= u64::MAX (s < u64::MAX)
+        let valid = match form {
+            0 => s < e,
+            1 => s.checked_add(2).is_some_and(|lo| lo <= e),
+            _ => s < u64::MAX,
+        };
+        if !valid {
+            return Ok(());
+        }
+
+        let mut forms = form_seen.get();
+        forms[form] = true;
+        form_seen.set(forms);
+
+        let seed = noprop::sample_u64(ctx);
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = match form {
+            0 => noprop::sample_u64_in(
+                &mut actual_ctx,
+                (std::ops::Bound::Excluded(s), std::ops::Bound::Included(e)),
+            ),
+            1 => noprop::sample_u64_in(
+                &mut actual_ctx,
+                (std::ops::Bound::Excluded(s), std::ops::Bound::Excluded(e)),
+            ),
+            _ => noprop::sample_u64_in(
+                &mut actual_ctx,
+                (
+                    std::ops::Bound::Excluded(s),
+                    std::ops::Bound::<u64>::Unbounded,
+                ),
+            ),
+        };
+        let expected = match form {
+            0 => noprop::sample_u64_in(&mut expected_ctx, s + 1..=e),
+            1 => noprop::sample_u64_in(&mut expected_ctx, s + 1..e),
+            _ => noprop::sample_u64_in(&mut expected_ctx, s + 1..),
+        };
+
+        assert_eq!(actual, expected, "seed={seed:#x} s={s} e={e} form={form}");
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x} s={s} e={e} form={form}: follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+
+    for (i, hit) in form_seen.get().iter().enumerate() {
+        assert!(*hit, "excluded-start form index {i} was not exercised");
+    }
     Ok(())
 }
 
