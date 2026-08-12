@@ -847,8 +847,8 @@ pub fn sample_ascii_char(ctx: &mut TestCaseContext) -> char {
 /// so a naive `% 95` would be biased. Uses the same bounded
 /// rejection-sampling core as [`sample_usize_in`] and
 /// [`sample_choice`] to keep the distribution uniform; for this bound
-/// the per-attempt rejection rate is `< 2⁻⁶³`, so a rejection draw is
-/// effectively never taken.
+/// the per-attempt rejection rate is `< 2⁻⁵⁸`, so a rejected attempt
+/// is effectively never observed.
 #[track_caller]
 pub fn sample_ascii_printable_char(ctx: &mut TestCaseContext) -> char {
     let loc = Location::caller();
@@ -950,9 +950,11 @@ pub fn sample_ascii_string(ctx: &mut TestCaseContext, len: usize) -> String {
 /// One trace entry is recorded per call. Each character is drawn via
 /// the same bounded rejection-sampling core as
 /// [`sample_ascii_printable_char`], so a call consumes `len × 8` RNG
-/// bytes plus a rare rejection draw (probability `< 2⁻⁶³` per
-/// character), and opens an attempt span only if a rejection occurs.
-/// Rejected draws do not appear in the value trace.
+/// bytes in the common case (a rejected attempt — probability
+/// `< 2⁻⁵⁸` per character — consumes another 8 bytes) and, in
+/// Recording mode, opens at least `len` attempt spans in the choice
+/// sequence (one per accepted character; each rejected attempt adds
+/// another span). Rejected attempts do not appear in the value trace.
 ///
 /// # Examples
 ///
