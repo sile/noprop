@@ -1,9 +1,9 @@
 # noprop API Reference
 
 Read this file when an exact public API, panic condition, or statistic is
-needed. This snapshot targets noprop 0.1.0. Inspect the target project's
-resolved crate version and matching rustdoc before relying on it outside the
-noprop repository.
+needed. This snapshot targets unreleased noprop main (post-0.1.0).
+Inspect the target project's resolved crate version and matching rustdoc
+before relying on it outside the noprop repository.
 
 ## Execution
 
@@ -53,9 +53,11 @@ implementation details. Inspect the matching source when those values matter.
 | `sample_u8/u16/u32/u64/u128/usize(ctx)` | Uniform unsigned integer of the named type. |
 | `sample_i8/i16/i32/i64/i128/isize(ctx)` | Uniform signed integer of the named type. |
 | `sample_usize_in(ctx, range)` | Uniform `usize` inside any valid `RangeBounds<usize>`. |
+| `sample_u64_in(ctx, range)` | Uniform `u64` inside any valid `RangeBounds<u64>`. |
 
-Use `sample_usize_in(ctx, 0..n)` instead of modulo reduction. Invalid or empty
-ranges panic at the caller.
+Use `sample_usize_in(ctx, 0..n)` / `sample_u64_in(ctx, 0..n)` instead
+of modulo reduction or bit masking. Invalid or empty ranges panic at the
+caller.
 
 ## Bytes, characters, and strings
 

@@ -33,7 +33,14 @@ A generator's **distribution** is *how* it samples values across the
 support. noprop's primitives are uniform over their support:
 `sample_u32` covers `0..=u32::MAX` uniformly, `sample_usize_in(ctx,
 0..=n)` covers `0..=n` uniformly (through bias-free bounded rejection),
-and `sample_choice(ctx, slice)` picks one slice element uniformly.
+`sample_u64_in(ctx, 0..=n)` does the same for ranges a `usize` result
+cannot serve (inexpressible on 32-bit targets, a cast on 64-bit), and
+`sample_choice(ctx, slice)` picks one slice element uniformly. Beyond
+the pre-existing `sample_usize_in`, only `u64` gets an integer `_in`
+variant: `usize` already covers
+`u8` / `u16` / `u32` on every 32/64-bit target, `u128` would need
+128-bit rejection sampling without a demonstrated demand, and signed
+ranges are expressible with an offset on top of these primitives.
 
 Two reasons to move away from uniform:
 

@@ -260,6 +260,9 @@ pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(
 /// `usize::MAX` and biased when the divisor does not evenly divide the
 /// integer domain).
 ///
+/// For `u64` ranges — inexpressible in `usize` on 32-bit targets, and
+/// a cast from `usize` on 64-bit targets — see [`sample_u64_in`].
+///
 /// # Panics
 ///
 /// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `..0`, or an
@@ -310,6 +313,85 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
         // target (usize width <= 64).
         let width = (hi - lo) as u64 + 1;
         lo + sample_below(ctx, width) as usize
+    };
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `u64` inside `range`.
+///
+/// Accepts any `RangeBounds<u64>` — `a..b`, `a..=b`, `..b`, `a..`,
+/// `..`, and so on. The typical use is sampling protocol fields or
+/// timestamps that need a `u64` result type (e.g. a 33-bit MPEG-2
+/// timestamp) without a cast or bit mask: a bit mask can only express
+/// zero-offset power-of-two ranges and is biased for any other width,
+/// while `sample_usize_in` returns `usize` — a cast on 64-bit targets,
+/// and a range that does not fit at all on 32-bit targets.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `..0`, or an
+/// excluded start of `u64::MAX`).
+///
+/// # Determinism note
+///
+/// Uses rejection sampling internally. Most calls accept the first
+/// draw, but the exact byte count consumed depends on the range width,
+/// so changing the range can shift subsequent RNG output for the same
+/// seed. Any full-width range (covering the entire `u64` domain) is a
+/// plain integer draw consuming exactly 8 bytes, so it is
+/// byte-equivalent to [`sample_u64`].
+///
+/// # Why no other integer `_in` variants
+///
+/// [`sample_usize_in`] already covers `u8` / `u16` / `u32` on every
+/// 32/64-bit target (`usize` is at least 32 bits there), and `u64` on
+/// 64-bit targets — but its result type is `usize`, so a `u64` field
+/// needs a cast and 32-bit targets cannot express a `u64` range at
+/// all. `sample_u64_in` exists for exactly those cases. A `u128` range
+/// would need 128-bit rejection sampling without a demonstrated
+/// demand, and signed ranges are expressible with an offset on top of
+/// these primitives, so neither is provided.
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// // MPEG-2 33-bit timestamp.
+/// let ts = noprop::sample_u64_in(&mut ctx, 0..(1u64 << 33));
+/// assert!(ts < (1u64 << 33));
+///
+/// // Arbitrary protocol field range.
+/// let field = noprop::sample_u64_in(&mut ctx, 100..=999);
+/// assert!((100..=999).contains(&field));
+/// ```
+#[track_caller]
+pub fn sample_u64_in<R: RangeBounds<u64>>(ctx: &mut TestCaseContext, range: R) -> u64 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_u64_in: empty range"),
+        Bound::Unbounded => 0,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_u64_in: empty range"),
+        Bound::Unbounded => u64::MAX,
+    };
+    assert!(lo <= hi, "sample_u64_in: empty range");
+    let v = if lo == 0 && hi == u64::MAX {
+        // Full-width range: a raw byte draw is already unbiased, and
+        // hi - lo + 1 would wrap. This is a plain integer draw,
+        // byte-equivalent to sample_u64.
+        ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
+        u64::from_le_bytes(raw_bytes(ctx))
+    } else {
+        // hi - lo cannot overflow because hi >= lo, and (hi - lo) + 1
+        // cannot overflow because we excluded the only case where
+        // hi - lo == u64::MAX.
+        let width = hi - lo + 1;
+        lo + sample_below(ctx, width)
     };
     ctx.record_generated(&v, loc);
     v
@@ -1856,6 +1938,126 @@ mod tests {
             (
                 std::ops::Bound::Excluded(usize::MAX),
                 std::ops::Bound::<usize>::Unbounded,
+            ),
+        );
+    }
+
+    // === sample_u64_in ===
+
+    #[test]
+    fn sample_u64_in_exclusive_stays_in_range() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..1000 {
+            let v = sample_u64_in(&mut ctx, 10..20);
+            assert!((10..20).contains(&v));
+        }
+    }
+
+    #[test]
+    fn sample_u64_in_inclusive_stays_in_range() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..1000 {
+            let v = sample_u64_in(&mut ctx, 10..=20);
+            assert!((10..=20).contains(&v));
+        }
+    }
+
+    #[test]
+    fn sample_u64_in_single_element_returns_that_element() {
+        let mut ctx = TestCaseContext::new(1);
+        // 5..=5 is one element; the runner should return it without
+        // consuming any RNG.
+        let mut fresh = TestCaseContext::new(1);
+        assert_eq!(sample_u64_in(&mut ctx, 5..=5), 5);
+        assert_state_unadvanced(&mut ctx, &mut fresh);
+    }
+
+    #[test]
+    fn sample_u64_in_hits_both_endpoints() {
+        let mut ctx = TestCaseContext::new(1);
+        let (mut lo, mut hi) = (false, false);
+        for _ in 0..1024 {
+            let v = sample_u64_in(&mut ctx, 0..=3);
+            lo |= v == 0;
+            hi |= v == 3;
+            if lo && hi {
+                return;
+            }
+        }
+        panic!("sample_u64_in did not cover both endpoints");
+    }
+
+    #[test]
+    fn sample_u64_in_full_range_stays_in_range() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..100 {
+            let _v = sample_u64_in(&mut ctx, ..);
+            // Any u64 is in range; just verify no panic.
+        }
+    }
+
+    #[test]
+    fn sample_u64_in_inclusive_up_to_max_stays_in_range() {
+        // Exercises the max - lo + 1 arithmetic on the widest non-full
+        // range so it must not overflow.
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..100 {
+            let v = sample_u64_in(&mut ctx, 1..=u64::MAX);
+            assert!(v >= 1);
+        }
+    }
+
+    #[test]
+    fn sample_u64_in_unbounded_end_stays_in_range() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..100 {
+            let v = sample_u64_in(&mut ctx, 100..);
+            assert!(v >= 100);
+        }
+    }
+
+    #[test]
+    fn sample_u64_in_is_deterministic() {
+        let mut a = TestCaseContext::new(999);
+        let mut b = TestCaseContext::new(999);
+        for _ in 0..64 {
+            assert_eq!(sample_u64_in(&mut a, 0..137), sample_u64_in(&mut b, 0..137));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn sample_u64_in_panics_on_empty_exclusive() {
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_u64_in(&mut ctx, 5..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn sample_u64_in_panics_on_reversed_inclusive() {
+        let mut ctx = TestCaseContext::new(0);
+        #[expect(clippy::reversed_empty_ranges)]
+        let _ = sample_u64_in(&mut ctx, 5..=4);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn sample_u64_in_panics_on_zero_exclusive_end() {
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_u64_in(&mut ctx, ..0);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn sample_u64_in_panics_on_excluded_max_start() {
+        let mut ctx = TestCaseContext::new(0);
+        // An excluded start of u64::MAX would need start + 1, which
+        // overflows — semantically the range is empty.
+        let _ = sample_u64_in(
+            &mut ctx,
+            (
+                std::ops::Bound::Excluded(u64::MAX),
+                std::ops::Bound::<u64>::Unbounded,
             ),
         );
     }
