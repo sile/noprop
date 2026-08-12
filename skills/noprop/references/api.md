@@ -1,9 +1,9 @@
 # noprop API Reference
 
 Read this file when an exact public API, panic condition, or statistic is
-needed. This snapshot targets noprop 0.1.0. Inspect the target project's
-resolved crate version and matching rustdoc before relying on it outside the
-noprop repository.
+needed. This snapshot targets unreleased noprop main (post-0.1.0).
+Inspect the target project's resolved crate version and matching rustdoc
+before relying on it outside the noprop repository.
 
 ## Execution
 

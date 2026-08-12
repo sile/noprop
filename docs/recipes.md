@@ -104,8 +104,8 @@ assert!(idx < 10);
 let day = noprop::sample_usize_in(&mut ctx, 1..=31);
 assert!((1..=31).contains(&day));
 
-// u64 range: no cast or bit mask needed, even beyond the usize width
-// (e.g. a 33-bit MPEG-2 timestamp).
+// u64 range: no `as u64` cast or bit mask needed (on 32-bit targets
+// the range does not even fit in usize).
 let ts = noprop::sample_u64_in(&mut ctx, 0..(1u64 << 33));
 assert!(ts < (1u64 << 33));
 
@@ -120,7 +120,8 @@ let _b = noprop::sample_bool(&mut ctx);
 **Notes.** Never write `sample_usize(ctx) % max` for a bounded draw —
 it is biased and overflows at `usize::MAX`. For `u64` ranges use
 [`sample_u64_in`](crate::sample_u64_in) instead of masking with
-`& ((1 << n) - 1)`, which is only uniform for power-of-two widths.
+`& ((1 << n) - 1)`, which can only express zero-offset power-of-two
+ranges and is biased for any other width.
 Length-taking helpers take an *exact* length; combine with
 `sample_usize_in` for a random length (no `(min, max)` overload is
 provided so composition stays the one shape).

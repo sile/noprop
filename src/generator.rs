@@ -260,6 +260,9 @@ pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(
 /// `usize::MAX` and biased when the divisor does not evenly divide the
 /// integer domain).
 ///
+/// For `u64` ranges — inexpressible in `usize` on 32-bit targets, and
+/// a cast from `usize` on 64-bit targets — see [`sample_u64_in`].
+///
 /// # Panics
 ///
 /// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `..0`, or an
@@ -319,9 +322,11 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
 ///
 /// Accepts any `RangeBounds<u64>` — `a..b`, `a..=b`, `..b`, `a..`,
 /// `..`, and so on. The typical use is sampling protocol fields or
-/// timestamps that exceed the `usize` width (e.g. a 33-bit MPEG-2
-/// timestamp) without a cast or bit mask — masking is only uniform for
-/// power-of-two widths.
+/// timestamps that need a `u64` result type (e.g. a 33-bit MPEG-2
+/// timestamp) without a cast or bit mask: a bit mask can only express
+/// zero-offset power-of-two ranges and is biased for any other width,
+/// while `sample_usize_in` returns `usize` — a cast on 64-bit targets,
+/// and a range that does not fit at all on 32-bit targets.
 ///
 /// # Panics
 ///
