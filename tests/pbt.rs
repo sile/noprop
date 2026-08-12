@@ -39,10 +39,11 @@ fn sample_usize_in_stays_within_generated_ranges() -> noprop::TestResult {
     // "the returned value is a usize" is vacuous for it.
     //
     // Boundaries (`0`, `1`, `usize::MAX - 1`, `usize::MAX`) are mixed
-    // in via sample_usize_boundary_biased so extreme-endpoint cases
-    // (empty-exclusive shift, `..0` shift, high-usize ranges) are
-    // actually reached; coverage counters below fail the test if any
-    // form or any endpoint class is missed.
+    // in via sample_usize_boundary_biased, and the coverage counters
+    // below fail the test if any range form or any boundary class is
+    // never drawn. They do not guarantee every form x boundary-position
+    // combination is exercised — some joints (e.g. `..=0`) may not
+    // occur for this seed.
     const FORMS: usize = 5; // lo..hi / lo..=hi / lo.. / ..hi / ..=hi
     const BOUNDARIES: usize = 4; // 0 / 1 / MAX-1 / MAX
 
@@ -262,10 +263,11 @@ fn sample_u64_in_stays_within_generated_ranges() -> noprop::TestResult {
     // returned value is a u64" is vacuous for it.
     //
     // Boundaries (`0`, `1`, `u64::MAX - 1`, `u64::MAX`) are mixed
-    // in via sample_u64_boundary_biased so extreme-endpoint cases
-    // (empty-exclusive shift, `..0` shift, high-u64 ranges) are
-    // actually reached; coverage counters below fail the test if any
-    // form or any endpoint class is missed.
+    // in via sample_u64_boundary_biased, and the coverage counters
+    // below fail the test if any range form or any boundary class is
+    // never drawn. They do not guarantee every form x boundary-position
+    // combination is exercised — some joints (e.g. `..=0`) may not
+    // occur for this seed.
     const FORMS: usize = 5; // lo..hi / lo..=hi / lo.. / ..hi / ..=hi
     const BOUNDARIES: usize = 4; // 0 / 1 / MAX-1 / MAX
 
@@ -362,7 +364,7 @@ fn sample_u64_in_full_range_matches_sample_u64() -> noprop::TestResult {
     // identical seeds. The follow-up sample_u64 comparison catches
     // regressions that return the same first value but consume a
     // different number of bytes.
-    noprop::Runner::new(ROOT_SEED.wrapping_add(2)).run(256, |ctx| {
+    noprop::Runner::new(ROOT_SEED.wrapping_add(12)).run(256, |ctx| {
         let seed = noprop::sample_u64(ctx);
         let mut actual_ctx = noprop::TestCaseContext::new(seed);
         let mut expected_ctx = noprop::TestCaseContext::new(seed);

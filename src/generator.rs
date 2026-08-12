@@ -338,8 +338,9 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
 /// Uses rejection sampling internally. Most calls accept the first
 /// draw, but the exact byte count consumed depends on the range width,
 /// so changing the range can shift subsequent RNG output for the same
-/// seed. The full range `..` is a plain integer draw consuming exactly
-/// 8 bytes, so it is byte-equivalent to [`sample_u64`].
+/// seed. Any full-width range (covering the entire `u64` domain) is a
+/// plain integer draw consuming exactly 8 bytes, so it is
+/// byte-equivalent to [`sample_u64`].
 ///
 /// # Why no other integer `_in` variants
 ///
