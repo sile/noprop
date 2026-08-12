@@ -133,8 +133,8 @@ pub use generator::{
     sample_ascii_string, sample_bool, sample_bytes, sample_bytes_vec, sample_char, sample_choice,
     sample_f32, sample_f32_in, sample_f64, sample_f64_in, sample_i8, sample_i16, sample_i32,
     sample_i64, sample_i128, sample_isize, sample_ratio, sample_string, sample_u8, sample_u16,
-    sample_u32, sample_u64, sample_u128, sample_usize, sample_usize_in, sample_weighted_index,
-    sample_with_boundaries, sample_with_rejection,
+    sample_u32, sample_u64, sample_u64_in, sample_u128, sample_usize, sample_usize_in,
+    sample_weighted_index, sample_with_boundaries, sample_with_rejection,
 };
 pub use rng::{GeneratedValue, TestCaseContext};
 pub use runner::{Runner, Stats};

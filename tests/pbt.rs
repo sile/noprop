@@ -160,6 +160,147 @@ fn sample_usize_in_full_range_matches_sample_usize() -> noprop::TestResult {
     Ok(())
 }
 
+/// Draw a `u64` biased toward the extreme values that a uniform
+/// draw essentially never hits (`0`, `1`, `u64::MAX - 1`,
+/// `u64::MAX`), so range boundaries are actually exercised.
+fn sample_u64_boundary_biased(ctx: &mut noprop::TestCaseContext) -> u64 {
+    noprop::sample_with_boundaries(
+        ctx,
+        &[0, 1, u64::MAX - 1, u64::MAX],
+        noprop::Ratio::one_nth(4),
+        noprop::sample_u64,
+    )
+}
+
+#[test]
+fn sample_u64_in_stays_within_generated_ranges() -> noprop::TestResult {
+    // Verify sample_u64_in respects the inclusion contract for every
+    // non-full range form. The full `..` form is handled separately
+    // (see sample_u64_in_full_range_matches_sample_u64) because "the
+    // returned value is a u64" is vacuous for it.
+    //
+    // Boundaries (`0`, `1`, `u64::MAX - 1`, `u64::MAX`) are mixed
+    // in via sample_u64_boundary_biased so extreme-endpoint cases
+    // (empty-exclusive shift, `..0` shift, high-u64 ranges) are
+    // actually reached; coverage counters below fail the test if any
+    // form or any endpoint class is missed.
+    const FORMS: usize = 5; // lo..hi / lo..=hi / lo.. / ..hi / ..=hi
+    const BOUNDARIES: usize = 4; // 0 / 1 / MAX-1 / MAX
+
+    let form_seen: Cell<[bool; FORMS]> = Cell::new([false; FORMS]);
+    let boundary_seen: Cell<[bool; BOUNDARIES]> = Cell::new([false; BOUNDARIES]);
+
+    noprop::Runner::new(ROOT_SEED).run(1024, |ctx| {
+        let form = noprop::sample_usize_in(ctx, 0..FORMS);
+        let a = sample_u64_boundary_biased(ctx);
+        let b = sample_u64_boundary_biased(ctx);
+        let (lo_raw, hi_raw) = if a <= b { (a, b) } else { (b, a) };
+
+        let mut forms = form_seen.get();
+        forms[form] = true;
+        form_seen.set(forms);
+
+        let mut bounds = boundary_seen.get();
+        for &v in &[a, b] {
+            if v == 0 {
+                bounds[0] = true;
+            }
+            if v == 1 {
+                bounds[1] = true;
+            }
+            if v == u64::MAX - 1 {
+                bounds[2] = true;
+            }
+            if v == u64::MAX {
+                bounds[3] = true;
+            }
+        }
+        boundary_seen.set(bounds);
+
+        match form {
+            0 => {
+                // lo..hi (exclusive): require lo < hi. If a == b, shift
+                // one endpoint by 1 (u64::MAX case: shift lo down
+                // instead of hi up, to stay in-domain).
+                let (lo, hi) = if lo_raw < hi_raw {
+                    (lo_raw, hi_raw)
+                } else if lo_raw == u64::MAX {
+                    (lo_raw - 1, hi_raw)
+                } else {
+                    (lo_raw, hi_raw + 1)
+                };
+                let v = noprop::sample_u64_in(ctx, lo..hi);
+                assert!(lo <= v && v < hi, "lo..hi: v={v} not in [{lo}, {hi})");
+            }
+            1 => {
+                // lo..=hi (inclusive): a == b is a legal singleton
+                // range.
+                let (lo, hi) = (lo_raw, hi_raw);
+                let v = noprop::sample_u64_in(ctx, lo..=hi);
+                assert!(lo <= v && v <= hi, "lo..=hi: v={v} not in [{lo}, {hi}]");
+            }
+            2 => {
+                // lo..
+                let lo = lo_raw;
+                let v = noprop::sample_u64_in(ctx, lo..);
+                assert!(v >= lo, "lo..: v={v} < {lo}");
+            }
+            3 => {
+                // ..hi (exclusive): hi > 0 required, so shift `..0` to
+                // `..1` (a legal one-element range).
+                let hi = if hi_raw == 0 { 1 } else { hi_raw };
+                let v = noprop::sample_u64_in(ctx, ..hi);
+                assert!(v < hi, "..hi: v={v} >= {hi}");
+            }
+            _ => {
+                // ..=hi (inclusive): any hi is legal, including 0 and
+                // u64::MAX.
+                let hi = hi_raw;
+                let v = noprop::sample_u64_in(ctx, ..=hi);
+                assert!(v <= hi, "..=hi: v={v} > {hi}");
+            }
+        }
+        Ok(())
+    })?;
+
+    for (i, hit) in form_seen.get().iter().enumerate() {
+        assert!(*hit, "range form index {i} was not exercised");
+    }
+    for (i, hit) in boundary_seen.get().iter().enumerate() {
+        let label = ["0", "1", "u64::MAX - 1", "u64::MAX"][i];
+        assert!(*hit, "boundary class {label} was not exercised");
+    }
+    Ok(())
+}
+
+#[test]
+fn sample_u64_in_full_range_matches_sample_u64() -> noprop::TestResult {
+    // The full range `..` has no non-vacuous inclusion assertion, so
+    // cover it with a differential oracle against sample_u64 on
+    // identical seeds. The follow-up sample_u64 comparison catches
+    // regressions that return the same first value but consume a
+    // different number of bytes.
+    noprop::Runner::new(ROOT_SEED.wrapping_add(2)).run(256, |ctx| {
+        let seed = noprop::sample_u64(ctx);
+        let mut actual_ctx = noprop::TestCaseContext::new(seed);
+        let mut expected_ctx = noprop::TestCaseContext::new(seed);
+
+        let actual = noprop::sample_u64_in(&mut actual_ctx, ..);
+        let expected = noprop::sample_u64(&mut expected_ctx);
+        assert_eq!(
+            actual, expected,
+            "seed={seed:#x}: full-range sample_u64_in must match sample_u64"
+        );
+        assert_eq!(
+            noprop::sample_u64(&mut actual_ctx),
+            noprop::sample_u64(&mut expected_ctx),
+            "seed={seed:#x}: follow-up bytes diverged"
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
 #[test]
 fn sample_ratio_matches_explicit_recipe() -> noprop::TestResult {
     // sample_ratio(Ratio::new(n, d)) must equal:
