@@ -1345,8 +1345,8 @@ mod tests {
             let idx = (sample_ascii_printable_char(&mut ctx) as u32 - 0x20) as usize;
             counts[idx] += 1;
         }
-        // Expected 2000 per bucket. The seed is fixed, so a generous
-        // slack of 10% makes this deterministic rather than flaky.
+        // The seed is fixed, so a generous slack of 10% makes this
+        // deterministic rather than flaky.
         let expected = total / 95;
         for (i, c) in counts.iter().enumerate() {
             assert!(
