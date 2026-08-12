@@ -842,12 +842,17 @@ pub fn sample_ascii_char(ctx: &mut TestCaseContext) -> char {
 
 /// Uniformly-distributed printable ASCII `char` (`0x20..=0x7E`, space
 /// through `~`, excluding control characters and DEL).
+///
+/// The 95 printable characters do not evenly divide the integer domain,
+/// so a naive `% 95` would be biased. Uses the same bounded
+/// rejection-sampling core as [`sample_usize_in`] and
+/// [`sample_choice`] to keep the distribution uniform; for this bound
+/// the per-attempt rejection rate is `< 2⁻⁶³`, so a rejection draw is
+/// effectively never taken.
 #[track_caller]
 pub fn sample_ascii_printable_char(ctx: &mut TestCaseContext) -> char {
     let loc = Location::caller();
-    // 95 characters. Use u32 for negligible modulo bias
-    // (2^32 mod 95 = 6, so bias factor is at most 1 + 1/45210182).
-    let v = (0x20 + u32::from_le_bytes(raw_bytes(ctx)) % 95) as u8 as char;
+    let v = (0x20 + sample_below(ctx, 95)) as u8 as char;
     ctx.record_generated(&v, loc);
     v
 }
@@ -942,7 +947,12 @@ pub fn sample_ascii_string(ctx: &mut TestCaseContext, len: usize) -> String {
 ///
 /// # Trace
 ///
-/// One trace entry is recorded per call; no attempt spans are opened.
+/// One trace entry is recorded per call. Each character is drawn via
+/// the same bounded rejection-sampling core as
+/// [`sample_ascii_printable_char`], so a call consumes `len × 8` RNG
+/// bytes plus a rare rejection draw (probability `< 2⁻⁶³` per
+/// character), and opens an attempt span only if a rejection occurs.
+/// Rejected draws do not appear in the value trace.
 ///
 /// # Examples
 ///
@@ -979,7 +989,7 @@ fn sample_ascii_char_raw(ctx: &mut TestCaseContext) -> char {
 }
 
 fn sample_ascii_printable_char_raw(ctx: &mut TestCaseContext) -> char {
-    (0x20 + u32::from_le_bytes(raw_bytes(ctx)) % 95) as u8 as char
+    (0x20 + sample_below(ctx, 95)) as u8 as char
 }
 
 // === Floating-point generators ===
@@ -1298,6 +1308,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sample_ascii_printable_char_matches_unbiased_core() {
+        // 95 does not divide 2^64, so an unbiased printable draw must
+        // come from the shared rejection-sampling core. Two same-seed
+        // contexts advance in lockstep: the direct `sample_below(95)`
+        // stream must equal the char primitive's stream. A `% 95`
+        // mapping is reintroduced this fails, because it consumes a
+        // different number of RNG bytes per char and drifts off-stream.
+        let mut core = TestCaseContext::new(0x9E37_79B9_7F4A_7C15);
+        let mut sampler = TestCaseContext::new(0x9E37_79B9_7F4A_7C15);
+        for _ in 0..1024 {
+            let expected = (0x20 + sample_below(&mut core, 95)) as u8 as char;
+            assert_eq!(sample_ascii_printable_char(&mut sampler), expected);
+        }
+    }
+
+    #[test]
+    fn sample_ascii_printable_char_is_roughly_uniform() {
+        let mut ctx = TestCaseContext::new(7);
+        let mut counts = [0usize; 95];
+        let total = 190_000;
+        for _ in 0..total {
+            let idx = (sample_ascii_printable_char(&mut ctx) as u32 - 0x20) as usize;
+            counts[idx] += 1;
+        }
+        // Expected 2000 per bucket. The seed is fixed, so a generous
+        // slack of 10% makes this deterministic rather than flaky.
+        let expected = total / 95;
+        for (i, c) in counts.iter().enumerate() {
+            assert!(
+                c.abs_diff(expected) < expected / 10,
+                "bucket {i} count off: {c} vs {expected}"
+            );
+        }
+    }
+
     // === sample_string / sample_ascii_string / sample_ascii_printable_string ===
 
     #[test]
@@ -1335,6 +1381,21 @@ mod tests {
                 s.chars().all(|c| (0x20..=0x7E).contains(&(c as u32))),
                 "found non-printable in {s:?}"
             );
+        }
+    }
+
+    #[test]
+    fn sample_ascii_printable_string_matches_unbiased_core() {
+        // The string path must draw each character from the same
+        // unbiased core as the char primitive; see
+        // `sample_ascii_printable_char_matches_unbiased_core`.
+        let mut core = TestCaseContext::new(0xDEAD_BEEF_CAFE_F00D);
+        let mut sampler = TestCaseContext::new(0xDEAD_BEEF_CAFE_F00D);
+        for len in [1, 7, 32] {
+            let expected: String = (0..len)
+                .map(|_| (0x20 + sample_below(&mut core, 95)) as u8 as char)
+                .collect();
+            assert_eq!(sample_ascii_printable_string(&mut sampler, len), expected);
         }
     }
 
