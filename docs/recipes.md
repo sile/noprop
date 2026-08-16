@@ -97,31 +97,23 @@ lives in the consuming project's test harness.
 
 ```rust
 use std::env;
+use std::num::NonZeroUsize;
 
 /// Read a project-specific env var and return the case budget it
 /// asks for, or fall back to the property's own default.
 ///
 /// Behavior by input:
-/// - variable unset  → `default`
+/// - variable unset (or value is not valid UTF-8) → `default`
 /// - positive `usize` → that value
 /// - `0`, negative, or non-integer → immediate `panic!` with the
 ///   raw text, so a mistyped `MYAPP_CASES=hello` fails at the
 ///   start of the run instead of silently reverting to `default`.
 fn case_budget(var: &str, default: usize) -> usize {
-    let Some(raw) = env::var_os(var) else {
-        return default;
-    };
-    let s = raw
-        .to_str()
-        .unwrap_or_else(|| panic!("{var}: value is not valid UTF-8"));
-    let value: usize = s
-        .parse()
-        .unwrap_or_else(|e| panic!("{var}={s:?} is not a non-negative integer: {e}"));
-    assert!(
-        value > 0,
-        "{var}=0 is not accepted: unset {var} or pick a positive case budget"
-    );
-    value
+    let Ok(s) = env::var(var) else { return default };
+    let value: NonZeroUsize = s.parse().unwrap_or_else(|e| {
+        panic!("{var}={s:?} is not a positive integer (unset it or pick a positive case budget): {e}")
+    });
+    value.get()
 }
 
 /// Baseline budget for a cheap scalar property. Deliberately small
