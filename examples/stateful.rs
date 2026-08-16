@@ -1,150 +1,136 @@
-//! Model-based (stateful) property testing: an abstract model and the
-//! system under test are driven by the same bounded command loop, and
-//! every step checks the SUT against the model.
-//!
-//! The SUT is an LRU cache — a data structure with subtle eviction
-//! rules — and the model is the plain rule it should implement.
+//! Model-based (stateful) property testing: command selection depends
+//! on the current model state, explicit weights shape the operation
+//! sequence, and every transition compares the SUT with the model.
 //!
 //! Run with: `cargo run --example stateful`
 
-use std::collections::{HashMap, VecDeque};
+use std::cell::Cell;
+use std::collections::VecDeque;
 
-/// An LRU cache standing in for a real system (a session store, a
-/// rate-limit table, ...). Inserting beyond capacity evicts the least
-/// recently used entry; reading a key refreshes its recency.
-///
-/// This implementation tracks recency with a per-access clock and
-/// finds the eviction victim by scanning — a plausible production
-/// choice, and a good place for off-by-one and stale-clock bugs. The
-/// model below implements the same rule with a recency-ordered list,
-/// so any mismatch between the two is caught within a few commands.
-struct LruCache {
+const CAPACITY: usize = 4;
+
+/// A bounded FIFO queue that discards its oldest value when a push
+/// would exceed capacity.
+struct BoundedQueue {
     capacity: usize,
-    /// key -> (value, last access clock).
-    entries: HashMap<u32, (u32, u64)>,
-    clock: u64,
+    values: VecDeque<u32>,
 }
 
-impl LruCache {
+impl BoundedQueue {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            entries: HashMap::new(),
-            clock: 0,
+            values: VecDeque::new(),
         }
     }
 
-    fn get(&mut self, key: u32) -> Option<u32> {
-        let entry = self.entries.get_mut(&key)?;
-        self.clock += 1;
-        entry.1 = self.clock;
-        Some(entry.0)
+    fn push(&mut self, value: u32) {
+        if self.values.len() == self.capacity {
+            self.values.pop_front();
+        }
+        self.values.push_back(value);
     }
 
-    fn put(&mut self, key: u32, value: u32) {
-        if let Some(entry) = self.entries.get_mut(&key) {
-            *entry = (value, self.clock);
-            return;
-        }
-        if self.entries.len() >= self.capacity
-            && let Some(victim) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, (_, last_used))| *last_used)
-                .map(|(&k, _)| k)
-        {
-            self.entries.remove(&victim);
-        }
-        self.entries.insert(key, (value, self.clock));
+    fn pop(&mut self) -> Option<u32> {
+        self.values.pop_front()
+    }
+
+    fn snapshot(&self) -> Vec<u32> {
+        self.values.iter().copied().collect()
     }
 }
 
-/// The abstract model of an LRU cache: a recency-ordered list of keys
-/// and a key -> value map, with the same eviction rule.
-struct Model {
-    capacity: usize,
-    order: VecDeque<u32>,
-    values: HashMap<u32, u32>,
+#[derive(Debug, Clone, Copy)]
+enum Command {
+    Push(u32),
+    Pop,
 }
 
-impl Model {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            order: VecDeque::new(),
-            values: HashMap::new(),
-        }
+fn sample_command(ctx: &mut noprop::TestCaseContext, model: &[u32]) -> Command {
+    if model.is_empty() {
+        return Command::Push(noprop::sample_u32(ctx));
     }
 
-    fn get(&mut self, key: u32) -> Option<u32> {
-        let value = self.values.get(&key).copied()?;
-        self.touch(key);
-        Some(value)
+    // A pop is only generated when the current model makes it valid.
+    // Pushes are weighted more heavily so full-queue eviction remains
+    // common enough to check within a short command sequence.
+    match noprop::sample_weighted_index(ctx, &[3, 2]) {
+        0 => Command::Push(noprop::sample_u32(ctx)),
+        _ => Command::Pop,
     }
-
-    fn put(&mut self, key: u32, value: u32) {
-        if let Some(entry) = self.values.get_mut(&key) {
-            *entry = value;
-            self.touch(key);
-            return;
-        }
-        if self.values.len() >= self.capacity
-            && let Some(evicted) = self.order.pop_back()
-        {
-            self.values.remove(&evicted);
-        }
-        self.values.insert(key, value);
-        self.order.push_front(key);
-    }
-
-    fn touch(&mut self, key: u32) {
-        if let Some(pos) = self.order.iter().position(|&k| k == key) {
-            self.order.remove(pos);
-        }
-        self.order.push_front(key);
-    }
-}
-
-/// Pick the next command: reads and writes of small integer keys, so
-/// cache hits, misses, and evictions all occur within a run.
-fn sample_command(ctx: &mut noprop::TestCaseContext) -> (u32, Option<u32>) {
-    let key = noprop::sample_usize_in(ctx, 0..8) as u32;
-    let write = noprop::sample_bool(ctx);
-    let value = write.then(|| noprop::sample_u32(ctx));
-    (key, value)
 }
 
 fn main() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("NOPROP_SEED")?;
+    let evictions = Cell::new(0usize);
+    let successful_pops = Cell::new(0usize);
     let mut runner = noprop::Runner::new(seed);
-    runner.run(256, |ctx| {
-        let mut model = Model::new(4);
-        let mut sut = LruCache::new(4);
 
-        for step in 0..64 {
-            let (key, write) = sample_command(ctx);
-            match write {
-                None => {
-                    let expected = model.get(key);
-                    let actual = sut.get(key);
-                    assert_eq!(
-                        expected, actual,
-                        "step {step}: get({key}) — model said {expected:?}, SUT returned {actual:?}"
-                    );
+    runner.run(256, |ctx| {
+        let mut model = Vec::new();
+        let mut sut = BoundedQueue::new(CAPACITY);
+        let mut history = Vec::new();
+
+        for step in 0..32 {
+            let command = sample_command(ctx, &model);
+            let causes_eviction = matches!(command, Command::Push(_)) && model.len() == CAPACITY;
+            history.push(command);
+
+            let successful_pop = match command {
+                Command::Push(value) => {
+                    if causes_eviction {
+                        model.remove(0);
+                    }
+                    model.push(value);
+                    sut.push(value);
+                    false
                 }
-                Some(value) => {
-                    model.put(key, value);
-                    sut.put(key, value);
+                Command::Pop => {
+                    let expected = if model.is_empty() {
+                        None
+                    } else {
+                        Some(model.remove(0))
+                    };
+                    let actual = sut.pop();
                     assert_eq!(
-                        sut.get(key),
-                        Some(value),
-                        "step {step}: put({key}, {value}) must be readable back"
+                        actual, expected,
+                        "step {step}: pop returned different values\n\
+                         history: {history:#?}"
                     );
+                    expected.is_some()
                 }
+            };
+
+            // `snapshot` observes state without performing another queue
+            // operation, so the check cannot hide a transition bug.
+            assert_eq!(
+                sut.snapshot(),
+                model,
+                "step {step}: state mismatch after {command:?}\n\
+                 history: {history:#?}"
+            );
+            if causes_eviction {
+                evictions.set(evictions.get() + 1);
+            }
+            if successful_pop {
+                successful_pops.set(successful_pops.get() + 1);
             }
         }
         Ok(())
     })?;
-    println!("stateful property: passed (256 cases of 64-step get/put chains)");
+
+    assert!(
+        evictions.get() > 0,
+        "no command sequence exercised eviction\n{runner}"
+    );
+    assert!(
+        successful_pops.get() > 0,
+        "no command sequence exercised a successful pop\n{runner}"
+    );
+    println!(
+        "stateful property: passed ({} evictions, {} successful pops)",
+        evictions.get(),
+        successful_pops.get()
+    );
     Ok(())
 }

@@ -35,7 +35,7 @@ jobs:
       - name: Passing examples must exit 0
         run: |
           cargo run --example basics
-          cargo run --example rejection
+          cargo run --example search_space
           cargo run --example stateful
       # The reproduce example demonstrates a failure and exits
       # non-zero by design; verify that expectation.

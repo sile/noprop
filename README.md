@@ -8,19 +8,18 @@ noprop
 
 An imperative property-based testing library for Rust.
 
+- Plain Rust from simple properties to stateful tests
+  - Build generators and checks from ordinary Rust functions, `if`,
+    `match`, `for`, and assertions — no combinator DSL, derive macros,
+    or separate stateful framework.
+- Explicit control over the search space
+  - The search space is the set of inputs and operation sequences a
+    property can generate. If a bug-triggering case is absent or too
+    unlikely, a run cannot reliably test it.
+  - Boundary probabilities and branch weights appear in the property's
+    code. A coverage gate can fail the test when an important check
+    never runs.
 - No dependencies
-- Expressive without a DSL
-  - A small, orthogonal imperative API — the property is a plain Rust
-    function that samples values ("generators" in PBT parlance) and
-    asserts on the results.
-  - Ordinary Rust control flow (`if` / `match` / `for` / recursion)
-    and interior mutability express any generator directly — no
-    combinator DSL or derive macros to learn.
-- Stateful (model-based) PBT without a separate framework
-  - The same API covers one-line properties, dependent generators,
-    and command loops that compare a model against a system under
-    test — no separate stateful framework or dependent-generation
-    syntax for the harder cases.
 
 Quick start
 -----------
@@ -28,7 +27,8 @@ Quick start
 ```rust
 #[test]
 fn addition_is_commutative() -> noprop::TestResult {
-    noprop::Runner::new(0xDEAD_BEEF).run(1024, |ctx| {
+    let seed = noprop::seed_from_env_or_time("MYAPP_PROPTEST_SEED")?;
+    noprop::Runner::new(seed).run(1024, |ctx| {
         let a = noprop::sample_u32(ctx);
         let b = noprop::sample_u32(ctx);
         assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
@@ -38,134 +38,94 @@ fn addition_is_commutative() -> noprop::TestResult {
 }
 ```
 
-The seed is caller-supplied, so a failure is reproducible: rerunning
-with the seed from the failure report reproduces the identical case.
-See [`docs/recipes.md`](docs/recipes.md) for the seed / env-variable
-scaffolding, sampling patterns, stateful properties, coverage gates,
-and the failure-reproduction workflow.
+On failure, copy the reported seed into `MYAPP_PROPTEST_SEED` and rerun
+the same test with the same case budget to reproduce the failing case.
 
 When noprop fits
 ----------------
 
-Choose noprop when properties are naturally sequential — dependent
-generation, stateful command loops, or protocol traces — and plain Rust
-control flow is clearer than a combinator DSL.
+noprop is especially direct when a property has one or more of these
+shapes:
 
-If automatic shrinking or file-based failure persistence is a priority,
-another PBT library will fit better.
+- The next value depends on an earlier length, variant, setting, or the
+  current state
+- A command sequence compares a model with the system under test after
+  every transition
+- History and operation order affect a protocol, parser, or streaming API
+- Empty, singleton, maximum, or other domain boundaries need explicit
+  probability
+- A coverage gate must prevent success when an important invariant never
+  runs
 
-Designing the search
---------------------
+These are ordinary Rust tests: the property, generators, model, command
+loop, assertions, and coverage gates use the same language constructs as
+the code under test.
 
-A property can only discover failures that lie within its generator's
-support. How quickly it finds them depends on the generator's
-distribution. noprop keeps these decisions explicit: dependent values
-use ordinary Rust control flow, and boundaries and branches can receive
-deliberate probability.
+Designing the search space
+--------------------------
 
-Start from the property and its semantic input domain. Make every relevant
-behavior reachable, then bias boundaries and operation sequences that would
-otherwise be too rare. Draw dependent values in order instead of sampling
-independent primitives and filtering the combinations afterward. For example,
-inside a property closure:
+First make every relevant input and operation sequence reachable. Then
+shape how often they occur: use `sample_with_boundaries` for domain
+boundaries, `sample_weighted_index` for branches or commands, and ordinary
+control flow for values that depend on earlier draws or the current state.
 
-```rust
-let len = noprop::sample_with_boundaries(
-    ctx,
-    &[0usize, 1, 64],
-    noprop::Ratio::one_nth(5),
-    |ctx| noprop::sample_usize_in(ctx, 0..=64),
-);
-let input = noprop::sample_bytes_vec(ctx, len);
-let split_at = noprop::sample_usize_in(ctx, 0..=input.len());
+An assertion can pass vacuously when no case reaches it. Count evidence
+only after the important check succeeds, then assert after `Runner::run`
+that the count is non-zero. This post-run assertion is a coverage gate.
 
-let mut left = input.clone();
-let right = left.split_off(split_at);
-left.extend_from_slice(&right);
-assert_eq!(left, input);
-```
+Adjust support, boundary probabilities, and branch weights before
+increasing the case budget. See [Recipes](docs/recipes.md) for concrete
+patterns and [Generator design](docs/generator-design.md) for support,
+distribution, termination, and rejection scope.
 
-Adjust boundary probabilities and command weights before increasing the
-case budget.
+Reproducing failures and constraints
+------------------------------------
 
-Main constraints
-----------------
+A failure report contains the seed, case index, generated-value trace,
+and the original case budget in a reproduce hint. Reuse the same seed,
+case budget, property closure, and relevant external configuration. The
+trace and semantic assertion message identify the failing inputs and
+transition.
 
-- `panic=unwind` is required. noprop catches property panics and uses
-  panic-based unwinding for `TestCaseContext::reject_case`;
-  `panic=abort` is not supported.
-- No automatic shrinking. The failure report instead carries an
-  automatic value trace — primitive samplers record generated values
-  at their source locations — so the failing input is visible without
-  extra plumbing. Reproduce the failing case from the seed and case
-  budget; if you want a frozen regression, hand-simplify the trace into
-  a plain `#[test]`.
-- No file-based failure persistence. The caller manages the seed and
-  case budget; there is no on-disk seed corpus.
+noprop deliberately has a small contract:
 
-Documentation
--------------
+- `panic=unwind` is required because noprop catches property panics and
+  uses panic-based unwinding for `TestCaseContext::reject_case`
+- Failing inputs are not automatically shrunk; simplify a reproduced
+  witness by hand and freeze it as a regular regression test
+- Failure seeds are not persisted to files; the caller owns the seed and
+  case budget
+- Values for user-defined structs and enums are not generated from their
+  type definitions; write samplers as ordinary Rust functions so their
+  dependencies, boundaries, and distributions stay explicit
+- Macros and a combinator DSL are not provided
 
-- **[Recipes](docs/recipes.md)** — task-oriented recipes for common
-  property shapes: seed / run scaffolding, sampling primitives and
-  collections, rejection scopes, dependent generators, stateful
-  properties, coverage gates, and reproducing a failing seed.
-- **[Generator design](docs/generator-design.md)** — the small design
-  decisions every `sample_*` generator has to make (support,
-  distribution, termination, rejection scope, valid-by-construction).
-- **[Generator authoring](docs/generator-authoring.md)** — how-to guide
-  for writing `sample_*` helpers: composing primitives, bounded
-  rejection, `NonZero` recipes, and the finite-by-default float
-  samplers.
-- **[API reference](https://docs.rs/noprop)** — every function and
-  type on docs.rs.
+If automatically minimizing a failing input is a requirement, consider a
+property-testing library that provides shrinking.
 
-The three Markdown guides above also render as `docs::*` modules on docs.rs,
-alongside the API rustdoc.
+Where to look next
+------------------
 
-Runnable examples
------------------
+- **[Recipes](docs/recipes.md)** — task-oriented patterns for seed and
+  run scaffolding, sampling, rejection, stateful properties, coverage
+  gates, and failure diagnosis
+- **[Generator design](docs/generator-design.md)** — how to choose a
+  generator's support, distribution, termination, and rejection scope
+- **[Generator authoring](docs/generator-authoring.md)** — how to write
+  reusable `sample_*` functions from noprop's primitives
+- **[API reference](https://docs.rs/noprop)** — every public function and
+  type
+- **[Runnable examples](examples/)** — end-to-end properties:
+  - [`basics.rs`](examples/basics.rs) — the minimal property shape and an
+    environment-controlled seed
+  - [`search_space.rs`](examples/search_space.rs) — dependent draws,
+    boundary probabilities, branch weights, and coverage gates
+  - [`stateful.rs`](examples/stateful.rs) — state-dependent commands and
+    per-transition model / SUT checks
+  - [`reproduce.rs`](examples/reproduce.rs) — replaying a failure from its
+    seed and report; this example fails on purpose
+- **[noprop skill](skills/noprop/SKILL.md)** — search-space design and API
+  guidance for supported AI coding agents; install it with
+  `gh skill install sile/noprop noprop`
 
-The [`examples/`](examples/) directory contains runnable end-to-end
-demos of the larger recipes (each runs with `cargo run --example
-<name>`):
-
-- [`basics.rs`](examples/basics.rs) — the minimal property shape
-  against a real function, the common pitfalls (`Fn` closures and
-  interior mutability, environment-controlled seeds via
-  `seed_from_env_or_time`), and the short idioms for random-length
-  collections and boundary values
-- [`stateful.rs`](examples/stateful.rs) — model-based (stateful)
-  property testing of an LRU cache with a bounded command loop
-- [`rejection.rs`](examples/rejection.rs) — `sample_with_rejection`
-  for constrained draws and `reject_case` for whole-case
-  preconditions, parsing `key=value` config lines
-- [`reproduce.rs`](examples/reproduce.rs) — reproducing a failing
-  seed via `NOPROP_SEED` and the failure report's reproduce hint
-  (this one fails on purpose)
-
-Evaluating search effectiveness
--------------------------------
-
-The benchmark compares how many cases uniform, biased, and
-boundary-biased generators need to detect known mutants across fixed
-seed cohorts. It evaluates fault-detection effectiveness rather than
-runtime throughput, and its results are specific to the included
-workloads.
-
-See [`benchmark/README.md`](benchmark/README.md) for the workloads,
-methodology, and commands.
-
-Agent Skills
-------------
-
-An [Agent Skills](https://agentskills.io/) bundle ships with the crate.
-Install it with `gh skill install` so a supported AI agent can design
-effective search spaces and apply noprop's API conventions.
-
-```bash
-gh skill install sile/noprop noprop
-```
-
-The skill itself lives at
-[`skills/noprop/SKILL.md`](skills/noprop/SKILL.md).
+The Markdown guides also render as `docs::*` modules on docs.rs.

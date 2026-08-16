@@ -397,8 +397,7 @@ mass on the boundary set does nothing observable.
 **See also.**
 [`sample_with_boundaries`](crate::sample_with_boundaries),
 [`Ratio`](crate::Ratio),
-[`examples/basics.rs`](https://github.com/sile/noprop/blob/main/examples/basics.rs)
-("Idiom 2: boundary values").
+[`examples/search_space.rs`](https://github.com/sile/noprop/blob/main/examples/search_space.rs).
 
 ## Sample `NonZero` integers
 
@@ -563,8 +562,7 @@ covers the trade-off.
 
 **See also.**
 [`sample_with_rejection`](crate::sample_with_rejection),
-[`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case),
-[`examples/rejection.rs`](https://github.com/sile/noprop/blob/main/examples/rejection.rs).
+[`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case).
 
 ## Model-based (stateful) property
 
@@ -616,7 +614,8 @@ noprop::Runner::new(0).run(64, |ctx| {
 mismatch: the step index, the mismatched values, and either the whole
 command history or the abstract model state at the point of failure.
 The stateful `examples/stateful.rs` example shows this pattern applied
-to a realistic subject (an LRU cache with a plausible-looking bug).
+to a bounded FIFO queue with state-dependent command selection and a
+non-mutating per-transition state comparison.
 
 When an invariant fires only after the state reaches a specific shape
 (a non-empty pop, a committed entry, a fully drained buffer), a case
@@ -1436,7 +1435,11 @@ probability is small but non-negligible turns into a flake — reached
 under most seeds but not the one this run drew.
 
 **See also.** The "Model-based (stateful) property" recipe (the
-gated invariant is the same pop-mismatch check as its main example).
+gated invariant is the same pop-mismatch check as its main example),
+and
+[`examples/search_space.rs`](https://github.com/sile/noprop/blob/main/examples/search_space.rs)
+for boundary probabilities, branch weights, dependent draws, and two
+coverage gates in one runnable property.
 
 ## Reproduce a failing seed
 
@@ -1550,8 +1553,8 @@ test (a coverage gate, a debug report, a threshold sanity check).
 `RefCell` panics on borrow conflicts; keep the borrow scope minimal.
 
 **See also.**
-[`examples/basics.rs`](https://github.com/sile/noprop/blob/main/examples/basics.rs)
-("Pitfall 1: the closure is `Fn`, not `FnMut`").
+[`examples/search_space.rs`](https://github.com/sile/noprop/blob/main/examples/search_space.rs)
+(coverage gates stored in `Cell<usize>` values).
 
 ## Keep the trace pointing at the user's call site
 
