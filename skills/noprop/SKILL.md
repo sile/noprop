@@ -92,13 +92,30 @@ distribution that assigns negligible mass to the target region.
 
 Place assertions where the relevant behavior occurs, and separately count
 whether that location was reached. After the run, fail if the count is zero.
-Use `Cell`, `RefCell`, or atomics for cross-case observations because the
-property closure implements `Fn`.
+Coverage gates use interior mutability because the property closure implements
+`Fn`; choose the cell shape by what the gate means:
 
-Count only evidence from cases that reach the intended check. Do not treat
-attempt count or rejected cases as proof that the invariant ran. Do not
-reject a case after recording coverage evidence; a later rejection would let
-a discarded case inflate the gate.
+- `Cell<bool>` for "did we ever reach it".
+- `Cell<usize>` for count- or rate-based gates.
+- `RefCell<T>` only when the gate needs a non-`Copy` aggregate across cases
+  (a bounded history of witnesses, a set of reached buckets).
+- Per-case temporaries live in a plain `let mut` inside the closure, not in
+  interior mutability.
+
+Increment the cell at the invariant-eval site — not where the target value
+was drawn, not where a branch was selected. Order the closure so every
+`ctx.reject_case()` and every `sample_with_rejection` exit sits strictly
+before any gate update; a case that increments a counter and then gets
+rejected leaves discarded evidence in the count. Do not treat attempt count
+or rejected-case count as proof that the invariant ran.
+
+Assert each gate individually and include `{runner}` in the message
+(`Runner` implements `Display` but not `Debug`; `{runner:?}` will not
+compile). When both sides of a branch matter (empty vs non-empty, success vs
+error), pair the counters and assert both. Keep
+`runner.stats().rejected_cases == 0` — a valid-by-construction check on the
+generator — separate from coverage gates; it says nothing about whether the
+invariant ran.
 
 ### 6. Validate the exploration strategy
 
@@ -106,6 +123,20 @@ a discarded case inflate the gate.
   generator support.
 - Confirm that all loops, recursive generators, and run-to-quiescence phases
   have explicit bounds.
+- Estimate the miss probability of each gate. If a case reaches the target
+  with probability `p`, a run of `N` cases misses it entirely with
+  probability `(1 - p)^N`. When that number is too high, fix the generator
+  in this order — (1) confirm the class is in support, (2) restructure the
+  target as a first-class branch (`sample_weighted_index` arm or dedicated
+  sampler), (3) assign an explicit weight or `Ratio` via
+  `sample_with_boundaries`, (4) only then raise `N`. Raising `N` reduces
+  miss probability exponentially only at rate `p`, so a small `p` costs
+  many extra cases to compensate.
+- Record the `p` estimate and the branch weights it came from next to each
+  gate. Every time you change a branch weight, boundary set, choice pool,
+  or bounded range, re-check each gate: a gate whose region has become
+  unreachable turns green silently, and a gate whose region has become
+  saturating adds noise but no coverage.
 - Inspect `runner.stats()` when rejection behavior matters.
 - Evaluate search changes across several fixed seeds and realistic case
   budgets. Do not judge a distribution from one lucky run.

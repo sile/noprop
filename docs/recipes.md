@@ -774,11 +774,12 @@ that keep per-step state alongside the SUT).
 region) that the run is meant to check, so a run where no case reached
 it fails instead of silently passing.
 
-**Uses.** A `std::cell::Cell` counter incremented at the site where
-the invariant actually runs, and a run-after
-`assert!(counter > 0, ...)` that turns a zero count into a failure.
-The [`Runner`](crate::Runner)'s `Display` embeds the seed and stats
-so the failure is reproducible.
+**Uses.** `std::cell::Cell<bool>` for "did we ever reach it" gates,
+`std::cell::Cell<usize>` for count- or rate-based gates, incremented
+at the site where the invariant actually runs, and a run-after
+`assert!(counter > 0, ...)` (or `> N`) that turns a zero count into
+a failure. The [`Runner`](crate::Runner)'s `Display` embeds the
+seed and run stats so the failure is reproducible.
 
 ```rust
 # use std::cell::Cell;
@@ -822,28 +823,95 @@ assert!(
 # body().unwrap();
 ```
 
-**Notes.** An invariant that fires only when the state reaches a
-specific shape (a non-empty container, a committed entry, a fully
-consumed buffer) can pass vacuously — every case may end before the
-shape appears, and the invariant is never actually checked. Gate the
-invariant with a counter that increments only where the invariant
-runs, and turn a zero count into a run-after failure.
+**Notes.**
 
-Count only the accepted cases — the counter must increment where the
-invariant actually runs, and the assertion should compare that count
-against zero rather than the total attempt count. Rejection scopes
-([`sample_with_rejection`](crate::sample_with_rejection),
-[`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case))
-may discard cases mid-run; a rejected case that ended before the
-invariant fired must not contribute to "the region was reached"
-evidence.
+*Choose the cell shape by what the gate means.* Use `Cell<bool>`
+when the gate only asks whether the invariant was exercised at least
+once; use `Cell<usize>` when the count itself matters (a minimum
+number of hits, or a rate check like "at least a quarter of accepted
+cases hit a non-empty pop"). `RefCell<T>` is for gates that need a
+non-`Copy` aggregate across cases (a bounded history of witnesses,
+a set of reached buckets); do not reach for it when a `Cell<bool>`
+or `Cell<usize>` would fit, and never push a per-case temporary
+through interior mutability — a plain `let mut` inside the closure
+is the right home for that (as `reached_non_empty_pop` shows above).
 
-When the region is rare and the seed comes from
-[`seed_from_env_or_time`](crate::seed_from_env_or_time), the region
-may be reached under most seeds but not the one this run drew, and
-the gate becomes a flake — gate only on regions the *generator* can
-reach reliably (build the generator so the region is inside its
-support).
+*Record evidence at the invariant-eval site, not upstream of it.*
+The counter must increment where the invariant actually runs — not
+where the generator drew the target value, not where a branch was
+selected. A case that picked the right shape but never reached the
+check leaves the gate un-hit for the right reason; inflating the
+counter earlier hides that. For the same reason, order the closure
+so every
+[`ctx.reject_case()`](crate::TestCaseContext::reject_case) and
+every [`sample_with_rejection`](crate::sample_with_rejection) exit
+sits strictly before any gate update — a case that increments a
+counter and *then* gets rejected leaves the counter bumped by a
+discarded case, which the run-after assert would count as evidence.
+
+*Include the runner in the failure message.* The gate assertion
+runs outside the property closure, so its message must carry the
+seed and run stats itself. Use `{runner}` — the
+[`Runner`](crate::Runner) implements `Display` but not `Debug`, so
+`{runner:?}` will not compile. Give each gate its own assertion and
+its own message so a failure names the un-hit condition; do not
+fold several gates into one boolean.
+
+*Paired gates when both sides matter.* An invariant that only fires
+in one branch (empty vs non-empty, success vs error, growing vs
+shrinking) is not gated by a single counter — a run that only
+reaches the opposite side still passes silently. Pair the counter
+with a second one for the other side and assert both. Do not gate
+every enum variant mechanically; gate the classes where a missing
+observation would leave the invariant vacuous.
+
+*Distinguish coverage from a rejection post-condition.* An
+`assert_eq!(runner.stats().rejected_cases, 0, "{runner}")` after
+the run is a *valid-by-construction check on the generator*: it
+asserts that no case needed to be discarded, which says nothing
+about whether the invariant ran. Keep it separate from the coverage
+gates above; do not treat rejected-case count as evidence of
+coverage.
+
+*Estimate the miss probability.* If a case reaches the target
+region with probability `p`, a `Runner::run(N, ...)` misses it
+entirely with probability `(1 - p)^N`. Get a rough `p` from the
+generator's branch weights (or measure it under a fixed seed) and
+compare `(1 - p)^N` to what you can tolerate. Raising `N` is the
+last lever, not the first: the miss probability decays exponentially
+in `N` but only at rate `p`, so a small `p` still needs many extra
+cases to compensate. Fix the generator instead when `p` is small:
+
+1. Confirm the target class is inside the generator's support at all
+   (add it to the boundary set, the choice slice, or the command
+   list).
+2. Restructure so the target is a first-class branch — a
+   [`sample_weighted_index`](crate::sample_weighted_index) arm or a
+   dedicated sampler — instead of a lucky outcome of independent
+   draws.
+3. Give that branch an explicit weight or an exact
+   [`Ratio`](crate::Ratio) via
+   [`sample_with_boundaries`](crate::sample_with_boundaries).
+4. Only after 1-3, if `(1 - p)^N` is still too high, raise `N`.
+
+When an outer `sample_weighted_index` fixes the branch probability,
+adding elements to an inner
+[`sample_choice`](crate::sample_choice) pool does **not** change
+the outer branch's probability. Adjust weights at the level whose
+probability actually needs to shift.
+
+Record the `p` estimate (and the branch weights it came from) in a
+comment next to each gate. Every time you change a branch weight,
+a boundary set, a choice pool, or a bounded range in the generator,
+walk through the gates and re-check each `p`: a gate whose region
+has become unreachable turns green silently, and a gate whose
+region has become saturating adds noise but no coverage.
+
+*Seed-derived flakes.* When the seed comes from
+[`seed_from_env_or_time`](crate::seed_from_env_or_time), gate only
+on regions the generator can reach reliably. A gate whose miss
+probability is small but non-negligible turns into a flake — reached
+under most seeds but not the one this run drew.
 
 **See also.** The "Model-based (stateful) property" recipe (the
 gated invariant is the same pop-mismatch check as its main example).
