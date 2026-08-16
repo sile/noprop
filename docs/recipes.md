@@ -34,6 +34,7 @@ signatures.
 - [Bounded run-to-quiescence](#bounded-run-to-quiescence)
 - [Cross-step invariant with append-only history](#cross-step-invariant-with-append-only-history)
 - [Stateful streaming API driven by a command loop](#stateful-streaming-api-driven-by-a-command-loop)
+- [Round-trip a value through configurable text](#round-trip-a-value-through-configurable-text)
 - [Assert a coverage gate after the run](#assert-a-coverage-gate-after-the-run)
 - [Reproduce a failing seed](#reproduce-a-failing-seed)
 - [Turn a trace into a hand-written regression test](#turn-a-trace-into-a-hand-written-regression-test)
@@ -1049,6 +1050,244 @@ reuses). For the bounded metrics and state snapshot to include in
 the assertion message on failure (queue length, cumulative bytes,
 ordered event suffix), see the "Semantic assertion patterns →
 Streaming and simulation" section of
+[`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
+
+## Round-trip a value through configurable text
+
+**Goal.** Verify that a value → text → value round-trip agrees
+for every combination of the SUT's textual output settings —
+quote style, delimiter, escape shape — instead of only the
+default settings. Every setting change is a fresh chance for the
+serializer's escape rules and the parser's tokenizer to drift;
+drawing the settings alongside the value forces both directions
+to stay consistent across the whole configuration surface.
+
+**Uses.** [`Runner::run`](crate::Runner::run),
+[`sample_bool`](crate::sample_bool),
+[`sample_usize_in`](crate::sample_usize_in),
+[`sample_choice`](crate::sample_choice), one
+[`Cell<usize>`](std::cell::Cell) per output-setting class, and a
+toy serializer / parser pair defined inside the doctest.
+
+The toy grammar below is a self-contained placeholder — a real
+SUT has its own value type, output-setting axes, and grammar;
+keep the recipe shape and swap those for what the SUT actually
+uses.
+
+```rust
+use std::cell::Cell;
+
+// Semantic value: a list of arbitrary Rust strings.
+// Output-setting axes:
+//   quote     ∈ { '"', '\'' }
+//   delimiter ∈ { ',', ';' }
+// = 4 classes. Grammar: each element is enclosed in `quote`,
+// separated by `delimiter`. Inside an element, only `quote` and
+// `\` are escaped as `\<char>`; the delimiter needs no escape
+// because the quotes already protect it.
+
+fn serialize(items: &[String], quote: char, delimiter: char) -> String {
+    let mut out = String::new();
+    for (i, s) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(delimiter);
+        }
+        out.push(quote);
+        for c in s.chars() {
+            if c == quote || c == '\\' {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push(quote);
+    }
+    out
+}
+
+fn parse(text: &str, quote: char, delimiter: char) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    let mut chars = text.chars();
+    loop {
+        if !items.is_empty() {
+            match chars.next() {
+                Some(c) if c == delimiter => {}
+                None => break,
+                Some(c) => panic!("expected delimiter, got {c:?}"),
+            }
+        }
+        match chars.next() {
+            Some(c) if c == quote => {}
+            None if items.is_empty() => break, // empty text = empty list
+            Some(c) => panic!("expected opening quote, got {c:?}"),
+            None => panic!("unterminated after delimiter"),
+        }
+        let mut elem = String::new();
+        loop {
+            match chars.next() {
+                Some('\\') => elem.push(chars.next().expect("dangling escape")),
+                Some(c) if c == quote => break,
+                Some(c) => elem.push(c),
+                None => panic!("unterminated element"),
+            }
+        }
+        items.push(elem);
+    }
+    items
+}
+
+// Element character pool. Deliberately mixes:
+//   - plain ASCII (`a`, `b`, `c`);
+//   - the backslash and every candidate quote / delimiter, so
+//     element strings actually stress the escape rules;
+//   - a control character (`\n`);
+//   - a non-ASCII scalar (`あ`).
+// A short pool that covers every escape class in every case beats
+// sample_string over the full Unicode range, which almost never
+// draws these specific characters.
+const POOL: [char; 10] = ['a', 'b', 'c', '\\', '"', '\'', ',', ';', '\n', 'あ'];
+
+# fn body() -> noprop::TestResult {
+// One gate per (quote, delimiter) class. A case is meaningful for
+// its class only after the round-trip has actually passed for
+// that class in that case, so each Cell lives outside the closure
+// and is bumped from the assertion site (per case, at most once).
+let gate_dq_comma: Cell<usize> = Cell::new(0);
+let gate_dq_semi: Cell<usize> = Cell::new(0);
+let gate_sq_comma: Cell<usize> = Cell::new(0);
+let gate_sq_semi: Cell<usize> = Cell::new(0);
+
+let mut runner = noprop::Runner::new(0);
+runner.run(64, |ctx| {
+    // Draw the output setting alongside the value: a single seed
+    // then carries the setting into the reproduce hint.
+    let quote = if noprop::sample_bool(ctx) { '"' } else { '\'' };
+    let delimiter = if noprop::sample_bool(ctx) { ',' } else { ';' };
+
+    // Build a small list of strings from the mixed pool.
+    let n = noprop::sample_usize_in(ctx, 0..=3);
+    let items: Vec<String> = (0..n)
+        .map(|_| {
+            let len = noprop::sample_usize_in(ctx, 0..=6);
+            (0..len)
+                .map(|_| noprop::sample_choice(ctx, &POOL))
+                .collect()
+        })
+        .collect();
+
+    // value → text → value.
+    let text = serialize(&items, quote, delimiter);
+    let parsed = parse(&text, quote, delimiter);
+    assert_eq!(
+        parsed, items,
+        "round-trip mismatch (quote={quote:?}, delimiter={delimiter:?}): text = {text:?}",
+    );
+
+    // Gate: record the class only after the round-trip actually
+    // agreed. One case exercises exactly one (quote, delimiter)
+    // class, so pick the right cell and bump it once.
+    let gate = match (quote, delimiter) {
+        ('"', ',') => &gate_dq_comma,
+        ('"', ';') => &gate_dq_semi,
+        ('\'', ',') => &gate_sq_comma,
+        _ => &gate_sq_semi,
+    };
+    gate.set(gate.get() + 1);
+    Ok(())
+})?;
+
+// Assert each class independently so a failure names which
+// (quote, delimiter) never got exercised.
+assert!(
+    gate_dq_comma.get() > 0,
+    "no case exercised (quote='\"', delimiter=',')\n{runner}",
+);
+assert!(
+    gate_dq_semi.get() > 0,
+    "no case exercised (quote='\"', delimiter=';')\n{runner}",
+);
+assert!(
+    gate_sq_comma.get() > 0,
+    "no case exercised (quote='\\'', delimiter=',')\n{runner}",
+);
+assert!(
+    gate_sq_semi.get() > 0,
+    "no case exercised (quote='\\'', delimiter=';')\n{runner}",
+);
+# Ok(())
+# }
+# body().unwrap();
+```
+
+**Notes.**
+
+*Draw the output setting alongside the value.* The whole point
+of this recipe is that the SUT's serializer and parser can
+disagree under one setting while still agreeing under the
+default. Drawing `quote` and `delimiter` inside the closure —
+instead of running one big loop per setting — lets a single
+failing seed carry both the setting and the value into the
+reproduce hint, and lets the coverage gate report exactly which
+class was never observed.
+
+*Do not reuse Rust's `Debug` output as the target grammar.*
+`format!("{s:?}")` emits Rust literal escapes (`\n`, `\u{XX}`,
+`\"`, …) that almost never match the target language's own
+escape grammar. Write the target grammar's serializer
+explicitly, even when it "looks like `Debug`". The one place
+`Debug` belongs is inside the failure message (the
+`text = {text:?}` above), which is Rust code reading the string
+for a human.
+
+*Pool the pathological characters instead of drawing from the
+full Unicode range.* [`sample_string`](crate::sample_string)
+draws from ~1.1 M code points, which almost never hits the six
+or so characters that stress escape and delimiter handling. A
+small explicit pool that includes the backslash, every candidate
+quote and delimiter, at least one control character, and at
+least one non-ASCII scalar reaches every escape class in every
+case with just a few draws — see the "Mix in domain boundaries
+with an exact probability" recipe for the general principle.
+Extend the pool when the SUT's grammar has more escape classes;
+do not remove characters just to make the toy pass.
+
+*Gate at the pass site, not at the draw site.* Move the counter
+increment to after the round-trip has already succeeded for that
+class. A case whose serializer panics or whose parse fails must
+not count as evidence that its class was exercised; otherwise a
+mutant that breaks one class only will still satisfy the gate.
+The `Cell<usize>` + per-case-max-1 pattern matches the "Assert a
+coverage gate after the run" recipe.
+
+*Variable-length escapes need a bound.* This grammar uses only
+single-character escapes (`\<char>`). A grammar with variable-
+length escapes — `\xNN`, `\u{X…}`, `\NNN` — must either fix a
+maximum length or use an explicit terminating delimiter, or the
+scanner will greedily eat characters that were meant to be the
+next literal (`\x12` followed by `3` would scan as `\x123`). The
+toy above sidesteps that class of bugs by construction; a real
+SUT's recipe should keep the same pool and gate shape and add
+whatever escape kinds the SUT actually emits.
+
+*Decode-only oracle when no serializer exists.* When the SUT
+exposes a `parse` but no round-trippable `serialize`, replace
+the value → text → value chain with a test generator that
+builds a matched `(expected_value, valid_text)` pair (the test
+constructs the text against the same grammar) and asserts
+`parse(text) == expected_value`. Keep the same one-gate-per-class
+shape at the point where the parse-and-equal succeeds. This is a
+different test shape from round-trip — the serializer is not
+being checked — so pick it deliberately, not as a fallback for
+"we forgot to add a serialize function".
+
+**See also.** The "Assert a coverage gate after the run" recipe
+(the `Cell<usize>` + per-case + `{runner}` pattern this recipe
+reuses), the "Mix in domain boundaries with an exact probability"
+recipe (biasing a generator toward rare classes), the "Sample
+primitives, ranges, and strings" recipe
+([`sample_choice`](crate::sample_choice) over a fixed pool).
+For the assertion-message shape when the round-trip fires
+against a real parser, see the "Semantic assertion patterns →
+Parser, scanner, serializer" section of
 [`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Assert a coverage gate after the run
