@@ -1,21 +1,14 @@
-//! Generator variants: how the input space is sampled and which runner
-//! entry point drives the property. The SUT is identical across
-//! variants; only the generator and the search policy differ.
+//! Generator variants: how the input space is sampled. The SUT is
+//! identical across variants; only the generator differs.
 //! (`Variant::Base` is the exception: it runs the base SUT as a
 //! ground-truth check, not a comparison variant.)
-//!
-//! The uniform / biased properties report semantic feedback (`event` /
-//! `bucket` / `transition`) so the same property runs under
-//! feedback-guided search; in uniform mode the feedback methods are
-//! allocation-free no-ops, so the uniform / biased results match the
-//! recorded baseline (the feedback calls draw no random bytes).
 
 use std::time::Instant;
 
 use crate::raw::{RawResult, Status};
 use crate::targets::{Observe, Property, Task};
 
-/// Generator / search variant for a task.
+/// Generator variant for a task.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Variant {
     /// Base SUT under uniform generation. Ground-truth check: must
@@ -30,9 +23,6 @@ pub(crate) enum Variant {
     /// Generic type-level boundary mix over the integer primitives
     /// under `noprop::Runner::run`.
     BoundaryBiased,
-    /// Feedback-guided search admitting purely on feature novelty
-    /// (`noprop::Runner::run_feedback_guided`).
-    FeedbackGuided,
 }
 
 impl Variant {
@@ -42,7 +32,6 @@ impl Variant {
             "uniform" => Some(Variant::Uniform),
             "biased" => Some(Variant::Biased),
             "boundary-biased" => Some(Variant::BoundaryBiased),
-            "feedback-guided" => Some(Variant::FeedbackGuided),
             _ => None,
         }
     }
@@ -53,18 +42,13 @@ impl Variant {
             Variant::Uniform => "uniform",
             Variant::Biased => "biased",
             Variant::BoundaryBiased => "boundary-biased",
-            Variant::FeedbackGuided => "feedback-guided",
         }
     }
 }
 
 /// Comparison variants used by `run-all`.
-pub(crate) const VARIANTS: &[Variant] = &[
-    Variant::Uniform,
-    Variant::Biased,
-    Variant::BoundaryBiased,
-    Variant::FeedbackGuided,
-];
+pub(crate) const VARIANTS: &[Variant] =
+    &[Variant::Uniform, Variant::Biased, Variant::BoundaryBiased];
 
 /// Run one task (workload x mutant x variant) for a fixed seed and
 /// case budget, returning the raw result.
@@ -98,20 +82,12 @@ pub(crate) fn run_task(
         accepted_cases: stats.accepted_cases,
         rejected_cases: stats.rejected_cases,
         total_samples: stats.total_samples,
-        discovered_features: stats.discovered_features,
-        max_corpus_size: stats.max_corpus_size,
         observations,
         wall_clock_ns,
     }
 }
 
-/// Drive the task's property under the variant's runner entry point.
-///
-/// The uniform / biased / boundary-biased variants use the task's
-/// uniform / biased / bb properties (feedback-reporting under the
-/// respective generation); the feedback-guided variant reuses the
-/// uniform property, whose feedback methods are no-ops under
-/// `noprop::Runner::run`.
+/// Drive the task's property under the variant's generator.
 fn run_variant(
     runner: &mut noprop::Runner,
     task: &Task,
@@ -121,17 +97,12 @@ fn run_variant(
 ) -> noprop::RunResult {
     let property: Property = match variant {
         Variant::Base => task.base,
+        Variant::Uniform => task.uniform,
         Variant::Biased => task.biased,
         Variant::BoundaryBiased => task.bb,
-        _ => task.uniform,
     };
     let run = |ctx: &mut noprop::TestCaseContext| property(ctx, observe).map_err(Into::into);
-    match variant {
-        Variant::Base | Variant::Uniform | Variant::Biased | Variant::BoundaryBiased => {
-            runner.run(cases, run)
-        }
-        Variant::FeedbackGuided => runner.run_feedback_guided(cases, run),
-    }
+    runner.run(cases, run)
 }
 
 /// Classify the run outcome: property failure (found), rejection-cap

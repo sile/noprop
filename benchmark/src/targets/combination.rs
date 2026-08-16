@@ -26,14 +26,9 @@ fn run(
     sut_mutant: bool,
     x: u32,
     y: u32,
-    ctx: &mut noprop::TestCaseContext,
+    _ctx: &mut noprop::TestCaseContext,
     _obs: &Observe,
 ) -> Result<(), String> {
-    // Feedback: the mutant fails for the exact pair (1, 2), so the
-    // events observe the two conditions separately. These calls draw
-    // no random bytes, so the generator stream is unchanged.
-    ctx.event(if x == 1 { "x_witness" } else { "x_other" });
-    ctx.event(if y == 2 { "y_witness" } else { "y_other" });
     process(x, y, sut_mutant).map_err(|_| format!("process failed for ({x}, {y})"))
 }
 

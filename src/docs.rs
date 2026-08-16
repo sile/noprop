@@ -6,15 +6,9 @@
 
 /// Task-oriented recipes for common property shapes: the seed / run
 /// scaffolding, sampling primitives and collections, rejection scopes,
-/// stateful properties, feedback-guided search, and reproducing a
-/// failing seed.
+/// stateful properties, coverage gates, and reproducing a failing seed.
 #[doc = include_str!("../docs/recipes.md")]
 pub mod recipes {}
-
-/// Design of the feedback-guided search policy: semantic features, the
-/// feature registry, corpus admission and eviction, and scheduling.
-#[doc = include_str!("../docs/feedback-guided-search.md")]
-pub mod feedback_guided_search {}
 
 /// Small design reference for writing `sample_*` generators: support,
 /// distribution, termination, rejection scope, and

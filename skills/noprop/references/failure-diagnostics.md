@@ -8,14 +8,12 @@ Read this file only after a noprop run fails or when code must inspect a
 Copy the `reproduce with:` hint from the failure report and restore the
 original property closure. Preserve all of the following:
 
-- the runner entry point: `run` or `run_feedback_guided`;
 - the printed seed;
 - the original case budget; and
 - the same property code and relevant external configuration.
 
-A uniform failure prints a `.run(N, |ctx| ...)` hint. A feedback-guided
-failure prints `.run_feedback_guided(N, |ctx| ...)`. Reusing the case budget
-also preserves the run's rejection limit.
+The failure prints a `.run(N, |ctx| ...)` hint. Reusing the case budget also
+preserves the run's rejection limit.
 
 ## Inspect `RunError`
 
@@ -31,8 +29,7 @@ Use `RunErrorKind` for control flow instead of matching formatted `Display` or
 `Debug` text.
 
 Both formatted representations contain the seed, failure message, reproduce
-hint, statistics, and generated-value trace. Feedback-guided failures also
-report the failing candidate index and semantic features.
+hint, statistics, and generated-value trace.
 
 ## Interpret `GeneratedValue`
 
@@ -59,5 +56,5 @@ the transition. Keep large histories bounded or summarize their irrelevant
 prefix.
 
 After reproducing the failure, reduce the witness by hand and add a focused
-ordinary regression test. noprop 0.1.0 does not provide automatic shrinking
-or an on-disk failure corpus.
+ordinary regression test. noprop does not provide automatic shrinking or an
+on-disk failure corpus.

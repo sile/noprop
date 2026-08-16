@@ -1,8 +1,6 @@
 //! Stateful transition target: a synthetic command-sequence workload.
 //! Each case applies `advance` / `reset` commands to an abstract
-//! state; the mutant fails once the state reaches 7. Every case runs
-//! the same code path — only the transition combination differs, which
-//! is exactly what feedback-guided search observes.
+//! state; the mutant fails once the state reaches 7.
 
 use super::{Observe, Task, Workload};
 
@@ -22,10 +20,6 @@ fn run(
             noprop::sample_bool(ctx)
         };
         let next = if advance { state + 1 } else { 0 };
-        // Feedback: the transitions observe the path taken (the same
-        // code path for every case); this call draws no random bytes,
-        // so the generator stream is unchanged.
-        ctx.transition("state", state, next);
         state = next;
         if sut_mutant && state >= 7 {
             return Err(format!("state reached {state}"));
@@ -36,7 +30,7 @@ fn run(
 
 pub(crate) const WORKLOAD: Workload = Workload {
     name: "stateful",
-    description: "mutant fails when the abstract state reaches 7; transitions are observable",
+    description: "mutant fails when the abstract state reaches 7",
     tasks: &[Task {
         mutant: "fails_on_state_seven",
         base: run_base,

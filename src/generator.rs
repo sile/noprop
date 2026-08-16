@@ -6,7 +6,6 @@ use std::ops::{Bound, RangeBounds};
 use std::panic::Location;
 
 use crate::TestCaseContext;
-use crate::rng::{AttemptVerdict, ChoiceMeta};
 
 /// Read `N` bytes from `ctx` without recording. Used by every primitive
 /// so that composite generators (non-zero variants, `sample_char`,
@@ -56,11 +55,9 @@ pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 64;
 ///   `max_attempts == 1` gives one shot; `max_attempts == 0` is a
 ///   programmer error and panics.
 /// - An attempt that consumes zero draws (a drawless filter, e.g. a
-///   pure predicate over external state) is allowed. In recording
-///   mode its span is stored with `start_draw == end_draw`.
+///   pure predicate over external state) is allowed.
 /// - The closure may itself call `sample_with_rejection` — nested
-///   attempts are supported and recorded with parent/child linkage in
-///   recording mode.
+///   calls are supported.
 /// - A user panic inside the closure (other than the private
 ///   iteration-rejection marker sent by `reject_case`) propagates
 ///   verbatim; the runner's own `catch_unwind` handles it as a
@@ -106,28 +103,8 @@ where
         "sample_with_rejection: max_attempts must be > 0"
     );
     for _ in 0..max_attempts {
-        let id = ctx.begin_attempt();
-        // catch_unwind so an unwinding attempt (a user panic, or the
-        // private iteration-rejected marker raised by
-        // `ctx.reject_case()` from inside the closure) does not leave
-        // the recording span at `AttemptVerdict::Pending` — which the
-        // public `ChoiceSequence` contract promises never appears. The
-        // panic is re-raised after closing the span, so the runner's
-        // outer `catch_unwind` and the iteration-rejection propagation
-        // still see the original payload.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| attempt(ctx)));
-        match outcome {
-            Ok(Some(value)) => {
-                ctx.end_attempt(id, AttemptVerdict::Accepted);
-                return value;
-            }
-            Ok(None) => {
-                ctx.end_attempt(id, AttemptVerdict::Rejected);
-            }
-            Err(panic) => {
-                ctx.end_attempt(id, AttemptVerdict::Rejected);
-                std::panic::resume_unwind(panic);
-            }
+        if let Some(value) = attempt(ctx) {
+            return value;
         }
     }
     // Exhausted. Inside a Runner, unwind to reject the iteration as
@@ -140,10 +117,9 @@ where
     if !ctx.is_inside_runner() {
         panic!(
             "noprop::sample_with_rejection: all {max_attempts} attempts were rejected. \
-             Outside a Runner::run or Runner::run_feedback_guided closure there is no \
-             iteration boundary to unwind to, so exhaustion cannot be reported as a \
-             rejection. Wrap the call in a Runner, raise max_attempts, or ensure at \
-             least one attempt returns Some(_)."
+             Outside a Runner::run closure there is no iteration boundary to unwind to, \
+             so exhaustion cannot be reported as a rejection. Wrap the call in a Runner, \
+             raise max_attempts, or ensure at least one attempt returns Some(_)."
         );
     }
     ctx.reject_case()
@@ -168,15 +144,6 @@ where
 /// attempts is therefore `< 2⁻⁶⁴`.
 #[track_caller]
 fn sample_below(ctx: &mut TestCaseContext, n: u64) -> u64 {
-    sample_below_with_meta(ctx, n, ChoiceMeta::Bounded { bound: n })
-}
-
-/// `sample_below` with an explicit [`ChoiceMeta`] for the draws it
-/// consumes. `sample_choice` uses this to tag its index draw as a
-/// `Choice` instead of a plain `Bounded` draw, so the metadata records
-/// the primitive that produced it rather than the shared core.
-#[track_caller]
-fn sample_below_with_meta(ctx: &mut TestCaseContext, n: u64, meta: ChoiceMeta) -> u64 {
     debug_assert!(n > 0, "sample_below: n must be non-zero");
     if n == 1 {
         return 0;
@@ -191,12 +158,10 @@ fn sample_below_with_meta(ctx: &mut TestCaseContext, n: u64, meta: ChoiceMeta) -
     //     values, i.e. accept iff x < u64::MAX - r.
     let r = u64::MAX % n;
     if r == n - 1 {
-        ctx.set_next_choice_meta(meta);
         return u64::from_le_bytes(raw_bytes(ctx)) % n;
     }
     let bound = u64::MAX - r;
     sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
-        ctx.set_next_choice_meta(meta);
         let x = u64::from_le_bytes(raw_bytes(ctx));
         (x < bound).then_some(x % n)
     })
@@ -241,11 +206,7 @@ pub fn sample_choice<T: Clone + std::fmt::Debug + 'static>(
 ) -> T {
     assert!(!choices.is_empty(), "sample_choice: empty slice");
     let loc = Location::caller();
-    let idx = sample_below_with_meta(
-        ctx,
-        choices.len() as u64,
-        ChoiceMeta::Choice { len: choices.len() },
-    ) as usize;
+    let idx = sample_below(ctx, choices.len() as u64) as usize;
     let v = choices[idx].clone();
     ctx.record_generated(&v, loc);
     v
@@ -304,7 +265,6 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
     let v = if lo == 0 && hi == usize::MAX {
         // Full pointer-width range: a raw byte draw is already unbiased,
         // and hi - lo + 1 would wrap. This is a plain integer draw.
-        ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
         usize::from_le_bytes(raw_bytes(ctx))
     } else {
         // hi - lo cannot overflow because hi >= lo, and (hi - lo) + 1
@@ -384,7 +344,6 @@ pub fn sample_u64_in<R: RangeBounds<u64>>(ctx: &mut TestCaseContext, range: R) -
         // Full-width range: a raw byte draw is already unbiased, and
         // hi - lo + 1 would wrap. This is a plain integer draw,
         // byte-equivalent to sample_u64.
-        ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
         u64::from_le_bytes(raw_bytes(ctx))
     } else {
         // hi - lo cannot overflow because hi >= lo, and (hi - lo) + 1
@@ -768,7 +727,6 @@ pub fn sample_bool(ctx: &mut TestCaseContext) -> bool {
 #[track_caller]
 pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = raw_bytes::<1>(ctx)[0];
     ctx.record_generated(&v, loc);
     v
@@ -778,7 +736,6 @@ pub fn sample_u8(ctx: &mut TestCaseContext) -> u8 {
 #[track_caller]
 pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u16::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -788,7 +745,6 @@ pub fn sample_u16(ctx: &mut TestCaseContext) -> u16 {
 #[track_caller]
 pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u32::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -798,7 +754,6 @@ pub fn sample_u32(ctx: &mut TestCaseContext) -> u32 {
 #[track_caller]
 pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u64::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -808,7 +763,6 @@ pub fn sample_u64(ctx: &mut TestCaseContext) -> u64 {
 #[track_caller]
 pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = u128::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -818,7 +772,6 @@ pub fn sample_u128(ctx: &mut TestCaseContext) -> u128 {
 #[track_caller]
 pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = usize::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -828,7 +781,6 @@ pub fn sample_usize(ctx: &mut TestCaseContext) -> usize {
 #[track_caller]
 pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = raw_bytes::<1>(ctx)[0] as i8;
     ctx.record_generated(&v, loc);
     v
@@ -838,7 +790,6 @@ pub fn sample_i8(ctx: &mut TestCaseContext) -> i8 {
 #[track_caller]
 pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i16::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -848,7 +799,6 @@ pub fn sample_i16(ctx: &mut TestCaseContext) -> i16 {
 #[track_caller]
 pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i32::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -858,7 +808,6 @@ pub fn sample_i32(ctx: &mut TestCaseContext) -> i32 {
 #[track_caller]
 pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i64::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -868,7 +817,6 @@ pub fn sample_i64(ctx: &mut TestCaseContext) -> i64 {
 #[track_caller]
 pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = i128::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -878,7 +826,6 @@ pub fn sample_i128(ctx: &mut TestCaseContext) -> i128 {
 #[track_caller]
 pub fn sample_isize(ctx: &mut TestCaseContext) -> isize {
     let loc = Location::caller();
-    ctx.set_next_choice_meta(crate::rng::ChoiceMeta::Integer);
     let v = isize::from_le_bytes(raw_bytes(ctx));
     ctx.record_generated(&v, loc);
     v
@@ -2393,142 +2340,6 @@ mod tests {
         let _ = sample_weighted_index(&mut ctx, &[0, 0, 0]);
     }
 
-    // === choice sequence record / replay through the sampling primitives ===
-    //
-    // These tests exercise if / match / loop control flow combined with
-    // sample_below, sample_char, sample_with_rejection (as the uniform
-    // NonZero recipe), and sample_bytes_vec inside a single recorded
-    // case that must replay bit-exactly.
-
-    use crate::rng::{ChoiceSequence, RecordingSession, ReplayError, ReplaySession};
-
-    /// Composite generator that mixes every rejection-loop and variable-length
-    /// path: `sample_below` (via `sample_usize_in`), `sample_char`,
-    /// an inline uniform-NonZero recipe via `sample_with_rejection`,
-    /// `sample_bytes_vec`, plus `if` / `match` / loop control flow.
-    /// Returns a shape summary that a strict replay must reproduce
-    /// bit-exactly.
-    fn composite_case(
-        ctx: &mut TestCaseContext,
-    ) -> (Vec<char>, Vec<std::num::NonZero<u8>>, Vec<u8>, u32) {
-        let branch = sample_usize_in(ctx, 0..3);
-        let chars = if branch == 0 {
-            Vec::new()
-        } else {
-            (0..branch).map(|_| sample_char(ctx)).collect()
-        };
-        let nz_count = sample_usize_in(ctx, 1..=4);
-        let mut nzs = Vec::with_capacity(nz_count);
-        for _ in 0..nz_count {
-            let nz = sample_with_rejection(ctx, DEFAULT_MAX_ATTEMPTS, |ctx| {
-                std::num::NonZero::new(sample_u8(ctx))
-            });
-            nzs.push(nz);
-        }
-        let buf_len = sample_usize_in(ctx, 0..=16);
-        let bytes = sample_bytes_vec(ctx, buf_len);
-        let tail = match sample_usize_in(ctx, 0..3) {
-            0 => sample_u32(ctx),
-            1 => sample_u32(ctx).wrapping_add(1),
-            _ => 0,
-        };
-        (chars, nzs, bytes, tail)
-    }
-
-    #[test]
-    fn replay_reproduces_composite_generator_bit_exact() {
-        for seed in [1u64, 42, 0xDEAD_BEEF, 0xFEED_FACE] {
-            let (expected, seq) = RecordingSession::new(seed).run(composite_case);
-            let replayed = ReplaySession::new(seq)
-                .run(composite_case)
-                .expect("replay of same generator must succeed");
-            assert_eq!(replayed, expected, "seed {seed:#x}");
-        }
-    }
-
-    /// Composite generator that mixes the boundary helper's draw
-    /// shapes: a degenerate ratio (no bytes), a one-element boundary
-    /// (no bytes past the ratio), and a non-degenerate ratio over a
-    /// multi-element boundary (two draws), interleaved with a plain
-    /// draw. A strict replay must reproduce the shape bit-exactly.
-    fn boundary_mix_case(ctx: &mut TestCaseContext) -> (u32, u32, u32) {
-        let a = sample_with_boundaries(ctx, &[7, 8], Ratio::new(2, 2), sample_u32);
-        let b = sample_with_boundaries(ctx, &[0], Ratio::one_nth(10), sample_u32);
-        let c = sample_with_boundaries(ctx, &[u32::MAX, 0], Ratio::one_nth(2), sample_u32);
-        (a, b, c)
-    }
-
-    #[test]
-    fn replay_reproduces_boundary_mix_generator_bit_exact() {
-        for seed in [1u64, 42, 0xDEAD_BEEF] {
-            let (expected, seq) = RecordingSession::new(seed).run(boundary_mix_case);
-            let replayed = ReplaySession::new(seq)
-                .run(boundary_mix_case)
-                .expect("replay of same generator must succeed");
-            assert_eq!(replayed, expected, "seed {seed:#x}");
-        }
-    }
-
-    #[test]
-    fn replay_stops_generator_on_first_structural_mismatch() {
-        // Record two 1-byte draws, then replay a generator that first
-        // consumes one then asks for a 4-byte draw against the second
-        // recorded 1-byte draw. `DrawLengthMismatch` must fire AND the
-        // "unreachable" flag must stay false, proving the generator
-        // body did not continue past the mismatch.
-        let (_, seq) = RecordingSession::new(1).run(|ctx| {
-            let _ = sample_u8(ctx);
-            let _ = sample_u8(ctx);
-        });
-        let flag = std::cell::Cell::new(false);
-        let result = ReplaySession::new(seq).run(|ctx| {
-            let _ = sample_u8(ctx); // matches first recorded draw
-            let _ = sample_u32(ctx); // 4 bytes vs recorded 1 → mismatch
-            flag.set(true); // must not run
-        });
-        assert!(
-            matches!(
-                result,
-                Err(ReplayError::DrawLengthMismatch {
-                    expected: 1,
-                    actual: 4,
-                })
-            ),
-            "unexpected replay result: {result:?}"
-        );
-        assert!(!flag.get(), "generator continued past replay mismatch");
-    }
-
-    #[test]
-    fn replay_after_sample_bytes_vec_matches_bytes() {
-        // sample_bytes_vec issues a single TestCaseContext::fill of arbitrary length —
-        // the recorded draw's length must match at replay time.
-        let (recorded, seq) = RecordingSession::new(7).run(|ctx| sample_bytes_vec(ctx, 100));
-        let replayed = ReplaySession::new(seq)
-            .run(|ctx| sample_bytes_vec(ctx, 100))
-            .expect("same-length replay must succeed");
-        assert_eq!(replayed, recorded);
-    }
-
-    #[test]
-    fn recorded_composite_case_matches_plain_prng() {
-        // Recording must not shift the byte stream: the composite case
-        // recorded from a given seed must equal the same closure run
-        // against a plain TestCaseContext::new(seed).
-        let seed = 0xABCD_1234u64;
-        let (recorded_value, _seq) = RecordingSession::new(seed).run(composite_case);
-        let mut prng = TestCaseContext::new(seed);
-        let plain_value = composite_case(&mut prng);
-        assert_eq!(recorded_value, plain_value);
-    }
-
-    #[test]
-    fn empty_sequence_replay_succeeds_when_generator_draws_nothing() {
-        let seq = ChoiceSequence::default();
-        let result = ReplaySession::new(seq).run(|_ctx| 7u32);
-        assert_eq!(result, Ok(7));
-    }
-
     // === sample_with_rejection basic behavior ===
 
     #[test]
@@ -2569,143 +2380,5 @@ mod tests {
         });
         assert_eq!(v, 3);
         assert_eq!(counter.get(), 4);
-    }
-
-    #[test]
-    fn sample_with_rejection_records_nested_spans_in_recording_mode() {
-        let (v, seq): ((u8, u8), _) = RecordingSession::new(1).run(|ctx| {
-            sample_with_rejection(ctx, 8, |ctx| {
-                let x = sample_u8(ctx);
-                let y = sample_with_rejection(ctx, 8, |ctx| Some(sample_u8(ctx)));
-                Some((x, y))
-            })
-        });
-        assert_eq!(v.0, seq.draws()[0][0]);
-        assert_eq!(v.1, seq.draws()[1][0]);
-        // Two spans total: outer accepted, inner accepted; inner's parent is outer.
-        assert_eq!(seq.spans().len(), 2);
-        assert_eq!(seq.spans()[0].parent, None);
-        assert_eq!(seq.spans()[0].verdict, AttemptVerdict::Accepted);
-        assert_eq!(seq.spans()[1].parent, Some(0));
-        assert_eq!(seq.spans()[1].verdict, AttemptVerdict::Accepted);
-    }
-
-    #[test]
-    fn sample_with_rejection_records_rejected_spans_in_recording_mode() {
-        let (v, seq) = RecordingSession::new(2).run(|ctx| {
-            let counter = std::cell::Cell::new(0);
-            sample_with_rejection(ctx, 8, |_ctx| {
-                let n = counter.get();
-                counter.set(n + 1);
-                if n < 2 { None } else { Some(n as u32) }
-            })
-        });
-        assert_eq!(v, 2);
-        // 3 spans: reject, reject, accept.
-        assert_eq!(seq.spans().len(), 3);
-        assert_eq!(seq.spans()[0].verdict, AttemptVerdict::Rejected);
-        assert_eq!(seq.spans()[1].verdict, AttemptVerdict::Rejected);
-        assert_eq!(seq.spans()[2].verdict, AttemptVerdict::Accepted);
-        assert!(seq.spans().iter().all(|s| s.parent.is_none()));
-    }
-
-    #[test]
-    fn sample_with_rejection_allows_drawless_rejected_attempts() {
-        // A pure predicate over external state — no draws.
-        let (v, seq) = RecordingSession::new(1).run(|ctx| {
-            let counter = std::cell::Cell::new(0);
-            sample_with_rejection(ctx, 4, |_ctx| {
-                let n = counter.get();
-                counter.set(n + 1);
-                if n < 2 { None } else { Some(n as u32) }
-            })
-        });
-        assert_eq!(v, 2);
-        assert_eq!(seq.spans().len(), 3);
-        for span in seq.spans() {
-            assert_eq!(span.start_draw, span.end_draw); // no draws consumed
-        }
-        assert!(seq.draws().is_empty());
-    }
-
-    #[test]
-    fn sample_with_rejection_closes_span_on_user_panic() {
-        // A user panic inside the attempt must not leave the recorded
-        // span at AttemptVerdict::Pending (the ChoiceSequence contract
-        // documents that Pending never appears in a released
-        // sequence). Catch the unwind here, inspect the sequence, and
-        // assert every recorded span is closed.
-        let mut ctx = TestCaseContext::recording(0);
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: u32 = sample_with_rejection(&mut ctx, 8, |_ctx| {
-                panic!("user panic inside attempt");
-            });
-        }));
-        assert!(outcome.is_err(), "user panic must propagate out");
-        let seq = ctx
-            .take_sequence()
-            .expect("recording mode yields a sequence");
-        assert_eq!(seq.spans().len(), 1);
-        assert_ne!(
-            seq.spans()[0].verdict,
-            AttemptVerdict::Pending,
-            "released ChoiceSequence must not carry a Pending span"
-        );
-    }
-
-    #[test]
-    fn exploratory_draw_cap_reject_location_points_at_caller() {
-        // In exploratory replay mode with an empty recorded sequence,
-        // every sample_* call hits the tail-generation rule and counts
-        // against the per-case cap (MAX_CHOICES_PER_CASE). Overshoot
-        // the cap and verify the recorded reject location points at
-        // the primitive's caller (this test file), not inside noprop's
-        // own rng.rs internals — the #[track_caller] chain from
-        // raw_bytes -> fill -> within_generated_draw_cap makes
-        // Location::caller() resolve to the user site.
-        let mut ctx = TestCaseContext::exploring(ChoiceSequence::default(), 0);
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            for _ in 0..8192 {
-                let _ = sample_u32(&mut ctx);
-            }
-        }));
-        assert!(outcome.is_err(), "exploratory cap must fire and unwind");
-        let state = ctx
-            .take_rejection()
-            .expect("rejection state must have been recorded when the cap fired");
-        let file = state.location.file();
-        assert!(
-            !file.contains("rng.rs"),
-            "reject location must not point into rng.rs internals; got {file}:{}",
-            state.location.line()
-        );
-        assert!(
-            file.ends_with("generator.rs"),
-            "reject location must point at the caller in this test file; got {file}"
-        );
-    }
-
-    #[test]
-    fn sample_with_rejection_closes_span_on_reject_case_marker() {
-        // ctx.reject_case() inside the attempt unwinds via the private
-        // iteration-rejected marker. The span must still close before
-        // the unwind propagates, so no Pending span leaks into the
-        // sequence a rejected-case admission (feedback-guided mode)
-        // would then move into the corpus.
-        let mut ctx = TestCaseContext::recording(0);
-        ctx.set_inside_runner();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: u32 = sample_with_rejection(&mut ctx, 8, |ctx| ctx.reject_case());
-        }));
-        assert!(outcome.is_err(), "reject_case must propagate out");
-        let seq = ctx
-            .take_sequence()
-            .expect("recording mode yields a sequence");
-        assert_eq!(seq.spans().len(), 1);
-        assert_ne!(
-            seq.spans()[0].verdict,
-            AttemptVerdict::Pending,
-            "released ChoiceSequence must not carry a Pending span"
-        );
     }
 }

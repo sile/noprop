@@ -58,11 +58,6 @@ fn run(
         1,
     );
 
-    // Feedback: the mutant misreads the duration when both bits are
-    // set, so the bucket observes the flag distribution. This call
-    // draws no random bytes, so the generator stream is unchanged.
-    ctx.bucket("flags", flags as u64);
-
     let duration = if bb {
         crate::bb::u32(ctx)
     } else {

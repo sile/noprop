@@ -21,11 +21,6 @@ An imperative property-based testing library for Rust.
     and command loops that compare a model against a system under
     test — no separate stateful framework or dependent-generation
     syntax for the harder cases.
-- Guided sampling for hard-to-reach states
-  - Feedback-guided search steers sampling toward the semantic states
-    the property reports as interesting — deep protocol phases,
-    hard-to-hit branches, long command sequences a uniform run would
-    only find by chance.
 
 Quick start
 -----------
@@ -46,8 +41,8 @@ fn addition_is_commutative() -> noprop::TestResult {
 The seed is caller-supplied, so a failure is reproducible: rerunning
 with the seed from the failure report reproduces the identical case.
 See [`docs/recipes.md`](docs/recipes.md) for the seed / env-variable
-scaffolding, sampling patterns, stateful properties, feedback-guided
-search, and the failure-reproduction workflow.
+scaffolding, sampling patterns, stateful properties, coverage gates,
+and the failure-reproduction workflow.
 
 When noprop fits
 ----------------
@@ -63,11 +58,10 @@ Designing the search
 --------------------
 
 A property can only discover failures that lie within its generator's
-support. How quickly it finds them depends on the generator's distribution
-and the search policy. noprop keeps these decisions explicit: dependent
-values use ordinary Rust control flow, boundaries and branches can receive
-deliberate probability, and feedback-guided search can steer toward rare
-semantic states.
+support. How quickly it finds them depends on the generator's
+distribution. noprop keeps these decisions explicit: dependent values
+use ordinary Rust control flow, and boundaries and branches can receive
+deliberate probability.
 
 Start from the property and its semantic input domain. Make every relevant
 behavior reachable, then bias boundaries and operation sequences that would
@@ -91,12 +85,8 @@ left.extend_from_slice(&right);
 assert_eq!(left, input);
 ```
 
-Use `Runner::run` as the baseline. Adjust boundary probabilities and command
-weights before increasing the case budget. Switch to
-`Runner::run_feedback_guided` only when the failure lies behind rare semantic
-progress and the property can report stable, low-cardinality events, buckets,
-or transitions. Feedback can steer within a generator's support; it cannot
-make an unreachable value reachable.
+Adjust boundary probabilities and command weights before increasing the
+case budget.
 
 Main constraints
 ----------------
@@ -119,7 +109,7 @@ Documentation
 - **[Recipes](docs/recipes.md)** — task-oriented recipes for common
   property shapes: seed / run scaffolding, sampling primitives and
   collections, rejection scopes, dependent generators, stateful
-  properties, feedback-guided search, and reproducing a failing seed.
+  properties, coverage gates, and reproducing a failing seed.
 - **[Generator design](docs/generator-design.md)** — the small design
   decisions every `sample_*` generator has to make (support,
   distribution, termination, rejection scope, valid-by-construction).
@@ -127,13 +117,10 @@ Documentation
   for writing `sample_*` helpers: composing primitives, bounded
   rejection, `NonZero` recipes, and the finite-by-default float
   samplers.
-- **[Feedback-guided search design](docs/feedback-guided-search.md)** —
-  the design of `Runner::run_feedback_guided`, the corpus admission
-  and eviction rules, and how the feature registry is bounded.
 - **[API reference](https://docs.rs/noprop)** — every function and
   type on docs.rs.
 
-The four Markdown guides above also render as `docs::*` modules on docs.rs,
+The three Markdown guides above also render as `docs::*` modules on docs.rs,
 alongside the API rustdoc.
 
 Runnable examples
@@ -150,10 +137,6 @@ demos of the larger recipes (each runs with `cargo run --example
   collections and boundary values
 - [`stateful.rs`](examples/stateful.rs) — model-based (stateful)
   property testing of an LRU cache with a bounded command loop
-- [`feedback_guided.rs`](examples/feedback_guided.rs) — steering the
-  search toward interesting inputs (long log lines that exercise
-  truncation) with `event` and `bucket` (`transition` is demoed by
-  `stateful.rs` where a real (from, to) state change is available)
 - [`rejection.rs`](examples/rejection.rs) — `sample_with_rejection`
   for constrained draws and `reject_case` for whole-case
   preconditions, parsing `key=value` config lines
@@ -164,10 +147,11 @@ demos of the larger recipes (each runs with `cargo run --example
 Evaluating search effectiveness
 -------------------------------
 
-The benchmark compares how many cases uniform, biased, boundary-biased,
-and feedback-guided searches need to detect known mutants across fixed seed
-cohorts. It evaluates fault-detection effectiveness rather than runtime
-throughput, and its results are specific to the included workloads.
+The benchmark compares how many cases uniform, biased, and
+boundary-biased generators need to detect known mutants across fixed
+seed cohorts. It evaluates fault-detection effectiveness rather than
+runtime throughput, and its results are specific to the included
+workloads.
 
 See [`benchmark/README.md`](benchmark/README.md) for the workloads,
 methodology, and commands.
@@ -177,8 +161,7 @@ Agent Skills
 
 An [Agent Skills](https://agentskills.io/) bundle ships with the crate.
 Install it with `gh skill install` so a supported AI agent can design
-effective search spaces, choose between uniform and feedback-guided search,
-and apply noprop's API conventions.
+effective search spaces and apply noprop's API conventions.
 
 ```bash
 gh skill install sile/noprop noprop

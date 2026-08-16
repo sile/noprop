@@ -143,10 +143,6 @@ fn run(
         } else {
             noprop::sample_usize_in(ctx, 0..1024) as u32
         };
-        // Feedback: the mutant fails when a key is inserted twice,
-        // which a small key range makes likely; the event observes
-        // duplicate insertion attempts. This call draws no random
-        // bytes, so the generator stream is unchanged.
         // 80% insert under the biased variant, 50% otherwise.
         let insert = if biased {
             noprop::sample_usize_in(ctx, 0..10) < 8
@@ -154,9 +150,6 @@ fn run(
             noprop::sample_bool(ctx)
         };
         if insert {
-            if bst.contains(key) {
-                ctx.event("duplicate_key");
-            }
             bst.insert(key, sut_mutant);
             model.insert(key, ());
         } else {
