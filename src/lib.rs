@@ -53,10 +53,12 @@
 //! ```
 //!
 //! Copy the seed into the runner (or into the env variable read by
-//! `seed_from_env_or_time`) and rerun with the same case budget and
-//! the same property closure — the run reproduces the identical
-//! failure case index. The [`examples/reproduce.rs`][reproduce] file
-//! walks through the full workflow with a deliberately failing
+//! `seed_from_env_or_time`) and rerun with the same case budget, the
+//! same property closure, and the same relevant external
+//! configuration — the run reproduces the identical failure case
+//! index. See [`Runner::run`]'s "Reproducibility" note for what stays
+//! deterministic and what does not. The [`examples/reproduce.rs`][reproduce]
+//! file walks through the full workflow with a deliberately failing
 //! property.
 //!
 //! [reproduce]: https://github.com/sile/noprop/blob/main/examples/reproduce.rs

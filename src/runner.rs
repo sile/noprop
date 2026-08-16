@@ -199,19 +199,40 @@ impl Runner {
     /// rejections are bounded — see
     /// `cases`.
     ///
-    /// # Property purity
+    /// # Property closure shape
     ///
-    /// The closure is bound as `Fn`, not `FnMut`, so it cannot capture
-    /// enclosing variables by mutable reference. Property tests are
-    /// meant to be pure functions of the `TestCaseContext`-derived input: keeping
-    /// mutation off the closure's captures makes each case
-    /// independent and each failure reproducible from the seed alone.
+    /// The closure is bound as `Fn`, not `FnMut`. This is a guardrail
+    /// against unintended cross-case state: an ordinary `&mut` capture
+    /// (a `let mut counter = 0` bound outside the closure) would let a
+    /// case silently depend on how many other cases ran first, and
+    /// that dependency is exactly what makes property failures hard to
+    /// reproduce. `Fn` does not make the closure pure — interior
+    /// mutability (`std::cell::Cell` / `std::cell::RefCell` /
+    /// atomics), I/O, and other side effects are still possible — it
+    /// just makes the escape from independence a deliberate choice
+    /// rather than an accident.
     ///
-    /// If a test genuinely needs shared state (a debug counter, a
-    /// cache, a report sink), reach for interior mutability
-    /// (`std::cell::Cell` / `std::cell::RefCell` / atomics) so the
-    /// escape from purity is spelled out in the code rather than
-    /// hidden behind an unassuming `let mut`.
+    /// Reach for interior mutability when a cross-case observation is
+    /// genuinely part of the test (a coverage gate over multiple
+    /// cases, a debug counter, a captured sample of failing inputs);
+    /// see the [coverage-gate recipe][gate] for the standard shape. A
+    /// per-case temporary is not that: keep it in a plain `let mut`
+    /// inside the closure.
+    ///
+    /// [gate]: crate::docs::recipes
+    ///
+    /// # Reproducibility
+    ///
+    /// Given the same seed, the same case budget, the same property
+    /// closure, and the same relevant external configuration (env
+    /// vars a `sample_*` call reads, files a helper opens, and so
+    /// on), a run reproduces the identical case index and the same
+    /// failure. The seed alone is not a guarantee — a closure that
+    /// reads the clock, the process ID, or a network response will
+    /// still vary between runs; noprop can only make the parts it
+    /// controls (its PRNG and case scheduling) deterministic. See
+    /// [`RunError`](crate::RunError) for the full failure-reproduction
+    /// workflow.
     pub fn run<F>(&mut self, cases: usize, f: F) -> RunResult
     where
         F: Fn(&mut TestCaseContext) -> TestResult,
