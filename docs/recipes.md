@@ -20,6 +20,7 @@ signatures.
 ## Contents
 
 - [Run a property with a seed](#run-a-property-with-a-seed)
+- [Adjust case budget for a campaign run](#adjust-case-budget-for-a-campaign-run)
 - [Sample primitives, ranges, and strings](#sample-primitives-ranges-and-strings)
 - [Build `Vec`, `Option`, maps, and sets](#build-vec-option-maps-and-sets)
 - [Pick between enum variants and weight the choice](#pick-between-enum-variants-and-weight-the-choice)
@@ -78,6 +79,145 @@ rejection cap.
 [`Runner::run`](crate::Runner::run),
 [`seed_from_env_or_time`](crate::seed_from_env_or_time),
 [`examples/basics.rs`](https://github.com/sile/noprop/blob/main/examples/basics.rs).
+
+## Adjust case budget for a campaign run
+
+**Goal.** Let each property keep its own default case budget for
+normal `cargo test`, and give an occasional wide-search campaign
+(nightly run, weekly nightly, hand-triggered exploration) a single
+knob to raise every property's budget at once — without inventing
+a crate-wide helper that would suggest one budget fits every
+property.
+
+**Uses.** [`Runner::run`](crate::Runner::run), a project-local env
+parser, and per-property `const` defaults. noprop itself never
+reads the process environment for the case budget; the helper below
+lives in the consuming project's test harness.
+
+```rust
+use std::env;
+
+/// Read a project-specific env var and return the case budget it
+/// asks for, or fall back to the property's own default.
+///
+/// Behavior by input:
+/// - variable unset  → `default`
+/// - positive `usize` → that value
+/// - `0`, negative, or non-integer → immediate `panic!` with the
+///   raw text, so a mistyped `MYAPP_CASES=hello` fails at the
+///   start of the run instead of silently reverting to `default`.
+fn case_budget(var: &str, default: usize) -> usize {
+    let Some(raw) = env::var_os(var) else {
+        return default;
+    };
+    let s = raw
+        .to_str()
+        .unwrap_or_else(|| panic!("{var}: value is not valid UTF-8"));
+    let value: usize = s
+        .parse()
+        .unwrap_or_else(|e| panic!("{var}={s:?} is not a non-negative integer: {e}"));
+    assert!(
+        value > 0,
+        "{var}=0 is not accepted: unset {var} or pick a positive case budget"
+    );
+    value
+}
+
+/// Baseline budget for a cheap scalar property. Deliberately small
+/// so a normal `cargo test` stays fast; a campaign raises this via
+/// `MYAPP_CASES` without touching the source.
+const CHEAP_CASES: usize = 16;
+
+# fn body() -> noprop::TestResult {
+noprop::Runner::new(0xDEAD_BEEF)
+    .run(case_budget("MYAPP_CASES", CHEAP_CASES), |ctx| {
+        let a = noprop::sample_u32(ctx);
+        let b = noprop::sample_u32(ctx);
+        assert_eq!(a.wrapping_add(b), b.wrapping_add(a));
+        Ok(())
+    })?;
+# Ok(())
+# }
+# body().unwrap();
+```
+
+A stateful property whose one case runs a bounded command loop
+against a model costs orders of magnitude more per case than the
+cheap scalar above. Keep that property's own `const` at, say, 128 so
+a normal `cargo test` still finishes, and let the same campaign env
+raise it:
+
+```text
+const STATEFUL_CASES: usize = 128;
+
+noprop::Runner::new(seed)
+    .run(case_budget("MYAPP_CASES", STATEFUL_CASES), |ctx| { /* ... */ })?;
+```
+
+Both properties read the same `MYAPP_CASES`; unset, each uses its
+own default. `MYAPP_CASES=10000 cargo test` raises both to 10 000.
+The per-property scale stays intact while one campaign knob
+multiplies everything at once.
+
+**Notes.**
+
+*Reach for this recipe only when a campaign exists.* Do not wire
+`case_budget(...)` into a property just because the pattern is
+documented. Each property's `const` default is its contract with a
+normal `cargo test` — keep it there until an actual wide-search
+campaign (nightly, weekly, hand-triggered) needs a per-run
+override. If a property is *always* under-budgeted for normal
+runs, raise its `const` and commit that; do not paper over it with
+a default env value the whole team is expected to set. And do not
+fan out into per-property env vars (`MYAPP_STATEFUL_CASES`,
+`MYAPP_QUICK_CASES`, …) — the point of the pattern is one env var
+multiplying every property, so the per-property scale stays as the
+`const`s. Raising only one property's budget is a `const` bump,
+not a new env var.
+
+*The env var name is a placeholder.* Pick a name that fits the
+consuming project (`MYAPP_CASES` here matches the `MYAPP_SEED`
+placeholder used by "Run a property with a seed" above). The
+minimum, the maximum, and how CI sets it are the project's call,
+not noprop's.
+
+*A crate-wide `cases_from_env` is deliberately not provided.* The
+right case budget depends on how large a property's search space
+is and how expensive one of its cases is — both are per-property
+judgments. A crate helper would push the shape "one number fits
+everything", which is exactly what the per-property `const`
+defaults are set up to avoid. [`seed_from_env_or_time`](crate::seed_from_env_or_time)
+is in the crate because the failure report prints the seed as
+`{:#018x}` hex for direct copy-paste reuse — that reproduction
+path is a first-class contract. There is no equivalent reproduction
+path for the case budget: the failure hint already prints the
+run's original `N` in the `reproduce with:` line, and reading the
+budget from an env var would set up a drift between "whatever the
+hint printed" and "whatever the env is when the reproducer runs
+it."
+
+*Fix the generator before raising the budget.* A property that
+misses its target with probability `(1 - p)^N` shrinks by only `p`
+in the exponent per extra case; a small `p` needs many more cases
+to compensate. When a coverage gate or an assertion asks for more
+cases, first walk through the checks in the "Assert a coverage
+gate after the run" recipe: is the target class in support at all,
+is it a first-class branch, does it have an explicit weight or
+[`Ratio`](crate::Ratio)? Raising `N` is the last lever, not the
+first.
+
+*Reproduction reads the hint, not the env.* When a failure fires
+mid-campaign, take the case budget from the `reproduce with:` line
+of the failure report and pass it explicitly, not from the current
+env value. The hint records what the failing run actually used; the
+env value can change between then and now.
+
+**See also.** The "Run a property with a seed" recipe (env-controlled
+seed via [`seed_from_env_or_time`](crate::seed_from_env_or_time),
+same `MYAPP_*` placeholder convention), the "Reproduce a failing
+seed" recipe (why the hint's `N` is authoritative for reproduction),
+the "Assert a coverage gate after the run" recipe (the "first fix
+the generator, then raise `N`" decision order).
 
 ## Sample primitives, ranges, and strings
 
