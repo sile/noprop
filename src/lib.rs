@@ -40,20 +40,6 @@
 //! Pick a project-specific variable name — the hex seed printed by a
 //! failure report can be pasted into it verbatim.
 //!
-//! # Choosing a runner
-//!
-//! - [`Runner::run`] samples inputs uniformly. This is the default;
-//!   use it unless a property has a rare region that uniform sampling
-//!   would only reach by luck.
-//! - [`Runner::run_feedback_guided`] steers the search toward inputs
-//!   that report new semantic features via
-//!   [`TestCaseContext::event`], [`bucket`](TestCaseContext::bucket),
-//!   and [`transition`](TestCaseContext::transition). The property
-//!   closure has the same shape as `run`, and the feedback methods are
-//!   allocation-free no-ops under `Runner::run`, so the same property
-//!   can be exercised under both entry points. The design is
-//!   documented in [`docs::feedback_guided_search`].
-//!
 //! # Reproducing a failure
 //!
 //! A property failure (panic, returned `Err`, or too-many-rejections
@@ -100,20 +86,16 @@
 //!
 //! - [`docs::recipes`] — task-oriented recipes for common property
 //!   shapes (sampling, collections, rejection scopes, stateful,
-//!   feedback-guided, reproduction).
+//!   coverage gates, reproduction).
 //! - [`docs::generator_design`] — the small design decisions every
 //!   `sample_*` generator has to make (support, distribution,
 //!   termination, rejection scope, valid-by-construction).
 //! - [`docs::generator_authoring`] — how-to guide for writing
 //!   `sample_*` helpers: composing primitives, bounded rejection,
 //!   `NonZero` recipes, and the finite-by-default float samplers.
-//! - [`docs::feedback_guided_search`] — the design of
-//!   [`Runner::run_feedback_guided`], the corpus admission and
-//!   eviction rules, and how the feature registry is bounded.
 //! - The [`examples/`][examples] directory ships runnable end-to-end
-//!   demos: `basics.rs`, `stateful.rs`, `feedback_guided.rs`,
-//!   `rejection.rs`, `reproduce.rs`. Each runs with
-//!   `cargo run --example <name>`.
+//!   demos: `basics.rs`, `stateful.rs`, `rejection.rs`, `reproduce.rs`.
+//!   Each runs with `cargo run --example <name>`.
 //!
 //! [examples]: https://github.com/sile/noprop/tree/main/examples
 #![forbid(unsafe_code)]

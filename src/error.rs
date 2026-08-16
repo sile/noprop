@@ -1,10 +1,8 @@
-//! Error and result types for [`Runner::run`](crate::Runner::run) and
-//! [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
+//! Error and result types for [`Runner::run`](crate::Runner::run).
 
 use std::panic::Location;
 
 use crate::GeneratedValue;
-use crate::rng::Feature;
 use crate::runner::Stats;
 
 /// Result alias for `#[test]` functions and property closures.
@@ -15,8 +13,7 @@ use crate::runner::Stats;
 /// env helpers — converts into the boxed error via `?`.
 pub type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Result alias for [`Runner::run`](crate::Runner::run) and
-/// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
+/// Result alias for [`Runner::run`](crate::Runner::run).
 ///
 /// Unlike [`TestResult`], the error stays type-safe: callers can
 /// inspect the seed, case index, generated-value trace, stats, and
@@ -24,17 +21,15 @@ pub type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>
 /// failure kind via [`RunError::kind`].
 pub type RunResult = std::result::Result<(), RunError>;
 
-/// Failure information from a [`Runner::run`](crate::Runner::run) or
-/// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
+/// Failure information from a [`Runner::run`](crate::Runner::run)
 /// invocation.
 ///
 /// A property failure (panic or returned `Err`) is deterministically
 /// reproducible: rerunning
-/// `noprop::Runner::new(err.seed()).run(N, |ctx| ...)` (or
-/// `.run_feedback_guided(N, |ctx| ...)` for a feedback-guided failure)
-/// with the `N` printed by the reproduce hint will hit the same
-/// failure again. The hint reuses the original case budget so the
-/// rerun also hits the same rejection cap.
+/// `noprop::Runner::new(err.seed()).run(N, |ctx| ...)` with the `N`
+/// printed by the reproduce hint will hit the same failure again. The
+/// hint reuses the original case budget so the rerun also hits the same
+/// rejection cap.
 ///
 /// A `TooManyRejections` failure — raised when
 /// [`TestCaseContext::reject_case`](crate::TestCaseContext::reject_case) fires so often that
@@ -42,16 +37,6 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// accepted cases that completed before the runner gave up as
 /// `case_index()`, so the same seed and case budget reproduce the
 /// same exit.
-///
-/// A feedback-guided failure report additionally carries the semantic
-/// features the failing case reported and a one-based candidate index.
-/// The candidate index counts every attempt — accepted, rejected, and
-/// the failing case itself — so it relates to the zero-based
-/// `case_index()` (accepted cases only) as
-/// `candidate_index = case_index + 1 + rejections before the failure`.
-/// For `TooManyRejections`, the candidate index is the ordinal of the
-/// last rejected attempt (`accepted + rejected`) and the semantic
-/// features are those of that last rejected case.
 ///
 /// `generated()` returns the sequence of values every primitive
 /// generator produced during the failing case, together with each call
@@ -64,21 +49,15 @@ pub type RunResult = std::result::Result<(), RunError>;
 /// list, so returning this from a `#[test]` function prints a
 /// self-contained failure report through the standard test harness.
 /// Both formats also print a reproduce hint reusing the original
-/// case budget. `run`'s hint prints:
+/// case budget:
 ///
 /// ```text
 /// reproduce with: noprop::Runner::new(0x...).run(N, |ctx| ...)
 /// ```
 ///
-/// while a feedback-guided failure prints:
-///
-/// ```text
-/// reproduce with: noprop::Runner::new(0x...).run_feedback_guided(N, |ctx| ...)
-/// ```
-///
-/// In each case the closure body is a placeholder: the caller
-/// substitutes the original property closure before rerunning, and the
-/// re-run size never needs to be recomputed by hand.
+/// The closure body is a placeholder: the caller substitutes the
+/// original property closure before rerunning, and the re-run size
+/// never needs to be recomputed by hand.
 pub struct RunError {
     seed: u64,
     case_index: usize,
@@ -89,40 +68,7 @@ pub struct RunError {
     cases: usize,
     kind: ErrorKind,
     generated: Vec<GeneratedValue>,
-    // Boxed to keep `RunError` small: with the corpus stats fields
-    // inline, `RunError` is exactly 128 bytes, which already triggers
-    // clippy's `result_large_err` (its threshold comparison is
-    // `>= 128`). Boxed, `RunError` is 96 bytes — and its size no longer
-    // grows when `Stats` gains fields.
-    stats: Box<Stats>,
-    /// The runner entry point that produced this failure. Switches the
-    /// reproduce hint.
-    policy: SearchPolicy,
-    /// Semantic details of the failing case (feedback-guided runs only;
-    /// `None` otherwise).
-    semantic: Option<Box<SemanticFailureReport>>,
-}
-
-/// Semantic details carried by a feedback-guided failure report.
-///
-/// Boxed so `RunError` stays small: the fields are only populated on
-/// the feedback-guided failure path, and the uniform entry point never
-/// touches them.
-struct SemanticFailureReport {
-    /// Semantic features the failing case reported.
-    features: Vec<Feature>,
-    /// The one-based index of the failing candidate across accepted
-    /// and rejected cases (the failing case itself included).
-    candidate_index: usize,
-}
-
-/// The runner entry point that produced an [`RunError`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchPolicy {
-    /// [`Runner::run`](crate::Runner::run).
-    Uniform,
-    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
-    FeedbackGuided,
+    stats: Stats,
 }
 
 /// The kind of a [`RunError`], for type-safe dispatch on the failure
@@ -174,15 +120,14 @@ impl RunError {
     /// Build a property-failure error from the recorded run stats.
     ///
     /// The case index is taken from `stats.accepted_cases`: the caller
-    /// must have recorded the progress counters (via `record_stats` /
-    /// `record_corpus_stats`) before constructing the error.
+    /// must have recorded the progress counters (via `record_stats`)
+    /// before constructing the error.
     pub(crate) fn from_panic(
         seed: u64,
         cases: usize,
         message: String,
         generated: Vec<GeneratedValue>,
         stats: Stats,
-        policy: SearchPolicy,
     ) -> Self {
         Self::new(
             seed,
@@ -191,20 +136,7 @@ impl RunError {
             ErrorKind::Panic { message },
             generated,
             stats,
-            policy,
         )
-    }
-
-    /// Attach the semantic features and candidate index of a failing
-    /// feedback-guided case. Used by
-    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided)
-    /// and the too-many-rejections exit path.
-    pub(crate) fn with_semantic(mut self, features: Vec<Feature>, candidate_index: usize) -> Self {
-        self.semantic = Some(Box::new(SemanticFailureReport {
-            features,
-            candidate_index,
-        }));
-        self
     }
 
     /// Build a too-many-rejections error from the recorded run stats.
@@ -219,7 +151,6 @@ impl RunError {
         last_reject_location: &'static Location<'static>,
         generated: Vec<GeneratedValue>,
         stats: Stats,
-        policy: SearchPolicy,
     ) -> Self {
         Self::new(
             seed,
@@ -231,7 +162,6 @@ impl RunError {
             },
             generated,
             stats,
-            policy,
         )
     }
 
@@ -242,7 +172,6 @@ impl RunError {
         kind: ErrorKind,
         generated: Vec<GeneratedValue>,
         stats: Stats,
-        policy: SearchPolicy,
     ) -> Self {
         Self {
             seed,
@@ -250,9 +179,7 @@ impl RunError {
             cases,
             kind,
             generated,
-            stats: Box::new(stats),
-            policy,
-            semantic: None,
+            stats,
         }
     }
 
@@ -265,17 +192,11 @@ impl RunError {
     /// The count of accepted iterations that completed before the
     /// failure.
     ///
-    /// - Under [`Runner::run`](crate::Runner::run), a property panic /
-    ///   returned `Err` fails within the (`case_index + 1`)th accepted
-    ///   iteration, so this is also the zero-based index of the
-    ///   failing iteration.
-    /// - Under
-    ///   [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
-    ///   the failing candidate is neither accepted nor rejected; use
-    ///   the report's candidate index (documented on the class-level
-    ///   doc) for its ordinal across accepted and rejected attempts.
-    /// - For `TooManyRejections`, this is the count of accepted cases
-    ///   that completed before the runner gave up.
+    /// Under [`Runner::run`](crate::Runner::run), a property panic /
+    /// returned `Err` fails within the (`case_index + 1`)th accepted
+    /// iteration, so this is also the zero-based index of the
+    /// failing iteration. For `TooManyRejections`, this is the count
+    /// of accepted cases that completed before the runner gave up.
     pub fn case_index(&self) -> usize {
         self.case_index
     }
@@ -289,11 +210,9 @@ impl RunError {
     /// Observability counters as of the failure. `accepted_cases`
     /// matches [`case_index`](Self::case_index) (accepted cases
     /// completed *before* the failure). `total_samples` includes
-    /// samples drawn by the failing case itself. The corpus fields
-    /// (`discovered_features` / `max_corpus_size`) do not include the
-    /// failing case's features (the failing case is not admitted).
+    /// samples drawn by the failing case itself.
     pub fn stats(&self) -> Stats {
-        *self.stats
+        self.stats
     }
 
     /// The failure kind of this error, for type-safe dispatch.
@@ -303,40 +222,18 @@ impl RunError {
     pub fn kind(&self) -> RunErrorKind {
         RunErrorKind::of(&self.kind)
     }
-
-    /// The one-based ordinal of the failing candidate across accepted
-    /// and rejected attempts, or `None` for
-    /// [`Runner::run`](crate::Runner::run) failures.
-    ///
-    /// Populated only under
-    /// [`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
-    /// where a case can be accepted, rejected, or the failing
-    /// candidate itself. See the class-level docstring for how this
-    /// relates to [`case_index`](Self::case_index) and the
-    /// `TooManyRejections` special case.
-    pub fn candidate_index(&self) -> Option<usize> {
-        self.semantic.as_ref().map(|s| s.candidate_index)
-    }
 }
 
 impl RunError {
     /// The reproduce command shared by
     /// [`Debug`](std::fmt::Debug) and [`Display`](std::fmt::Display).
     /// Reuses the original case budget so reruns hit the same
-    /// rejection cap. In feedback-guided mode the closure body
-    /// is a placeholder: the caller substitutes the original property
-    /// closure.
+    /// rejection cap.
     fn reproduce_command(&self) -> String {
-        match self.policy {
-            SearchPolicy::Uniform => format!(
-                "noprop::Runner::new({:#018x}).run({}, |ctx| ...)",
-                self.seed, self.cases
-            ),
-            SearchPolicy::FeedbackGuided => format!(
-                "noprop::Runner::new({:#018x}).run_feedback_guided({}, |ctx| ...)",
-                self.seed, self.cases
-            ),
-        }
+        format!(
+            "noprop::Runner::new({:#018x}).run({}, |ctx| ...)",
+            self.seed, self.cases
+        )
     }
 }
 
@@ -345,10 +242,6 @@ impl std::fmt::Debug for RunError {
         writeln!(f, "RunError {{")?;
         writeln!(f, "    seed: {:#018x},", self.seed)?;
         writeln!(f, "    case_index: {},", self.case_index)?;
-        if let Some(report) = &self.semantic {
-            writeln!(f, "    candidate_index: {},", report.candidate_index)?;
-        }
-        writeln!(f, "    policy: {:?},", self.policy)?;
         match &self.kind {
             ErrorKind::Panic { message } => {
                 writeln!(f, "    panic: {message:?},")?;
@@ -368,12 +261,8 @@ impl std::fmt::Debug for RunError {
         writeln!(f, "    reproduce: {},", self.reproduce_command())?;
         writeln!(
             f,
-            "    stats: {{ accepted: {}, rejected: {}, total_samples: {}, discovered_features: {}, max_corpus_size: {} }},",
-            self.stats.accepted_cases,
-            self.stats.rejected_cases,
-            self.stats.total_samples,
-            self.stats.discovered_features,
-            self.stats.max_corpus_size,
+            "    stats: {{ accepted: {}, rejected: {}, total_samples: {} }},",
+            self.stats.accepted_cases, self.stats.rejected_cases, self.stats.total_samples,
         )?;
         if self.generated.is_empty() {
             writeln!(f, "    generated: [],")?;
@@ -381,15 +270,6 @@ impl std::fmt::Debug for RunError {
             writeln!(f, "    generated: [")?;
             for entry in &self.generated {
                 writeln!(f, "        {entry:?}")?;
-            }
-            writeln!(f, "    ],")?;
-        }
-        if let Some(report) = &self.semantic
-            && !report.features.is_empty()
-        {
-            writeln!(f, "    semantic_features: [")?;
-            for feature in &report.features {
-                writeln!(f, "        {},", feature.display_repr())?;
             }
             writeln!(f, "    ],")?;
         }
@@ -425,25 +305,13 @@ impl std::fmt::Display for RunError {
         writeln!(f, "reproduce with: {}", self.reproduce_command())?;
         writeln!(
             f,
-            "stats: accepted={}, rejected={}, total_samples={}, discovered_features={}, max_corpus_size={}",
-            self.stats.accepted_cases,
-            self.stats.rejected_cases,
-            self.stats.total_samples,
-            self.stats.discovered_features,
-            self.stats.max_corpus_size,
+            "stats: accepted={}, rejected={}, total_samples={}",
+            self.stats.accepted_cases, self.stats.rejected_cases, self.stats.total_samples,
         )?;
         if !self.generated.is_empty() {
             writeln!(f, "Generated values:")?;
             for entry in &self.generated {
                 writeln!(f, "  {entry:?}")?;
-            }
-        }
-        if let Some(report) = &self.semantic
-            && !report.features.is_empty()
-        {
-            writeln!(f, "Semantic features:")?;
-            for feature in &report.features {
-                writeln!(f, "  {}", feature.display_repr())?;
             }
         }
         Ok(())

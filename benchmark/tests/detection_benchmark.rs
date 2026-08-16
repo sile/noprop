@@ -6,8 +6,7 @@
 
 use std::process::Command;
 
-/// Workload / mutant pairs registered by the harness, excluding the
-/// guard workload (which has no mutant and never detects).
+/// Workload / mutant pairs registered by the harness.
 const TASKS: &[(&str, &str)] = &[
     ("high-frequency", "fails_on_odd"),
     ("boundary", "fails_on_zero"),
@@ -20,11 +19,8 @@ const TASKS: &[(&str, &str)] = &[
     ("stateful", "fails_on_state_seven"),
 ];
 
-/// Workloads with no mutant: detection is never expected.
-const GUARD_TASKS: &[(&str, &str)] = &[("guard", "reports_unbounded_buckets")];
-
 /// Comparison variants run by `run-all`.
-const VARIANTS: &[&str] = &["uniform", "biased", "boundary-biased", "feedback-guided"];
+const VARIANTS: &[&str] = &["uniform", "biased", "boundary-biased"];
 
 fn run(args: &[&str]) -> String {
     run_with_stdin(args, None)
@@ -84,7 +80,7 @@ fn run_task(workload: &str, mutant: &str, variant: &str, seed: u64) -> String {
 /// every base run ends `not_found`.
 #[test]
 fn base_sut_completes_for_all_workloads() {
-    for (workload, mutant) in TASKS.iter().chain(GUARD_TASKS) {
+    for (workload, mutant) in TASKS {
         let line = run_task(workload, mutant, "base", 1);
         assert!(
             line.contains("\"status\":\"not_found\""),
@@ -106,45 +102,18 @@ fn mutants_are_detected_by_biased_generation() {
     }
 }
 
-/// The guard workload must never report a detection: it has no mutant.
-#[test]
-fn guard_never_detects() {
-    for (workload, mutant) in GUARD_TASKS {
-        let line = run_task(workload, mutant, "uniform", 1);
-        assert!(
-            line.contains("\"status\":\"not_found\""),
-            "guard {workload}/{mutant} must complete without detection: {line}"
-        );
-    }
-}
-
 /// Same seed and arguments must reproduce the identical raw result
 /// (the wall-clock field is timing noise and excluded), for every
 /// search variant.
 #[test]
 fn same_seed_is_deterministic() {
-    for (workload, mutant) in TASKS.iter().chain(GUARD_TASKS) {
+    for (workload, mutant) in TASKS {
         for variant in VARIANTS {
             let a = strip_wall_clock(&run_task(workload, mutant, variant, 42));
             let b = strip_wall_clock(&run_task(workload, mutant, variant, 42));
             assert_eq!(
                 a, b,
                 "{workload}/{mutant} under {variant} must be reproducible from the seed"
-            );
-        }
-    }
-}
-
-/// Every variant must complete the guard workload without aborting
-/// (a property failure would surface as `found`).
-#[test]
-fn guard_completes_under_every_variant() {
-    for (workload, mutant) in GUARD_TASKS {
-        for variant in VARIANTS {
-            let line = run_task(workload, mutant, variant, 1);
-            assert!(
-                line.contains("\"status\":\"not_found\""),
-                "guard {workload}/{mutant} under {variant} must complete: {line}"
             );
         }
     }
@@ -159,7 +128,7 @@ fn summary_regenerates_from_raw_results() {
     let groups = run_with_stdin(&["summary"], Some(&raw));
     // run-all prints one JSON line per (workload, mutant, variant, seed);
     // summary prints one line per (variant, workload, mutant) group.
-    let task_count = TASKS.len() + GUARD_TASKS.len();
+    let task_count = TASKS.len();
     let raw_lines = raw.lines().filter(|l| !l.trim().is_empty()).count();
     assert_eq!(
         raw_lines,

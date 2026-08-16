@@ -11,7 +11,6 @@ before relying on it outside the noprop repository.
 |-----|---------|
 | `Runner::new(seed: u64) -> Runner` | Construct a runner from a caller-supplied seed. |
 | `runner.run(cases, property) -> RunResult` | Run uniform sampling until `cases` accepted cases complete or a failure occurs. |
-| `runner.run_feedback_guided(cases, property) -> RunResult` | Mutate interesting recorded cases using semantic feedback. |
 | `runner.stats() -> Stats` | Return counters from the most recent run. |
 | `TestCaseContext::new(seed: u64) -> TestCaseContext` | Construct a context directly for small experiments that do not need case rejection. |
 | `seed_from_env_or_time(var: &str) -> TestResult<u64>` | Parse a seed from an environment variable or derive one from the clock when unset. |
@@ -21,17 +20,6 @@ The property has the shape
 panic fails the property. `TestResult<T = ()>` is the boxed-error alias used by
 tests and properties; `RunResult` preserves `RunError` for runner calls.
 
-## Search feedback
-
-| API | Use |
-|-----|-----|
-| `ctx.event(label: &'static str)` | Report a finite event whose per-case occurrence count is coarsely bucketed. |
-| `ctx.bucket(label: &'static str, value: u64)` | Report an already-discretized semantic state. |
-| `ctx.transition(label: &'static str, from: u64, to: u64)` | Report an abstract state transition. |
-
-These methods collect features under `run_feedback_guided` and are
-allocation-free no-ops under `run` and a directly constructed context.
-
 ## Statistics
 
 | Field | Meaning |
@@ -39,11 +27,9 @@ allocation-free no-ops under `run` and a directly constructed context.
 | `accepted_cases` | Cases completed without case rejection. This reaches the requested case budget on success. |
 | `rejected_cases` | Cases discarded directly or through exhausted bounded rejection. |
 | `total_samples` | Top-level primitive sampler calls, including calls in rejected cases. |
-| `discovered_features` | Distinct semantic features registered by a feedback-guided run. Zero under uniform runs. |
-| `max_corpus_size` | Bounded feedback corpus size reported by a feedback-guided run. Zero under uniform runs. |
 
-Treat internal feature, corpus, mutation, restart, and rejection caps as
-implementation details. Inspect the matching source when those values matter.
+Treat the internal rejection cap as an implementation detail. Inspect the
+matching source when that value matters.
 
 ## Integers and ranges
 
@@ -114,9 +100,9 @@ them.
 | `ctx.reject_case() -> !` | Reject the whole current case. |
 
 `max_attempts == 0` panics. Both case-rejection paths require a surrounding
-`Runner::run` or `Runner::run_feedback_guided`; calling `reject_case` from a
-directly constructed context panics.
+`Runner::run`; calling `reject_case` from a directly constructed context
+panics.
 
 For larger task-oriented examples, use the matching-version
-`docs::recipes`, `docs::generator_authoring`, `docs::generator_design`, and
-`docs::feedback_guided_search` modules from the crate rustdoc.
+`docs::recipes`, `docs::generator_authoring`, and `docs::generator_design`
+modules from the crate rustdoc.

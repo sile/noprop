@@ -52,18 +52,6 @@ pub(crate) struct TaskSummary {
     pub detection_times: Vec<usize>,
     /// Detection-time bucket counts (index = `bucket_of`).
     pub detection_buckets: [usize; 4],
-    /// Candidate executions-to-detection across `found` trials
-    /// (accepted + rejected + the failing case). One-based; excludes
-    /// the search warm-up cost from the cases metric by counting
-    /// every candidate.
-    pub candidate_times: Vec<usize>,
-    /// Candidate-count bucket counts (index = `bucket_of`).
-    pub candidate_buckets: [usize; 4],
-    /// Distinct observed features per trial (feedback-guided variants
-    /// only; uniform / biased report 0).
-    pub discovered_features: Vec<usize>,
-    /// Combined corpus size per trial (feedback-guided variants only).
-    pub max_corpus_sizes: Vec<usize>,
 }
 
 impl TaskSummary {
@@ -84,22 +72,6 @@ impl TaskSummary {
     pub fn quartiles(&self) -> Option<(usize, usize)> {
         quartiles_of(&self.detection_times)
     }
-
-    pub fn median_candidates(&self) -> Option<usize> {
-        median_of(&self.candidate_times)
-    }
-
-    pub fn candidate_quartiles(&self) -> Option<(usize, usize)> {
-        quartiles_of(&self.candidate_times)
-    }
-
-    pub fn median_discovered_features(&self) -> Option<usize> {
-        median_of(&self.discovered_features)
-    }
-
-    pub fn median_max_corpus_size(&self) -> Option<usize> {
-        median_of(&self.max_corpus_sizes)
-    }
 }
 
 /// Aggregate raw results keyed by (variant, workload, mutant).
@@ -115,8 +87,6 @@ pub(crate) fn accumulate(summaries: &mut Summaries, raw: &ParsedRaw) {
         ))
         .or_default();
     entry.trials += 1;
-    entry.discovered_features.push(raw.discovered_features);
-    entry.max_corpus_sizes.push(raw.max_corpus_size);
     match raw.status {
         Status::Found => {
             entry.found += 1;
@@ -126,14 +96,6 @@ pub(crate) fn accumulate(summaries: &mut Summaries, raw: &ParsedRaw) {
                 .expect("found status always carries a numeric detected_at");
             entry.detection_times.push(detected_at);
             entry.detection_buckets[bucket_of(detected_at)] += 1;
-            // Candidate executions-to-detection: the accepted cases,
-            // the rejected cases, and the failing case itself (which
-            // is neither accepted nor rejected). The run stops at the
-            // failure, so the run-end stats equal the detection-point
-            // stats.
-            let candidates = raw.accepted_cases + raw.rejected_cases + 1;
-            entry.candidate_times.push(candidates);
-            entry.candidate_buckets[bucket_of(candidates)] += 1;
         }
         Status::NotFound => entry.not_found += 1,
         Status::GaveUp => entry.gave_up += 1,
@@ -150,10 +112,6 @@ pub(crate) struct ParsedRaw {
     pub mutant: String,
     pub status: Status,
     pub detected_at: Option<usize>,
-    pub accepted_cases: usize,
-    pub rejected_cases: usize,
-    pub discovered_features: usize,
-    pub max_corpus_size: usize,
 }
 
 /// Parse one raw-result JSON line. Returns `None` for blank lines;
@@ -232,10 +190,6 @@ pub(crate) fn parse_line(line: &str) -> Result<Option<ParsedRaw>, String> {
         mutant: get_str("mutant")?,
         status,
         detected_at,
-        accepted_cases: get_u64("accepted_cases")? as usize,
-        rejected_cases: get_u64("rejected_cases")? as usize,
-        discovered_features: get_u64("discovered_features")? as usize,
-        max_corpus_size: get_u64("max_corpus_size")? as usize,
     }))
 }
 /// Read raw results from a reader (one JSON line per task) and return
@@ -272,7 +226,7 @@ mod tests {
     /// Minimal raw-result line for `parse_line` unit tests.
     fn line(status: &str, detected_at: &str) -> String {
         format!(
-            r#"{{"format_version":3,"workload":"w","mutant":"m","variant":"v","status":"{status}","detected_at":{detected_at},"accepted_cases":3,"rejected_cases":2,"discovered_features":1,"max_corpus_size":1}}"#
+            r#"{{"format_version":4,"workload":"w","mutant":"m","variant":"v","status":"{status}","detected_at":{detected_at},"accepted_cases":3,"rejected_cases":2}}"#
         )
     }
 
@@ -283,10 +237,6 @@ mod tests {
             .expect("non-blank");
         assert!(matches!(raw.status, Status::Found));
         assert_eq!(raw.detected_at, Some(7));
-        assert_eq!(raw.accepted_cases, 3);
-        assert_eq!(raw.rejected_cases, 2);
-        assert_eq!(raw.discovered_features, 1);
-        assert_eq!(raw.max_corpus_size, 1);
     }
 
     #[test]
@@ -300,7 +250,7 @@ mod tests {
 
     #[test]
     fn parse_line_rejects_wrong_format_version() {
-        let line = line("found", "7").replace("\"format_version\":3", "\"format_version\":99");
+        let line = line("found", "7").replace("\"format_version\":4", "\"format_version\":99");
         let err = parse_line(&line).expect_err("wrong format version must be rejected");
         assert!(err.contains("unsupported format_version 99"), "{err}");
     }
@@ -320,7 +270,7 @@ mod tests {
     #[test]
     fn parse_line_rejects_missing_required_fields() {
         let input =
-            r#"{"format_version":3,"workload":"w","mutant":"m","status":"found","detected_at":1}"#;
+            r#"{"format_version":4,"workload":"w","mutant":"m","status":"found","detected_at":1}"#;
         let err = parse_line(input).expect_err("missing variant must be rejected");
         assert!(err.contains("variant"), "{err}");
     }
@@ -361,10 +311,6 @@ mod tests {
             mutant: "fails_on_zero".to_string(),
             status: Status::NotFound,
             detected_at: None,
-            accepted_cases: 100,
-            rejected_cases: 0,
-            discovered_features: 0,
-            max_corpus_size: 0,
         };
         accumulate(&mut summaries, &raw);
         let entry = summaries
@@ -377,35 +323,5 @@ mod tests {
         assert_eq!(entry.trials, 1);
         assert_eq!(entry.not_found, 1);
         assert_eq!(entry.detection_times.len(), 0);
-        assert_eq!(entry.candidate_times.len(), 0);
-    }
-
-    #[test]
-    fn accumulate_counts_candidate_executions_on_found() {
-        let mut summaries = Summaries::new();
-        let raw = ParsedRaw {
-            variant: "feedback-guided".to_string(),
-            workload: "w".to_string(),
-            mutant: "m".to_string(),
-            status: Status::Found,
-            detected_at: Some(4),
-            accepted_cases: 4,
-            rejected_cases: 7,
-            discovered_features: 1,
-            max_corpus_size: 1,
-        };
-        accumulate(&mut summaries, &raw);
-        let entry = summaries
-            .get(&(
-                "feedback-guided".to_string(),
-                "w".to_string(),
-                "m".to_string(),
-            ))
-            .expect("group must exist");
-        assert_eq!(entry.found, 1);
-        // accepted + rejected + the failing case itself.
-        assert_eq!(entry.candidate_times, vec![12]);
-        assert_eq!(entry.candidate_buckets[bucket_of(12)], 1);
-        assert_eq!(entry.discovered_features, vec![1]);
     }
 }

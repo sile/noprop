@@ -63,7 +63,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
         .then(|o| o.value().parse())?;
     let variant_name: String = opt("variant")
         .ty("NAME")
-        .doc("Search variant: uniform | biased | boundary-biased | feedback-guided (or base for the ground-truth SUT)")
+        .doc("Generator variant: uniform | biased | boundary-biased (or base for the ground-truth SUT)")
         .example("uniform")
         .take(args)
         .then(|o| o.value().parse())?;
@@ -108,7 +108,7 @@ fn run_cmd(args: &mut noargs::RawArgs) -> Result<bool, Error> {
             args,
             format!(
                 "unknown variant {variant_name:?}; available: base, uniform, biased, \
-                 boundary-biased, feedback-guided"
+                 boundary-biased"
             ),
         )
     })?;
@@ -226,37 +226,16 @@ fn print_summary(summaries: &summary::Summaries) {
             .map(|(q25, q75)| format!("{q25}-{q75}"))
             .unwrap_or_else(|| "-".to_string());
         let buckets: Vec<String> = s.detection_buckets.iter().map(|v| v.to_string()).collect();
-        let candidate_median = s
-            .median_candidates()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "-".to_string());
-        let candidate_quartiles = s
-            .candidate_quartiles()
-            .map(|(q25, q75)| format!("{q25}-{q75}"))
-            .unwrap_or_else(|| "-".to_string());
-        let candidate_buckets: Vec<String> =
-            s.candidate_buckets.iter().map(|v| v.to_string()).collect();
-        let discovered = s
-            .median_discovered_features()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "-".to_string());
-        let corpus = s
-            .median_max_corpus_size()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "-".to_string());
         println!(
             "variant={variant} workload={workload} mutant={mutant} \
              trials={} found={} not_found={} gave_up={} \
              detection_rate={detection_rate:.3} median={median} quartiles={quartiles} \
-             buckets=[{}] candidate_median={candidate_median} \
-             candidate_quartiles={candidate_quartiles} candidate_buckets=[{}] \
-             discovered_features_median={discovered} max_corpus_size_median={corpus}",
+             buckets=[{}]",
             s.trials,
             s.found,
             s.not_found,
             s.gave_up,
-            buckets.join(","),
-            candidate_buckets.join(",")
+            buckets.join(",")
         );
     }
 }

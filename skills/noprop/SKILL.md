@@ -4,9 +4,9 @@ description: >
   Implement, review, debug, and explain Rust property tests that use the
   noprop crate. Use when a task names noprop, contains `noprop::` APIs or a
   Cargo dependency on noprop, or asks specifically about noprop's Runner,
-  TestCaseContext, Ratio, `sample_*`, rejection, failure reproduction, or
-  feedback-guided search. Do not activate for generic Rust property-testing
-  tasks that use another framework.
+  TestCaseContext, Ratio, `sample_*`, rejection, or failure reproduction.
+  Do not activate for generic Rust property-testing tasks that use another
+  framework.
 ---
 
 # noprop
@@ -19,7 +19,7 @@ API selection and case count come after the search space is sound.
 
 ### 1. Establish the applicable API
 
-- Treat the guidance in this skill as targeting noprop 0.1.0.
+- Treat the guidance in this skill as targeting noprop 0.2.0.
 - Inspect the target project's `Cargo.toml` and `Cargo.lock`; when it resolves
   a different version, use that version's matching rustdoc instead.
 - When changing noprop itself, treat `src/lib.rs`, the public rustdoc, and the
@@ -74,35 +74,7 @@ Treat increasing `cases` as the last tuning lever. More cases do not repair a
 support hole, an unreachable command sequence, a vacuous invariant, or a
 distribution that assigns negligible mass to the target region.
 
-### 4. Choose the search policy
-
-Use `Runner::run` by default. It provides a clear baseline and is the right
-choice when direct sampling and explicit bias can reach the important regions.
-
-Use `Runner::run_feedback_guided` only when all of these hold:
-
-- the failure requires semantic progress through a rare region;
-- ordinary generator bias would be awkward or insufficient;
-- the property can report stable, low-cardinality progress signals; and
-- mutating a previously interesting draw sequence is likely to advance the
-  property further.
-
-Do not use feedback-guided search to compensate for missing generator support:
-it cannot create values the generator cannot produce.
-
-Report semantic feedback as follows:
-
-- Use `ctx.event(label)` for finite milestones or noteworthy occurrences.
-- Use `ctx.bucket(label, bucket)` for a state value after mapping it into
-  roughly 3-10 meaningful buckets.
-- Use `ctx.transition(label, from, to)` for abstract state-machine changes.
-- Keep labels static and semantic. Do not report raw timestamps, sequence
-  numbers, byte counts, IDs, or other high-cardinality values as features.
-
-Treat feedback as a steering signal, not proof of coverage. Keep assertions
-and coverage gates independent of feature reporting.
-
-### 5. Use rejection at the narrowest scope
+### 4. Use rejection at the narrowest scope
 
 - Prefer valid-by-construction generation when a constraint can be expressed
   directly.
@@ -116,7 +88,7 @@ and coverage gates independent of feature reporting.
   broader than the intended domain.
 - Never write an unbounded retry loop.
 
-### 6. Prevent vacuous success
+### 5. Prevent vacuous success
 
 Place assertions where the relevant behavior occurs, and separately count
 whether that location was reached. After the run, fail if the count is zero.
@@ -124,19 +96,19 @@ Use `Cell`, `RefCell`, or atomics for cross-case observations because the
 property closure implements `Fn`.
 
 Count only evidence from cases that reach the intended check. Do not treat
-attempt count, feedback registration, or rejected cases as proof that the
-invariant ran. Do not reject a case after recording coverage evidence; a later
-rejection would let a discarded case inflate the gate.
+attempt count or rejected cases as proof that the invariant ran. Do not
+reject a case after recording coverage evidence; a later rejection would let
+a discarded case inflate the gate.
 
-### 7. Validate the exploration strategy
+### 6. Validate the exploration strategy
 
 - Confirm that every intended equivalence class and boundary is in the
   generator support.
 - Confirm that all loops, recursive generators, and run-to-quiescence phases
   have explicit bounds.
-- Inspect `runner.stats()` when rejection or feedback behavior matters.
+- Inspect `runner.stats()` when rejection behavior matters.
 - Evaluate search changes across several fixed seeds and realistic case
-  budgets. Do not judge a distribution or feedback design from one lucky run.
+  budgets. Do not judge a distribution from one lucky run.
 - When practical, inject or retain a known defect and verify that the property
   detects it reliably. A property that only passes is not evidence that its
   exploration strategy is effective.

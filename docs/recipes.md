@@ -33,7 +33,6 @@ signatures.
 - [Bounded run-to-quiescence](#bounded-run-to-quiescence)
 - [Cross-step invariant with append-only history](#cross-step-invariant-with-append-only-history)
 - [Stateful streaming API driven by a command loop](#stateful-streaming-api-driven-by-a-command-loop)
-- [Steer the search with feedback](#steer-the-search-with-feedback)
 - [Assert a coverage gate after the run](#assert-a-coverage-gate-after-the-run)
 - [Reproduce a failing seed](#reproduce-a-failing-seed)
 - [Turn a trace into a hand-written regression test](#turn-a-trace-into-a-hand-written-regression-test)
@@ -372,11 +371,10 @@ for _ in 0..steps {
 ```
 
 **Notes.** Any recursion or loop needs a decreasing budget: `Runner::run`
-does not enforce a per-case draw cap (the `MAX_CHOICES_PER_CASE` cap
-only applies to exploratory replay under `run_feedback_guided`), so a
-hostile choice sequence could otherwise keep the case running without
-termination. The `for _ in 0..n` shape is enough for a command
-sequence; a `while` loop needs an explicit maximum step count.
+does not enforce a per-case draw cap, so a hostile choice sequence could
+otherwise keep the case running without termination. The `for _ in 0..n`
+shape is enough for a command sequence; a `while` loop needs an explicit
+maximum step count.
 
 **See also.** [`sample_usize_in`](crate::sample_usize_in),
 [`sample_bool`](crate::sample_bool).
@@ -432,10 +430,9 @@ covers the trade-off.
 **Goal.** Drive a model and a system-under-test with the same command
 sequence, comparing them at every step.
 
-**Uses.** [`Runner::run`](crate::Runner::run) or
-[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
-plus [`sample_usize_in`](crate::sample_usize_in) and the primitives
-the commands need.
+**Uses.** [`Runner::run`](crate::Runner::run), plus
+[`sample_usize_in`](crate::sample_usize_in) and the primitives the
+commands need.
 
 ```rust
 # use noprop::TestCaseContext;
@@ -771,53 +768,6 @@ run-to-quiescence" recipe (bounding a settling protocol), the
 "Cross-step invariant with append-only history" recipe (recipes
 that keep per-step state alongside the SUT).
 
-## Steer the search with feedback
-
-**Goal.** Concentrate sampling on inputs that reach a semantic region
-of interest, rather than sampling uniformly.
-
-**Uses.**
-[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
-[`TestCaseContext::event`](crate::TestCaseContext::event),
-[`TestCaseContext::bucket`](crate::TestCaseContext::bucket),
-[`TestCaseContext::transition`](crate::TestCaseContext::transition).
-
-```rust
-# fn body() -> noprop::TestResult {
-noprop::Runner::new(0xC0FFEE).run_feedback_guided(64, |ctx| {
-    let len = noprop::sample_usize_in(ctx, 0..=24);
-    let _line = noprop::sample_string(ctx, len);
-    // Report a finite occurrence: the search will steer toward the
-    // input region that reaches it.
-    if len > 12 {
-        ctx.event("long-line");
-    }
-    // Report a state value pre-bucketed by the caller: a raw value
-    // that never repeats would defeat the corpus.
-    ctx.bucket("len-bucket", (len / 4) as u64);
-    // Report an abstract state change: the (from, to) pair is part of
-    // the feature identity.
-    ctx.transition("ingest", 0, (len % 3) as u64);
-    Ok(())
-})?;
-# Ok(())
-# }
-# body().unwrap();
-```
-
-**Notes.** Feedback is not mandatory — a case that reports no feature
-is simply not interesting, and the run continues. Bucket *before*
-reporting; a raw value that differs every case (a timestamp, a random
-byte count) makes every case novel and defeats the corpus. The
-[`docs::feedback_guided_search`](crate::docs::feedback_guided_search)
-design doc explains the corpus admission and eviction rules.
-
-**See also.** The "Assert a coverage gate after the run" recipe below
-(force a run to fail when the steered region was never reached),
-[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
-[`docs::feedback_guided_search`](crate::docs::feedback_guided_search),
-[`examples/feedback_guided.rs`](https://github.com/sile/noprop/blob/main/examples/feedback_guided.rs).
-
 ## Assert a coverage gate after the run
 
 **Goal.** Force at least one case to exercise the invariant (or the
@@ -877,10 +827,7 @@ specific shape (a non-empty container, a committed entry, a fully
 consumed buffer) can pass vacuously — every case may end before the
 shape appears, and the invariant is never actually checked. Gate the
 invariant with a counter that increments only where the invariant
-runs, and turn a zero count into a run-after failure. The mechanism is
-orthogonal to the search policy: it works the same under
-[`Runner::run`](crate::Runner::run) and
-[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided).
+runs, and turn a zero count into a run-after failure.
 
 Count only the accepted cases — the counter must increment where the
 invariant actually runs, and the assertion should compare that count
@@ -891,11 +838,7 @@ may discard cases mid-run; a rejected case that ended before the
 invariant fired must not contribute to "the region was reached"
 evidence.
 
-The same counter + run-after assert plugs into
-[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided) as
-well: increment inside the same branch that calls `ctx.event(...)` so
-the assert confirms the steered region was actually reached. When the
-region is rare and the seed comes from
+When the region is rare and the seed comes from
 [`seed_from_env_or_time`](crate::seed_from_env_or_time), the region
 may be reached under most seeds but not the one this run drew, and
 the gate becomes a flake — gate only on regions the *generator* can
@@ -903,11 +846,7 @@ reach reliably (build the generator so the region is inside its
 support).
 
 **See also.** The "Model-based (stateful) property" recipe (the
-gated invariant is the same pop-mismatch check as its main example),
-the "Steer the search with feedback" recipe (feedback-guided use of
-the same gate mechanism),
-[`Runner::run_feedback_guided`](crate::Runner::run_feedback_guided),
-[`examples/feedback_guided.rs`](https://github.com/sile/noprop/blob/main/examples/feedback_guided.rs).
+gated invariant is the same pop-mismatch check as its main example).
 
 ## Reproduce a failing seed
 
@@ -924,7 +863,7 @@ The failure report prints, on both `Debug` and `Display`:
 ```text
 noprop failure at case 3 (seed=0x00ff00ff00ff00ff): high bit set: 0xe268430a
 reproduce with: noprop::Runner::new(0x00ff00ff00ff00ff).run(64, |ctx| ...)
-stats: accepted=3, rejected=0, total_samples=4, discovered_features=0, max_corpus_size=0
+stats: accepted=3, rejected=0, total_samples=4
 Generated values:
   - u32 = 3798483722  (at examples/reproduce.rs:17)
 ```
@@ -935,9 +874,6 @@ Recovery is manual and mechanical:
 2. Rerun the property with `Runner::new(<seed>)` and the *same* case
    budget printed in the hint. The rerun hits the same case index, so
    the failure surfaces again.
-3. Under `run_feedback_guided`, the same seed replays the exact
-   sequence of accepted, rejected, and mutated candidates — the
-   candidate index in the report identifies which one failed.
 
 **Notes.** The rerun budget must match the original: a smaller budget
 can shrink the rejection cap and turn the same failure into

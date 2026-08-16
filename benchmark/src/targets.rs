@@ -6,7 +6,6 @@ mod boundary;
 mod bst;
 mod combination;
 mod dependent;
-mod guard;
 mod high_frequency;
 mod stateful;
 mod stepping;
@@ -51,7 +50,6 @@ pub(crate) const WORKLOADS: &[Workload] = &[
     bst::WORKLOAD,
     stepping::WORKLOAD,
     stateful::WORKLOAD,
-    guard::WORKLOAD,
 ];
 
 /// Observation sink for workload-specific measurements.
