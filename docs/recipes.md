@@ -848,64 +848,192 @@ loops" section of
 ## Stateful streaming API driven by a command loop
 
 **Goal.** Test a streaming API — one that does not have a single
-"correct model" to compare against, but that accumulates side-effects
-in a buffer — by driving it with a random command loop and asserting
-the invariant on the final output alone.
+"correct model" to compare against, but that buffers writes and
+emits committed output only at flush boundaries — by driving it
+with a random command loop. Assert either the final round-trip
+after `finish` (when only the eventual output shape matters), or
+a *cumulative* invariant at each flush boundary (when flush is a
+public contract of the SUT and per-boundary drift would otherwise
+hide behind the final compare).
 
-**Uses.** A random command loop for the streaming interface
-(feed / flush / reset-style calls), a single terminator call once the
-loop ends, and one assert on the accumulated output.
+**Uses.** A random command loop over feed / flush, a single
+`finish` outside the loop, a cumulative model of the bytes fed so
+far, and (for the cumulative variant) a coverage gate — a
+[`Cell<usize>`](std::cell::Cell) plus a case-internal `bool`
+flag — that fails the run if no case ever reached a meaningful
+flush boundary.
+
+Both examples below share the same toy SUT. `BufferedSink` holds
+writes in `pending`, moves them into `emitted` on `flush()`, and
+`observed()` returns the running total of *committed* bytes. A
+`flush()` with nothing pending is a no-op — no bytes move, no
+delta is added — which is the shape a real streaming API must
+tolerate on consecutive flushes.
 
 ```rust
-# fn body() -> noprop::TestResult {
-noprop::Runner::new(0).run(64, |ctx| {
-    // Streaming SUT: an append-only byte buffer. Loop over random
-    // Feed / Flush commands, then finalise once outside the loop.
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut fed: Vec<u8> = Vec::new();
+use std::cell::Cell;
 
+#[derive(Default)]
+struct BufferedSink {
+    pending: Vec<u8>,
+    emitted: Vec<u8>,
+}
+
+impl BufferedSink {
+    fn feed(&mut self, bytes: &[u8]) {
+        self.pending.extend_from_slice(bytes);
+    }
+    fn flush(&mut self) {
+        // Move pending → emitted, leaving pending empty. A second
+        // flush with nothing pending moves zero bytes.
+        self.emitted.append(&mut self.pending);
+    }
+    fn observed(&self) -> &[u8] {
+        &self.emitted
+    }
+    fn finish(mut self) -> Vec<u8> {
+        self.flush();
+        self.emitted
+    }
+}
+
+# fn body() -> noprop::TestResult {
+// === Final-only variant ===
+//
+// Only the round-trip after finish() is checked. Reach for this
+// when flush is not part of the SUT's public contract (a plain
+// Write-wrapping buffer that only guarantees byte order at drop)
+// or when only the eventual output shape matters.
+noprop::Runner::new(0).run(64, |ctx| {
+    let mut sink = BufferedSink::default();
+    let mut fed: Vec<u8> = Vec::new();
     let steps = noprop::sample_usize_in(ctx, 0..=8);
     for _ in 0..steps {
         match noprop::sample_usize_in(ctx, 0..2) {
             0 => {
-                // Feed: append some random bytes.
                 let n = noprop::sample_usize_in(ctx, 0..=4);
                 let bytes = noprop::sample_bytes_vec(ctx, n);
                 fed.extend_from_slice(&bytes);
-                buffer.extend_from_slice(&bytes);
+                sink.feed(&bytes);
+            }
+            _ => sink.flush(),
+        }
+    }
+    let output = sink.finish();
+    assert_eq!(output, fed, "final round-trip mismatch");
+    Ok(())
+})?;
+
+// === Cumulative variant ===
+//
+// Compare observed() against fed at every flush, and gate the run
+// on at least one case actually reaching a flush that committed a
+// non-empty delta. A naive "delta of observed matches delta of
+// fed" check would silently pass on empty consecutive flushes;
+// comparing the running totals absorbs those cases correctly, and
+// the gate keeps the run from passing trivially when no flush
+// ever moved bytes.
+let meaningful: Cell<usize> = Cell::new(0);
+let mut runner = noprop::Runner::new(0);
+runner.run(64, |ctx| {
+    let mut sink = BufferedSink::default();
+    let mut fed: Vec<u8> = Vec::new();
+    let mut saw_meaningful_flush = false;
+    let steps = noprop::sample_usize_in(ctx, 0..=8);
+    for _ in 0..steps {
+        match noprop::sample_usize_in(ctx, 0..2) {
+            0 => {
+                let n = noprop::sample_usize_in(ctx, 0..=4);
+                let bytes = noprop::sample_bytes_vec(ctx, n);
+                fed.extend_from_slice(&bytes);
+                sink.feed(&bytes);
             }
             _ => {
-                // Flush: no-op here, but a real streaming API might
-                // emit a boundary marker or reset internal buffering.
+                let before = sink.observed().len();
+                sink.flush();
+                let added = sink.observed().len() - before;
+                // Cumulative compare at every flush, including
+                // consecutive no-op flushes (added == 0 and the
+                // running totals trivially agree). The gate only
+                // records the case when a flush moved bytes.
+                assert_eq!(
+                    sink.observed(),
+                    fed.as_slice(),
+                    "cumulative flush mismatch (delta={added})",
+                );
+                if added > 0 {
+                    saw_meaningful_flush = true;
+                }
             }
         }
     }
-    // Terminator: called once, outside the loop. Real APIs finalise
-    // padding, flush buffered bytes, and hand back the output here.
-    let output = std::mem::take(&mut buffer);
-
-    // The only invariant checked: the whole output round-trips the
-    // full sequence of fed bytes.
-    assert_eq!(
-        output, fed,
-        "streaming output did not round-trip fed bytes"
-    );
+    if saw_meaningful_flush {
+        meaningful.set(meaningful.get() + 1);
+    }
+    // finish() must still round-trip the whole feed.
+    let output = sink.finish();
+    assert_eq!(output, fed, "final round-trip mismatch");
     Ok(())
 })?;
+assert!(
+    meaningful.get() > 0,
+    "no case executed a meaningful cumulative comparison\n{runner}"
+);
 # Ok(())
 # }
 # body().unwrap();
 ```
 
-**Notes.** The two-stage shape — random command loop, then one
-terminator — matters: an API that requires a `finish()` call to emit
-its trailing bytes will fail the round-trip if the terminator is
-inside the loop. Keep the invariant on the *final* output only;
-per-step assertions in a streaming pipeline usually can't tell
-whether the byte the SUT just emitted is correct or is waiting for
-more input. Streaming compressors and encoders (deflate, gzip),
-incremental hashers (`update` / `finalize`), buffered writers, and
-network protocol codecs that feed bytes in and emit framed messages
+**Notes.**
+
+*Cumulative vs delta at flush boundaries.* Compare `observed()` —
+the SUT's running total of committed bytes — against the running
+total of `fed`. Do not compare a delta of `observed()` between
+two flushes against a delta of `fed` since the last flush: an
+empty consecutive flush would compare `0 == 0` and pass regardless
+of whether the SUT ever committed anything, and a delta-driven
+invariant "the SUT emitted N bytes this flush, so the model must
+have fed exactly N bytes since the last one" breaks for any SUT
+that buffers input across boundaries before committing.
+
+*Consecutive no-op flushes.* Keep the empty-flush case in the
+command support. The cumulative compare passes on such a flush
+(the emitted length did not change), which is the correct
+behavior — no bytes moved, so no new agreement was required. The
+gate below explicitly excludes them from the meaningful count.
+
+*Gate on meaningful flushes, not on flush selection.* The gate
+answers "did at least one case exercise a flush that committed
+bytes?" — not "did any case ever call `flush()`", which any run
+with more than a handful of steps trivially satisfies. Flip a
+case-internal `bool` when a flush's delta is non-empty, then bump
+the [`Cell<usize>`](std::cell::Cell) once at the end of the case
+(matching the "Assert a coverage gate after the run" recipe's
+per-case pattern). Include `{runner}` in the run-after assertion
+so the seed and stats reach the failure report.
+
+*The bounded loop terminates by construction.* `for _ in 0..steps`
+with `steps` drawn from `sample_usize_in(ctx, 0..=8)` cannot loop
+forever; there is no separate assertion for "the loop finished".
+The final `assert_eq!` after `finish()` covers the last
+cumulative agreement.
+
+*Choose the variant by what the SUT contracts.* The final-only
+variant is the minimum — reach for it when flush is an internal
+optimisation the caller does not observe. Reach for the
+cumulative variant when flush is part of the public contract and
+the SUT is expected to commit bytes at that boundary (a streaming
+compressor's `Z_SYNC_FLUSH`, an incremental hasher whose
+intermediate `finalize_reset` returns a stable digest, a TLS
+record layer whose `send_close_notify` must emit before the
+socket is torn down). The two-stage shape — random command loop +
+one `finish` outside the loop — matters in both cases: an API
+that requires `finish` to emit its trailing bytes will fail the
+round-trip if the terminator moves into the loop.
+
+Streaming compressors and encoders (deflate, gzip), incremental
+hashers (`update` / `finalize`), buffered writers, and network
+protocol codecs that feed bytes in and emit framed messages
 (HTTP, TLS record layer, WebSocket, RTMP) typically follow this
 shape.
 
@@ -914,11 +1042,13 @@ model-driven counterpart), the "Cluster-level invariant across
 multiple actors" recipe (multi-SUT extension), the "Bounded
 run-to-quiescence" recipe (bounding a settling protocol), the
 "Cross-step invariant with append-only history" recipe (recipes
-that keep per-step state alongside the SUT). For the bounded
-metrics and state snapshot to include in the assertion message on
-failure (queue length, cumulative bytes, ordered event suffix), see
-the "Semantic assertion patterns → Streaming and simulation"
-section of
+that keep per-step state alongside the SUT), and the "Assert a
+coverage gate after the run" recipe (the `Cell<usize>` +
+case-internal flag + `{runner}` pattern the cumulative variant
+reuses). For the bounded metrics and state snapshot to include in
+the assertion message on failure (queue length, cumulative bytes,
+ordered event suffix), see the "Semantic assertion patterns →
+Streaming and simulation" section of
 [`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Assert a coverage gate after the run
