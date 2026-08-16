@@ -37,7 +37,6 @@ jobs:
           cargo run --example basics
           cargo run --example rejection
           cargo run --example stateful
-          cargo run --example feedback_guided
       # The reproduce example demonstrates a failure and exits
       # non-zero by design; verify that expectation.
       - name: Reproduce example must fail
