@@ -8,17 +8,21 @@ noprop
 
 An imperative property-based testing library for Rust.
 
-- Plain Rust from simple properties to stateful tests
-  - Build generators and checks from ordinary Rust functions, `if`,
-    `match`, `for`, and assertions — no combinator DSL, derive macros,
-    or separate stateful framework.
+- Expressive with a small imperative API
+  - A property samples values and checks results directly with ordinary
+    Rust functions, control flow, state, and assertions. The same building
+    blocks scale from simple properties to stateful tests.
+  - No combinator DSL, derive macros, or separate stateful framework is
+    required.
 - Explicit control over the search space
-  - The search space is the set of inputs and operation sequences a
-    property can generate. If a bug-triggering case is absent or too
-    unlikely, a run cannot reliably test it.
-  - Boundary probabilities and branch weights appear in the property's
-    code. A coverage gate can fail the test when an important check
-    never runs.
+  - A well-designed search space is essential: bug-triggering cases must
+    be reachable and likely enough to occur.
+  - noprop keeps search-space decisions in the property code: what can be
+    generated, how often each path is chosen, and how later choices depend
+    on earlier draws or the current state.
+  - With the imperative API, a coverage gate is an ordinary Rust check. It
+    verifies that the run exercised an important region of the search
+    space, failing the test if no case reaches the relevant assertion.
 - No dependencies
 
 Quick start
@@ -57,10 +61,6 @@ shapes:
 - A coverage gate must prevent success when an important invariant never
   runs
 
-These are ordinary Rust tests: the property, generators, model, command
-loop, assertions, and coverage gates use the same language constructs as
-the code under test.
-
 Designing the search space
 --------------------------
 
@@ -69,9 +69,10 @@ shape how often they occur: use `sample_with_boundaries` for domain
 boundaries, `sample_weighted_index` for branches or commands, and ordinary
 control flow for values that depend on earlier draws or the current state.
 
-An assertion can pass vacuously when no case reaches it. Count evidence
-only after the important check succeeds, then assert after `Runner::run`
-that the count is non-zero. This post-run assertion is a coverage gate.
+A property can pass vacuously when no case reaches an important assertion.
+Count evidence only after the important check succeeds, then assert after
+`Runner::run` that the count is non-zero. This post-run assertion is a
+coverage gate.
 
 Adjust support, boundary probabilities, and branch weights before
 increasing the case budget. See [Recipes](docs/recipes.md) for concrete
