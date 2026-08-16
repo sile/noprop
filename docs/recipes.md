@@ -161,6 +161,20 @@ multiplies everything at once.
 
 **Notes.**
 
+*Reach for this recipe only when a campaign exists.* Do not wire
+`case_budget(...)` into a property just because the pattern is
+documented. Each property's `const` default is its contract with a
+normal `cargo test` — keep it there until an actual wide-search
+campaign (nightly, weekly, hand-triggered) needs a per-run
+override. If a property is *always* under-budgeted for normal
+runs, raise its `const` and commit that; do not paper over it with
+a default env value the whole team is expected to set. And do not
+fan out into per-property env vars (`MYAPP_STATEFUL_CASES`,
+`MYAPP_QUICK_CASES`, …) — the point of the pattern is one env var
+multiplying every property, so the per-property scale stays as the
+`const`s. Raising only one property's budget is a `const` bump,
+not a new env var.
+
 *The env var name is a placeholder.* Pick a name that fits the
 consuming project (`MYAPP_CASES` here matches the `MYAPP_SEED`
 placeholder used by "Run a property with a seed" above). The
