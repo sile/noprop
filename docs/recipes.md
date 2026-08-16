@@ -494,6 +494,10 @@ append-only history" recipe (tracking a history alongside the SUT),
 the "Stateful streaming API driven by a command loop" recipe
 (the model-free variant),
 [`examples/stateful.rs`](https://github.com/sile/noprop/blob/main/examples/stateful.rs).
+For the assertion-message shape a stateful failure needs (step index,
+command, model / SUT state, bounded command history), see the
+"Semantic assertion patterns → Stateful command loops" section of
+[`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Cluster-level invariant across multiple actors
 
@@ -695,7 +699,11 @@ The recipe applies unchanged; only the entry type and the meaning of
 "Cluster-level invariant across multiple actors" recipe (multi-SUT
 extension), the "Bounded run-to-quiescence" recipe (bounding step
 count for a settling protocol), the "Stateful streaming API driven
-by a command loop" recipe (model-free variant).
+by a command loop" recipe (model-free variant). For picking the
+bounded suffix of history to include in the assertion message on
+failure, see the "Semantic assertion patterns → Stateful command
+loops" section of
+[`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Stateful streaming API driven by a command loop
 
@@ -766,7 +774,12 @@ model-driven counterpart), the "Cluster-level invariant across
 multiple actors" recipe (multi-SUT extension), the "Bounded
 run-to-quiescence" recipe (bounding a settling protocol), the
 "Cross-step invariant with append-only history" recipe (recipes
-that keep per-step state alongside the SUT).
+that keep per-step state alongside the SUT). For the bounded
+metrics and state snapshot to include in the assertion message on
+failure (queue length, cumulative bytes, ordered event suffix), see
+the "Semantic assertion patterns → Streaming and simulation"
+section of
+[`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Assert a coverage gate after the run
 
@@ -952,6 +965,10 @@ seed.
 **See also.**
 [`RunError`](crate::RunError),
 [`examples/reproduce.rs`](https://github.com/sile/noprop/blob/main/examples/reproduce.rs).
+For the full "reproduce → diagnose → reduce → freeze" workflow,
+including the external configuration a `sample_*` closure may
+implicitly read, see
+[`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Turn a trace into a hand-written regression test
 
@@ -985,6 +1002,11 @@ and the property test keeps looking for related ones.
 **See also.**
 [`RunError::generated`](crate::RunError::generated),
 [`docs::generator_design`](crate::docs::generator_design).
+For the 5-step manual reduction checklist (drop setup, drop
+prefix / suffix, drop collection elements, replace with domain
+boundaries, confirm the same observable consequence), see the
+"Reduce and freeze as a regular regression test" section of
+[`skills/noprop/references/failure-diagnostics.md`](https://github.com/sile/noprop/blob/main/skills/noprop/references/failure-diagnostics.md).
 
 ## Observe cross-case state with interior mutability
 
