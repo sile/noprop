@@ -90,8 +90,6 @@ transition.
 
 noprop deliberately has a small contract:
 
-- `panic=unwind` is required because noprop catches property panics and
-  uses panic-based unwinding for `TestCaseContext::reject_case`
 - Failing inputs are not automatically shrunk; simplify a reproduced
   witness by hand and freeze it as a regular regression test
 - Failure seeds are not persisted to files; the caller owns the seed and

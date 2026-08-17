@@ -77,10 +77,6 @@
 //!
 //! # Requirements and constraints
 //!
-//! - **`panic=unwind`.** noprop catches property panics and uses
-//!   panic-based unwinding for
-//!   [`TestCaseContext::reject_case`], so the crate does not work
-//!   under `panic=abort`.
 //! - **No automatic shrinking.** Failures are reproduced from
 //!   the seed and the case budget; to freeze a specific case as a
 //!   regression test, simplify it by hand from the value trace and

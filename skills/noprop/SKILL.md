@@ -207,7 +207,6 @@ domain analysis. Do not preserve the example's numbers without justification.
 - Use `sample_usize_in`, not `sample_usize(ctx) % n`.
 - Use exact `Ratio` values and validate runtime-derived numerator and
   denominator values before constructing them.
-- Require `panic = "unwind"`.
 - Expect seed-based reproduction rather than automatic shrinking or on-disk
   failure persistence.
 
