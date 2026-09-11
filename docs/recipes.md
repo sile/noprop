@@ -68,7 +68,7 @@ let seed = noprop::seed_from_env_or_time("MYAPP_SEED")?;
 noprop::Runner::new(seed).run(256, |_ctx| Ok(()))?;
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.** The seed is always caller-supplied; noprop never reads from
@@ -131,7 +131,7 @@ noprop::Runner::new(0xDEAD_BEEF)
     })?;
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 A stateful property whose one case runs a bounded command loop
@@ -599,7 +599,7 @@ noprop::Runner::new(0).run(64, |ctx| {
 })?;
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.** Failure messages must include enough to reconstruct the
@@ -668,7 +668,7 @@ noprop::Runner::new(0).run(64, |ctx| {
 })?;
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.** Keep the actor type simple (a plain integer, a `Vec<u8>`
@@ -732,7 +732,7 @@ noprop::Runner::new(0).run(64, |ctx| {
 })?;
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.** Pick `max_rounds` well above the worst-case round count
@@ -802,7 +802,7 @@ noprop::Runner::new(0).run(64, |ctx| {
 })?;
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.** The history lives inside the closure, alongside the SUT —
@@ -973,7 +973,7 @@ assert!(
 );
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.**
@@ -1206,7 +1206,7 @@ assert!(
 );
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.**
@@ -1333,7 +1333,7 @@ assert!(
 );
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.**
@@ -1535,7 +1535,7 @@ noprop::Runner::new(0).run(64, |ctx| {
 let _ = long_names.get();
 # Ok(())
 # }
-# body().unwrap();
+# body().expect("the example property must pass");
 ```
 
 **Notes.** Most properties need no shared state at all — everything

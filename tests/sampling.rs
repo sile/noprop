@@ -1,4 +1,4 @@
-//! Self-hosted property tests for noprop's public sampling API.
+//! Self-hosted property tests for noprop's public sampling API (`tests/sampling.rs`).
 //!
 //! `Runner` is only the property-test driver in this file, not the
 //! system under test. Each test generates parameters across cases and

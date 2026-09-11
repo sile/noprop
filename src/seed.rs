@@ -97,26 +97,32 @@ mod tests {
 
     #[test]
     fn parse_seed_accepts_decimal() {
-        assert_eq!(parse_seed("SEED", "42").unwrap(), 42);
+        assert_eq!(parse_seed("SEED", "42").expect("decimal must parse"), 42);
     }
 
     #[test]
     fn parse_seed_accepts_hex_prefix() {
-        assert_eq!(parse_seed("SEED", "0xDEAD_BEEF").unwrap(), 0xDEAD_BEEF);
+        assert_eq!(
+            parse_seed("SEED", "0xDEAD_BEEF").expect("hex must parse"),
+            0xDEAD_BEEF
+        );
     }
 
     #[test]
     fn parse_seed_accepts_underscore_separators() {
-        assert_eq!(parse_seed("SEED", "1_000_000").unwrap(), 1_000_000);
         assert_eq!(
-            parse_seed("SEED", "0xDEAD_BEEF_CAFE").unwrap(),
+            parse_seed("SEED", "1_000_000").expect("underscores must parse"),
+            1_000_000
+        );
+        assert_eq!(
+            parse_seed("SEED", "0xDEAD_BEEF_CAFE").expect("hex with underscores must parse"),
             0xDEAD_BEEF_CAFE
         );
     }
 
     #[test]
     fn parse_seed_reports_invalid_value_with_context() {
-        let err = parse_seed("SEED", "not-a-number").unwrap_err();
+        let err = parse_seed("SEED", "not-a-number").expect_err("garbage must not parse");
         let msg = format!("{err}");
         assert!(
             msg.contains("SEED"),

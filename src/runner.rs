@@ -72,7 +72,7 @@ pub struct Stats {
 /// })?;
 /// Ok(())
 /// }
-/// # body().unwrap();
+/// # body().expect("the example property must pass");
 /// ```
 ///
 /// The env var name shown above is a project-specific placeholder;

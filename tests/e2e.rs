@@ -5,7 +5,7 @@
 //! generated traces, statistics, or reproducibility.
 //!
 //! Properties where `Runner` merely drives generated inputs for a
-//! sampling primitive belong in `tests/pbt.rs`. Private implementation
+//! sampling primitive belong in `tests/sampling.rs`. Private implementation
 //! tests and minimized regression witnesses belong in the corresponding
 //! `src/` module.
 //!
@@ -219,7 +219,13 @@ fn generated_values_are_recorded_in_error() {
     assert_eq!(generated[2].type_name(), "char");
     // Value repr matches Debug of the value.
     assert!(!generated[0].is_elided());
-    assert!(generated[0].value_repr().unwrap().parse::<u32>().is_ok());
+    assert!(
+        generated[0]
+            .value_repr()
+            .expect("a u32 sample must have a value repr")
+            .parse::<u32>()
+            .is_ok()
+    );
     // All three calls happen in the same test file.
     assert!(generated[0].location().file().ends_with("e2e.rs"));
 }
@@ -396,8 +402,10 @@ fn sample_usize_in_records_only_the_chosen_value() {
     let generated = err.generated();
     assert_eq!(generated.len(), 1, "generated: {generated:?}");
     assert_eq!(generated[0].type_name(), "usize");
-    let repr = generated[0].value_repr().unwrap();
-    let v: usize = repr.parse().unwrap();
+    let repr = generated[0]
+        .value_repr()
+        .expect("a usize sample must have a value repr");
+    let v: usize = repr.parse().expect("value repr must be a usize");
     assert!(v < 7);
 }
 
@@ -466,8 +474,10 @@ fn sample_weighted_index_records_only_the_chosen_index() {
     let generated = err.generated();
     assert_eq!(generated.len(), 1, "generated: {generated:?}");
     assert_eq!(generated[0].type_name(), "usize");
-    let repr = generated[0].value_repr().unwrap();
-    let idx: usize = repr.parse().unwrap();
+    let repr = generated[0]
+        .value_repr()
+        .expect("a usize sample must have a value repr");
+    let idx: usize = repr.parse().expect("value repr must be a usize");
     assert!(idx < 4);
 }
 
@@ -697,8 +707,16 @@ fn sample_floats_record_type_and_value() {
     assert_eq!(generated.len(), 2, "generated: {generated:?}");
     assert_eq!(generated[0].type_name(), "f32");
     assert_eq!(generated[1].type_name(), "f64");
-    let a_repr: f32 = generated[0].value_repr().unwrap().parse().unwrap();
-    let b_repr: f64 = generated[1].value_repr().unwrap().parse().unwrap();
+    let a_repr: f32 = generated[0]
+        .value_repr()
+        .expect("an f32 sample must have a value repr")
+        .parse()
+        .expect("value repr must be an f32");
+    let b_repr: f64 = generated[1]
+        .value_repr()
+        .expect("an f64 sample must have a value repr")
+        .parse()
+        .expect("value repr must be an f64");
     assert!(a_repr.is_finite());
     assert!(b_repr.is_finite());
     assert!(generated[0].location().file().ends_with("e2e.rs"));

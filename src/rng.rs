@@ -490,7 +490,7 @@ mod tests {
         let mut xs = XoshiroState::from_seed(42);
         let mut buf = [0u8; 24];
         ctx.fill(&mut buf);
-        for chunk in buf.chunks_exact(8) {
+        for chunk in buf.as_chunks::<8>().0 {
             assert_eq!(chunk, &xs.next_u64().to_le_bytes());
         }
     }
@@ -577,7 +577,7 @@ mod tests {
         let mut xs_step = XoshiroState::from_seed(9);
         let mut buf = [0u8; 24];
         xs_fill.fill(&mut buf);
-        for chunk in buf.chunks_exact(8) {
+        for chunk in buf.as_chunks::<8>().0 {
             assert_eq!(chunk, &xs_step.next_u64().to_le_bytes());
         }
     }

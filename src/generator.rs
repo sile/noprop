@@ -1288,7 +1288,10 @@ mod tests {
         let mut seen = [false; 3];
         for _ in 0..256 {
             let v = sample_choice(&mut ctx, &choices);
-            let idx = choices.iter().position(|&x| x == v).unwrap();
+            let idx = choices
+                .iter()
+                .position(|&x| x == v)
+                .expect("sampled value must come from the choices array");
             seen[idx] = true;
             if seen.iter().all(|&s| s) {
                 return;
@@ -1863,7 +1866,10 @@ mod tests {
     #[should_panic(expected = "empty range")]
     fn sample_usize_in_panics_on_reversed_inclusive() {
         let mut ctx = TestCaseContext::new(0);
-        #[expect(clippy::reversed_empty_ranges)]
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "the reversed range is the panic condition under test"
+        )]
         let _ = sample_usize_in(&mut ctx, 5..=4);
     }
 
@@ -1983,7 +1989,10 @@ mod tests {
     #[should_panic(expected = "empty range")]
     fn sample_u64_in_panics_on_reversed_inclusive() {
         let mut ctx = TestCaseContext::new(0);
-        #[expect(clippy::reversed_empty_ranges)]
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "the reversed range is the panic condition under test"
+        )]
         let _ = sample_u64_in(&mut ctx, 5..=4);
     }
 
