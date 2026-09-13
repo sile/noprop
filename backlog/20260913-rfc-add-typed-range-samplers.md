@@ -4,11 +4,15 @@
 
 ## Summary
 
-Add a small family of range samplers whose *result type* is the narrow integer
-the caller actually wants, so `noprop::sample_u64_in(ctx, 1..=u16::MAX as u64)
-as u16` becomes `noprop::sample_u16_in(ctx, 1..=u16::MAX)`. The existing
+Add a family of range samplers whose *result type* is the narrow integer the
+caller actually wants, so `noprop::sample_u64_in(ctx, 1..=u16::MAX as u64) as
+u16` becomes `noprop::sample_u16_in(ctx, 1..=u16::MAX)`. The existing
 `sample_usize_in` / `sample_u64_in` stay as they are; this fills in the gaps
 that today force a cast at every call site.
+
+The new names are `sample_u8_in`, `sample_u16_in`, `sample_u32_in`,
+`sample_i8_in`, `sample_i16_in` and `sample_i32_in`. The 128-bit types
+(`u128` / `i128`) are deliberately left out; see "Unresolved questions".
 
 ## Motivation
 
@@ -38,6 +42,12 @@ Two things stand out:
 - The result is narrowed immediately. That cast is where a mistake hides: if
   someone changes the range to `1..=(u16::MAX as u64 + 1)` the code still
   compiles and truncates.
+
+Both casts exist because the family is incomplete. The bare samplers already
+cover every integer type (`sample_u8` / `sample_i8` / ... exist), so the
+naming rule "the digits are the result type" is established; what is missing
+is the `_in` side for anything narrower than `usize` / `u64` and for signed
+values.
 
 A typed result removes both casts and makes the range and the field share one
 type, so an out-of-range bound is a compile error rather than a silent wrap.
@@ -74,19 +84,25 @@ There is nothing new to learn beyond the naming rule that already exists:
 types whose ranges are awkward to express some other way.
 
 For signed values, the same idea removes an offset trick users otherwise have
-to invent:
+to invent, and the same holds for the narrow signed widths:
 
 ```rust
 // before: sample unsigned, then offset into the signed domain
 let diff = noprop::sample_u64_in(ctx, 0..=255) as i32 - 128;
+let delta = noprop::sample_u64_in(ctx, 0..=127) as i8;
 
 // after
 let diff = noprop::sample_i32_in(ctx, -128..=127);
+let delta = noprop::sample_i8_in(ctx, -128..=127);
 ```
+
+The signed functions cover the whole signed domain, including `i32::MIN`:
+`sample_i32_in(ctx, i32::MIN..=i32::MAX)` is a valid full-width range, not a
+range that overflows while being normalized.
 
 ## Reference-level explanation
 
-Add four public functions to `src/generator.rs`, following the implementation
+Add six public functions to `src/generator.rs`, following the implementation
 pattern of `sample_usize_in` / `sample_u64_in` exactly (bound normalization,
 empty-range panic, full-width fast path, `ctx.record_generated`, and
 `#[track_caller]`).
@@ -109,6 +125,18 @@ pub fn sample_u32_in<R: RangeBounds<u32>>(
     ctx: &mut TestCaseContext,
     range: R,
 ) -> u32;
+
+#[track_caller]
+pub fn sample_i8_in<R: RangeBounds<i8>>(
+    ctx: &mut TestCaseContext,
+    range: R,
+) -> i8;
+
+#[track_caller]
+pub fn sample_i16_in<R: RangeBounds<i16>>(
+    ctx: &mut TestCaseContext,
+    range: R,
+) -> i16;
 
 #[track_caller]
 pub fn sample_i32_in<R: RangeBounds<i32>>(
@@ -134,21 +162,28 @@ Design points:
   `sample_u64_in` documentation already warns, the byte count consumed depends
   on the range width, so the exact number of bytes drawn is an implementation
   detail. A user who wants the same RNG stream should use the same sampler.
-- **Signed support via an offset, not a separate algorithm.** `sample_i32_in`
-  can be implemented as sample-in-`0..=width` plus `lo` (with unsigned
-  arithmetic under the hood), so signedness does not require a new sampling
-  core. Choose an implementation that keeps the full `i32::MIN..=i32::MAX`
-  range correct, including the unbounded (`..`) case.
+- **Signed support via an offset, not a separate algorithm.** A signed
+  function can be implemented as sample-in-`0..=width` plus `lo` (with
+  unsigned arithmetic under the hood), so signedness does not require a new
+  sampling core. The offset must be computed without signed overflow: take the
+  width and the add-back in a wider unsigned form rather than `hi - lo`, so the
+  full `i32::MIN..=i32::MAX` range works including the unbounded (`..`) case.
+- **No trait, no macro.** The six functions are written out as ordinary
+  functions, matching the rest of the `sample_*` family. A private helper may
+  factor the shared bound-normalization body, but no new public trait or
+  exported macro is introduced; the naming rule already tells a reader which
+  type each function returns.
 
-Scope: unsigned `u8` / `u16` / `u32` and signed `i32` only. This is the set
-that the motivating consumer needs; see "Unresolved questions" for the
-types left out.
+Scope: unsigned `u8` / `u16` / `u32` and signed `i8` / `i16` / `i32`.
+`u128` / `i128` are out of scope; see "Unresolved questions".
 
 ## Drawbacks
 
-- **More API surface on a 0.2 crate.** Four functions are four more names that
+- **More API surface on a 0.2 crate.** Six functions are six more names that
   become part of the public surface and, realistically, have to keep working.
-  The `sample_*` family is already large; this makes it larger.
+  The `sample_*` family is already large; this makes it larger. This is the
+  main cost of the wider scope, and the reason the types were weighed one by
+  one rather than "add `_in` for everything".
 - **Overlap with existing functions.** `sample_usize_in` already returns a type
   wide enough for `u8` / `u16` / `u32` values on 32/64-bit targets, so there is
   a redundancy: a caller *can* write `sample_usize_in(ctx, 0..2) as u8`. The
@@ -189,23 +224,36 @@ The alternatives below are recorded here so the same ground is not re-argued.
 - **Boundary and length combinators (rejected for core).** The most duplicated
   pattern across consumers, but the set of boundary values is project-specific,
   so it belongs in a user-side helper.
-- **Why these four types and not a single generic `sample_in<T>`.** A
+- **Why these six types and not a single generic `sample_in<T>`.** A
   `RangeBounds<T>` generic over an integer trait cannot be written today: Rust
-  has no integer trait that covers `u8` / `u16` / `u32` / `i32` and is usable as
-  a `RangeBounds` element, and the existing family is already one function per
-  type. Naming each type keeps the pattern consistent and avoids waiting on a
-  language feature.
-- **Why not `i8` / `i16` / `u128`, etc.** See "Unresolved questions".
+  has no integer trait that covers `u8` / `u16` / `u32` / `i8` / `i16` / `i32`
+  and is usable as a `RangeBounds` element, and the existing family is already
+  one function per type. Naming each type keeps the pattern consistent and
+  avoids waiting on a language feature.
+- **No new trait or macro.** A trait `SampleIn` (or a `sample_typed_in!`
+  macro) could collapse the six bodies, but both solve the wrong problem. The
+  bodies are small and mechanical, so the duplication a trait removes is
+  internal, while a public trait would add a second, generic way to call the
+  family and force it to be a permanent API commitment. Nor is there demand
+  for it: no consumer in the survey needed to be generic over the sampled
+  integer type. If that need ever appears, a trait can be added later without
+  breaking the free functions, so there is no reason to commit now. See
+  "Future possibilities".
+- **Why not `u128` / `i128`.** See "Unresolved questions".
+- **Why signed at all, rather than unsigned-plus-offset.** A user can always
+  write `sample_u8_in(ctx, 0..=255) as i8 - 128`, but that is exactly the
+  unchecked-cast problem this RFC is trying to remove, moved to the signed
+  side. Shipping `i8` / `i16` / `i32` together keeps the narrowing cast out of
+  signed fields too; shipping `i32` alone would leave `i8` / `i16` fields
+  writing `sample_i32_in(...) as i8`.
 
 ## Unresolved questions
 
-- Which signed types to include. `i32` is chosen because the motivating
-  consumer needs `i32`; `i8` and `i16` are plausible and cheap, but adding them
-  without a call site would be speculative. Decide whether to add them now for
-  symmetry with the unsigned set or defer until needed.
-- Whether `sample_u128_in` is ever wanted. The existing `sample_u64_in` doc
-  explicitly declines it for lack of demand; that reasoning still holds unless
-  a consumer asks.
+- Whether `sample_u128_in` / `sample_i128_in` are ever wanted. The existing
+  `sample_u64_in` doc explicitly declines `u128` for lack of demand, and that
+  reasoning still holds: a 128-bit range needs its own rejection core (the
+  current helpers are 64-bit), so it is not the same "narrow the existing
+  sampler" change as the rest. Leave both out until a consumer asks.
 - Whether the doc on `sample_u64_in` (which today explains "why no other
   integer `_in` variants") should be rewritten once this RFC lands, since its
   premise becomes obsolete. This is a documentation change that should land in
@@ -213,8 +261,11 @@ The alternatives below are recorded here so the same ground is not re-argued.
 
 ## Future possibilities
 
-- If `i8` / `i16` are added later, the pattern is mechanical and can follow the
-  same shape.
+- `u128` / `i128` can be added later if demand appears; they need their own
+  sampling core but would follow the same naming and range rules.
+- If a real need to be generic over the sampled integer type appears, a public
+  trait could be introduced then, with the free functions kept as thin
+  wrappers. Deciding against one now does not close that door.
 - A future language feature (an integer trait usable with `RangeBounds`) could
   collapse the whole family into one generic function; the per-type names are
   forward-compatible with that because a generic function can be introduced
