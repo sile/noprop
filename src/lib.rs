@@ -128,7 +128,30 @@ mod rng;
 mod runner;
 mod seed;
 
-pub mod docs;
+/// Supplemental documentation for noprop's design.
+///
+/// Document bodies live in `docs/` as Markdown and are pulled in with
+/// `include_str!`, so they are browsable on docs.rs and their Rust
+/// code examples run as doctests.
+pub mod docs {
+    /// Task-oriented recipes for common property shapes: the seed / run
+    /// scaffolding, sampling primitives and collections, rejection scopes,
+    /// stateful properties, coverage gates, and reproducing a failing seed.
+    #[doc = include_str!("../docs/recipes.md")]
+    pub mod recipes {}
+
+    /// Small design reference for writing `sample_*` generators: support,
+    /// distribution, termination, rejection scope, and
+    /// valid-by-construction.
+    #[doc = include_str!("../docs/generator-design.md")]
+    pub mod generator_design {}
+
+    /// Authoring guide for `sample_*` generators: composing primitives,
+    /// bounded rejection sampling, `NonZero<_>` recipes, and the
+    /// finite-by-default float samplers.
+    #[doc = include_str!("../docs/generator-authoring.md")]
+    pub mod generator_authoring {}
+}
 
 pub use error::{RunError, RunErrorKind, RunResult, TestResult};
 pub use generator::{
