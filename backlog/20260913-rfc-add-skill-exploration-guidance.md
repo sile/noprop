@@ -21,22 +21,25 @@ recipe, or code in `src/` or `docs/` is touched.
 
 The skill already states the *rules* these three points sit under —
 "keep loops and recursion explicitly bounded", "Estimate the miss
-probability of each gate", "Decide what evidence will prove that the
-meaningful region was actually exercised". What it does not give is the
+probability of each gate", and "Decide what evidence will prove that the
+meaningful region was actually exercised. Add a coverage gate when the
+invariant can otherwise pass vacuously". What it does not give is the
 step from the rule to a concrete first design, and in three recorded
 consumer runs that gap cost a debugging cycle each:
 
 - A recursive generator was first written with `MAX_GEN_DEPTH = 6` and a
   branch factor of 3. The test pinned a core at 100% CPU and timed out;
-  the per-case cost was `6^6 = 46656` nodes. The fix was `depth = 3`,
-  `branch = 2`. The rule was already read; the *arithmetic* was not done,
-  because nothing in the skill says to put a number on it first.
+  the per-case cost was `3^6 = 729` expansions at that bound. The fix was
+  `depth = 3`, `branch = 2`. The rule was already read; the *arithmetic*
+  was not done, because nothing in the skill says to put a number on it
+  first.
 - A gate that required a frame's previous and current size to be equal
   reached its branch in roughly 1 case in 169, because the two sizes were
-  drawn independently from 13 values each. The generator was valid and the
-  gate was correct; the gate was simply flaky. The fix was structural —
-  draw a coin, and have both sizes obey it — which removes the coincidence
-  from the design rather than tuning weights.
+  drawn independently from the 13 distinct sizes the generator produced.
+  The generator was valid and the gate was correct; the gate was simply
+  flaky. The fix was structural — draw a coin, and have both sizes obey it
+  — which removes the coincidence from the design rather than tuning
+  weights.
 - A gate meaning "the incremental redraw path was taken" had no direct
   signal, so it was expressed as "fewer cells written than a full redraw".
   Compared as a running total, the gate was true on every case, because the
@@ -76,9 +79,10 @@ Three edits to `skills/noprop/SKILL.md`, all prose, no new sections.
    bullet "Keep loops and recursion explicitly bounded" with the cost
    estimate and a starting point:
 
-   - State that a recursive generator's per-case work is roughly
-     `branch_factor ^ depth`, so both must be chosen together and kept as
-     named constants in one place.
+   - State that a recursive generator's per-case work grows as
+     `branch_factor ^ depth`, where `depth` is the nesting count and
+     `branch_factor` the number of children per level, so both must be
+     chosen together and kept as named constants in one place.
    - Give a default to start from (`depth` in the low single digits, a
      branch factor of 2) and say to relax a bound only with evidence that
      more is needed.
@@ -133,6 +137,11 @@ text.
   larger; a reader there is looking for a worked example, not for a default
   to apply while designing. The three points are defaults, which is what
   the skill is for.
+- **Add the guidance to the README instead.** The README is deliberately
+  kept to a quick start and a policy summary, with details in the skill,
+  `docs/`, or rustdoc; a generator-sizing heuristic is not a policy the
+  README's reader needs at first read. Putting it there would also widen
+  the surface the README's summary has to stay consistent with.
 - **Add a fourth example to the "Start from this complete test shape"
   block.** The block demonstrates a single model/SUT loop; recursion and
   gate construction are orthogonal to it, and folding them in would make
