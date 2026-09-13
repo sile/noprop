@@ -1,6 +1,6 @@
 # RFC: Add typed range samplers for narrow integer fields
 
-- Status: draft
+- Status: accepted
 
 ## Summary
 
@@ -254,11 +254,15 @@ The alternatives below are recorded here so the same ground is not re-argued.
   reasoning still holds: a 128-bit range needs its own rejection core (the
   current helpers are 64-bit), so it is not the same "narrow the existing
   sampler" change as the rest. Leave both out until a consumer asks.
-- The doc on `sample_u64_in` explains "why no other integer `_in` variants"
-  and a `u128` rationale; the first half becomes obsolete once this RFC lands.
-  It is rewritten in the same commit as the implementation, so the docstring
-  never contradicts the shipping API: the section is replaced by a pointer to
-  the typed family, keeping only the `u128` reasoning.
+
+## Outcome
+
+- Accepted and implemented: the six functions were added to
+  `src/generator.rs`, the `sample_u64_in` doc section was rewritten to point
+  at the typed family while keeping the `u128` reasoning, and doctests plus
+  unit tests cover the range, full-width, endpoint, and empty-range behavior.
+- The sole unresolved question is unchanged: `u128` / `i128` stay out until a
+  consumer asks, because they would need their own sampling core.
 
 ## Future possibilities
 
