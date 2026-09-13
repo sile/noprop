@@ -18,6 +18,11 @@ change. They are not a spec and must not be treated as one. Code and `docs/`
 must stand on their own and must **not** reference a file in `backlog/`; if a
 decision matters to a reader, write it where the reader is looking instead.
 
+The rule is one-way: `src/` and `docs/` must never point at a file under
+`backlog/`, because those are the artifacts users read and they have to make
+sense without it. The reverse is fine and expected — a proposal may cite
+`src/` and `docs/` freely to explain the code and docs it wants to change.
+
 ## Layout
 
 ```
