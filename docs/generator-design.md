@@ -33,14 +33,20 @@ A generator's **distribution** is *how* it samples values across the
 support. noprop's primitives are uniform over their support:
 `sample_u32` covers `0..=u32::MAX` uniformly, `sample_usize_in(ctx,
 0..=n)` covers `0..=n` uniformly (through bias-free bounded rejection),
-`sample_u64_in(ctx, 0..=n)` does the same for ranges a `usize` result
-cannot serve (inexpressible on 32-bit targets, a cast on 64-bit), and
-`sample_choice(ctx, slice)` picks one slice element uniformly. Beyond
-the pre-existing `sample_usize_in`, only `u64` gets an integer `_in`
-variant: `usize` already covers
-`u8` / `u16` / `u32` on every 32/64-bit target, `u128` would need
-128-bit rejection sampling without a demonstrated demand, and signed
-ranges are expressible with an offset on top of these primitives.
+and `sample_choice(ctx, slice)` picks one slice element uniformly.
+
+The bounded `_in` samplers share that bias-free core but differ in
+result type. `sample_usize_in` returns `usize`, so `sample_u64_in`
+exists for ranges that are inexpressible on 32-bit targets and would
+be a cast on 64-bit ones. For a narrower integer field the sampler
+whose name matches the field's type is the right choice —
+`sample_u8_in`, `sample_u16_in`, `sample_u32_in`, `sample_i8_in`,
+`sample_i16_in`, `sample_i32_in` — so the field is filled without an
+`as` cast, and a bound that does not fit the result type is a compile
+error instead of a silent truncation. The signed variants share the
+same unsigned-offset technique internally. `u128` would need 128-bit
+rejection sampling without a demonstrated demand, so it is not
+provided.
 
 Two reasons to move away from uniform:
 

@@ -302,16 +302,18 @@ pub fn sample_usize_in<R: RangeBounds<usize>>(ctx: &mut TestCaseContext, range: 
 /// plain integer draw consuming exactly 8 bytes, so it is
 /// byte-equivalent to [`sample_u64`].
 ///
-/// # Why no other integer `_in` variants
+/// # Relation to the typed `_in` family
 ///
 /// [`sample_usize_in`] already covers `u8` / `u16` / `u32` on every
 /// 32/64-bit target (`usize` is at least 32 bits there), and `u64` on
 /// 64-bit targets — but its result type is `usize`, so a `u64` field
 /// needs a cast and 32-bit targets cannot express a `u64` range at
-/// all. `sample_u64_in` exists for exactly those cases. A `u128` range
-/// would need 128-bit rejection sampling without a demonstrated
-/// demand, and signed ranges are expressible with an offset on top of
-/// these primitives, so neither is provided.
+/// all. `sample_u64_in` exists for exactly those cases. For a narrower
+/// result type, prefer the sampler whose name matches the field:
+/// [`sample_u8_in`], [`sample_u16_in`], [`sample_u32_in`],
+/// [`sample_i8_in`], [`sample_i16_in`], or [`sample_i32_in`]. A `u128`
+/// range would need 128-bit rejection sampling without a demonstrated
+/// demand, so it is not provided.
 ///
 /// # Examples
 ///
@@ -352,6 +354,276 @@ pub fn sample_u64_in<R: RangeBounds<u64>>(ctx: &mut TestCaseContext, range: R) -
         let width = hi - lo + 1;
         lo + sample_below(ctx, width)
     };
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `u8` inside `range`, with the result type the
+/// caller needs so no cast appears at the call site.
+///
+/// Accepts any `RangeBounds<u8>`. The range and the result share one
+/// type, so a bound that does not fit a `u8` field is a compile error
+/// rather than a silent truncation of a wider sample.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `..0`, or an
+/// excluded start of `u8::MAX`).
+///
+/// # Determinism note
+///
+/// See [`sample_u64_in`]: the byte count consumed depends on the range
+/// width, so changing the range can shift subsequent RNG output for
+/// the same seed.
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// let version = noprop::sample_u8_in(&mut ctx, 0..2);
+/// assert!(version < 2);
+///
+/// let len = noprop::sample_u8_in(&mut ctx, 1..=4);
+/// assert!((1..=4).contains(&len));
+/// ```
+#[track_caller]
+pub fn sample_u8_in<R: RangeBounds<u8>>(ctx: &mut TestCaseContext, range: R) -> u8 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_u8_in: empty range"),
+        Bound::Unbounded => u8::MIN,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_u8_in: empty range"),
+        Bound::Unbounded => u8::MAX,
+    };
+    assert!(lo <= hi, "sample_u8_in: empty range");
+    // Widen to u64 before subtracting so the arithmetic is exact for
+    // the full u8 domain; the sample is within `lo..=hi`, so narrowing
+    // back cannot truncate.
+    let v = (lo as u64 + sample_below(ctx, hi as u64 - lo as u64 + 1)) as u8;
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `u16` inside `range`, with the result type the
+/// caller needs so no cast appears at the call site.
+///
+/// Accepts any `RangeBounds<u16>`. See [`sample_u8_in`] for the shared
+/// rule that the range and the result share one type.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `..0`, or an
+/// excluded start of `u16::MAX`).
+///
+/// # Determinism note
+///
+/// See [`sample_u64_in`].
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// let count = noprop::sample_u16_in(&mut ctx, 1..=8);
+/// assert!((1..=8).contains(&count));
+/// ```
+#[track_caller]
+pub fn sample_u16_in<R: RangeBounds<u16>>(ctx: &mut TestCaseContext, range: R) -> u16 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_u16_in: empty range"),
+        Bound::Unbounded => u16::MIN,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_u16_in: empty range"),
+        Bound::Unbounded => u16::MAX,
+    };
+    assert!(lo <= hi, "sample_u16_in: empty range");
+    let v = (lo as u64 + sample_below(ctx, hi as u64 - lo as u64 + 1)) as u16;
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `u32` inside `range`, with the result type the
+/// caller needs so no cast appears at the call site.
+///
+/// Accepts any `RangeBounds<u32>`. See [`sample_u8_in`] for the shared
+/// rule that the range and the result share one type.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `..0`, or an
+/// excluded start of `u32::MAX`).
+///
+/// # Determinism note
+///
+/// See [`sample_u64_in`].
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// let track_id = noprop::sample_u32_in(&mut ctx, 1..=1_000);
+/// assert!((1..=1_000).contains(&track_id));
+/// ```
+#[track_caller]
+pub fn sample_u32_in<R: RangeBounds<u32>>(ctx: &mut TestCaseContext, range: R) -> u32 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_u32_in: empty range"),
+        Bound::Unbounded => u32::MIN,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_u32_in: empty range"),
+        Bound::Unbounded => u32::MAX,
+    };
+    assert!(lo <= hi, "sample_u32_in: empty range");
+    let v = (lo as u64 + sample_below(ctx, hi as u64 - lo as u64 + 1)) as u32;
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `i8` inside `range`.
+///
+/// Accepts any `RangeBounds<i8>`, including the full `i8::MIN..=i8::MAX`
+/// domain. Sampling goes through an unsigned offset so a signed range
+/// never overflows while being normalized.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, `i8::MIN..i8::MIN`,
+/// or an excluded start of `i8::MAX`).
+///
+/// # Determinism note
+///
+/// See [`sample_u64_in`].
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// let delta = noprop::sample_i8_in(&mut ctx, -128..=127);
+/// assert!((-128..=127).contains(&delta));
+/// ```
+#[track_caller]
+pub fn sample_i8_in<R: RangeBounds<i8>>(ctx: &mut TestCaseContext, range: R) -> i8 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_i8_in: empty range"),
+        Bound::Unbounded => i8::MIN,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_i8_in: empty range"),
+        Bound::Unbounded => i8::MAX,
+    };
+    assert!(lo <= hi, "sample_i8_in: empty range");
+    // Offset from `lo` in u64 so a full-width signed range works; the
+    // span fits a u8, which fits a u64.
+    let width = (hi as i64 - lo as i64) as u64 + 1;
+    let v = (lo as i64 + sample_below(ctx, width) as i64) as i8;
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `i16` inside `range`.
+///
+/// Accepts any `RangeBounds<i16>`, including the full signed domain.
+/// See [`sample_i8_in`] for the unsigned-offset rule.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, or an excluded
+/// start of `i16::MAX`).
+///
+/// # Determinism note
+///
+/// See [`sample_u64_in`].
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// let diff = noprop::sample_i16_in(&mut ctx, -300..=300);
+/// assert!((-300..=300).contains(&diff));
+/// ```
+#[track_caller]
+pub fn sample_i16_in<R: RangeBounds<i16>>(ctx: &mut TestCaseContext, range: R) -> i16 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_i16_in: empty range"),
+        Bound::Unbounded => i16::MIN,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_i16_in: empty range"),
+        Bound::Unbounded => i16::MAX,
+    };
+    assert!(lo <= hi, "sample_i16_in: empty range");
+    let width = (hi as i64 - lo as i64) as u64 + 1;
+    let v = (lo as i64 + sample_below(ctx, width) as i64) as i16;
+    ctx.record_generated(&v, loc);
+    v
+}
+
+/// Uniformly-distributed `i32` inside `range`.
+///
+/// Accepts any `RangeBounds<i32>`, including the full `i32::MIN..=i32::MAX`
+/// domain. See [`sample_i8_in`] for the unsigned-offset rule.
+///
+/// # Panics
+///
+/// Panics if `range` is empty (e.g. `5..5`, `5..=4`, or an excluded
+/// start of `i32::MAX`).
+///
+/// # Determinism note
+///
+/// See [`sample_u64_in`].
+///
+/// # Examples
+///
+/// ```
+/// let mut ctx = noprop::TestCaseContext::new(0);
+///
+/// let diff = noprop::sample_i32_in(&mut ctx, -128..=127);
+/// assert!((-128..=127).contains(&diff));
+///
+/// // The full signed domain is a valid range, not an overflow.
+/// let any = noprop::sample_i32_in(&mut ctx, ..);
+/// let _ = any;
+/// ```
+#[track_caller]
+pub fn sample_i32_in<R: RangeBounds<i32>>(ctx: &mut TestCaseContext, range: R) -> i32 {
+    let loc = Location::caller();
+    let lo = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s.checked_add(1).expect("sample_i32_in: empty range"),
+        Bound::Unbounded => i32::MIN,
+    };
+    let hi = match range.end_bound() {
+        Bound::Included(&e) => e,
+        Bound::Excluded(&e) => e.checked_sub(1).expect("sample_i32_in: empty range"),
+        Bound::Unbounded => i32::MAX,
+    };
+    assert!(lo <= hi, "sample_i32_in: empty range");
+    // The span of any i32 range fits a u32, so it fits a u64; the
+    // difference is taken in i64 to avoid `hi - lo` overflow.
+    let width = (hi as i64 - lo as i64) as u64 + 1;
+    let v = (lo as i64 + sample_below(ctx, width) as i64) as i32;
     ctx.record_generated(&v, loc);
     v
 }
@@ -2016,6 +2288,131 @@ mod tests {
                 std::ops::Bound::<u64>::Unbounded,
             ),
         );
+    }
+
+    // === typed `_in` samplers ===
+
+    #[test]
+    fn typed_in_samplers_stay_in_range() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..256 {
+            assert!((10..20).contains(&sample_u8_in(&mut ctx, 10..20)));
+            assert!((10..=20).contains(&sample_u16_in(&mut ctx, 10..=20)));
+            assert!((10..=20).contains(&sample_u32_in(&mut ctx, 10..=20)));
+            assert!((-10..0).contains(&sample_i8_in(&mut ctx, -10..0)));
+            assert!((-10..=0).contains(&sample_i16_in(&mut ctx, -10..=0)));
+            assert!((-10..=0).contains(&sample_i32_in(&mut ctx, -10..=0)));
+        }
+    }
+
+    #[test]
+    fn typed_in_samplers_full_width_stay_in_range() {
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..64 {
+            let _ = sample_u8_in(&mut ctx, ..);
+            let _ = sample_u16_in(&mut ctx, ..);
+            let _ = sample_u32_in(&mut ctx, ..);
+            // The full signed domain must not overflow while normalizing.
+            let _ = sample_i8_in(&mut ctx, i8::MIN..=i8::MAX);
+            let _ = sample_i16_in(&mut ctx, i16::MIN..=i16::MAX);
+            let _ = sample_i32_in(&mut ctx, i32::MIN..=i32::MAX);
+        }
+    }
+
+    #[test]
+    fn typed_in_samplers_inclusive_max_stays_in_range() {
+        // Exercises the width + 1 arithmetic on the widest non-full
+        // range for each type, so it must not overflow.
+        let mut ctx = TestCaseContext::new(1);
+        for _ in 0..64 {
+            assert!(sample_u8_in(&mut ctx, 1..=u8::MAX) >= 1);
+            assert!(sample_u16_in(&mut ctx, 1..=u16::MAX) >= 1);
+            assert!(sample_u32_in(&mut ctx, 1..=u32::MAX) >= 1);
+            assert!(sample_i8_in(&mut ctx, i8::MIN..=i8::MAX - 1) < i8::MAX);
+            assert!(sample_i16_in(&mut ctx, i16::MIN..=i16::MAX - 1) < i16::MAX);
+            assert!(sample_i32_in(&mut ctx, i32::MIN..=i32::MAX - 1) < i32::MAX);
+        }
+    }
+
+    #[test]
+    fn typed_in_samplers_single_element_returns_that_element() {
+        let mut ctx = TestCaseContext::new(1);
+        assert_eq!(sample_u8_in(&mut ctx, 5..=5), 5);
+        assert_eq!(sample_u16_in(&mut ctx, 5..=5), 5);
+        assert_eq!(sample_u32_in(&mut ctx, 5..=5), 5);
+        assert_eq!(sample_i8_in(&mut ctx, -5..=-5), -5);
+        assert_eq!(sample_i16_in(&mut ctx, -5..=-5), -5);
+        assert_eq!(sample_i32_in(&mut ctx, -5..=-5), -5);
+    }
+
+    #[test]
+    fn typed_in_samplers_hit_both_endpoints() {
+        let mut ctx = TestCaseContext::new(1);
+        let (mut lo, mut hi) = (false, false);
+        for _ in 0..1024 {
+            let v = sample_i8_in(&mut ctx, -2..=2);
+            lo |= v == -2;
+            hi |= v == 2;
+            if lo && hi {
+                return;
+            }
+        }
+        panic!("sample_i8_in did not cover both endpoints");
+    }
+
+    #[test]
+    fn typed_in_samplers_are_deterministic() {
+        let mut a = TestCaseContext::new(999);
+        let mut b = TestCaseContext::new(999);
+        for _ in 0..64 {
+            assert_eq!(sample_u8_in(&mut a, 0..137), sample_u8_in(&mut b, 0..137));
+            assert_eq!(
+                sample_i32_in(&mut a, -100..=100),
+                sample_i32_in(&mut b, -100..=100)
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_u8_in: empty range")]
+    fn sample_u8_in_panics_on_empty_exclusive() {
+        let mut ctx = TestCaseContext::new(0);
+        let _ = sample_u8_in(&mut ctx, 5..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_u8_in: empty range")]
+    fn sample_u8_in_panics_on_excluded_max_start() {
+        let mut ctx = TestCaseContext::new(0);
+        // An excluded start of u8::MAX would need start + 1, which
+        // overflows — semantically the range is empty.
+        let _ = sample_u8_in(
+            &mut ctx,
+            (
+                std::ops::Bound::Excluded(u8::MAX),
+                std::ops::Bound::<u8>::Unbounded,
+            ),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_i8_in: empty range")]
+    fn sample_i8_in_panics_on_reversed_inclusive() {
+        let mut ctx = TestCaseContext::new(0);
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "the reversed range is the panic condition under test"
+        )]
+        let _ = sample_i8_in(&mut ctx, 5..=4);
+    }
+
+    #[test]
+    #[should_panic(expected = "sample_i32_in: empty range")]
+    fn sample_i32_in_panics_on_reversed_exclusive() {
+        let mut ctx = TestCaseContext::new(0);
+        // `..0` is `i32::MIN..0`, which is non-empty for a signed type;
+        // an actually empty exclusive range is one where lo == hi.
+        let _ = sample_i32_in(&mut ctx, 0..0);
     }
 
     // === Ratio ===
