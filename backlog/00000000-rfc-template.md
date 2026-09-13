@@ -35,6 +35,14 @@ lost simplicity, and so on.
 - What other designs were evaluated, and why were they rejected?
 - What is the impact of doing nothing?
 
+## Outcome
+
+Fill this in only when the proposal is settled. State whether it was accepted
+or rejected, and give the reasoning that decided it. For a rejected proposal
+this is the most important section: it is what stops the same request from
+being raised again without new evidence. Leave the section out while the
+proposal is still open.
+
 ## Unresolved questions
 
 Points that must be settled before or during implementation. If there are

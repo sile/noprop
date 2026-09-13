@@ -76,8 +76,9 @@ An RFC has one of two states, expressed by its location:
 | `done` | `backlog/done/`   | Settled; no longer being worked on.            |
 
 Whether a settled RFC was **accepted** or **rejected** is recorded in its
-`Status` field (see `00000000-rfc-template.md`) and in its body. It is
-deliberately not split into separate directories:
+`Status` field (see `00000000-rfc-template.md`) and in an `## Outcome`
+section, which is written when the proposal is settled and left out while it
+is open. It is deliberately not split into separate directories:
 
 - noprop does not value long-term stability as a primary goal, so "accepted"
 is not a permanent commitment. An accepted RFC may later be changed or even
