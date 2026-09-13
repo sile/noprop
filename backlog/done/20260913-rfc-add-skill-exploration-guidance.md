@@ -1,6 +1,6 @@
 # RFC: Add generator-sizing and gate-construction guidance to the skill
 
-- Status: draft
+- Status: accepted
 
 ## Summary
 
@@ -155,15 +155,33 @@ text.
   (gate too unlikely vs. gate always true) and a reader hits one or the
   other, not both. Keeping them separate lets each be found by its symptom.
 
+## Outcome
+
+Accepted. The three additions go into `skills/noprop/SKILL.md` as described
+in [Reference-level explanation](#reference-level-explanation). Both open
+questions were settled against adding more:
+
+- **No total-nodes budget.** The per-case cost (`branch_factor ^ depth`) is
+the quantity the reader is missing; the total over a run is that cost times
+the case count, and the case count is already governed by section 6's miss
+probability guidance. A second budget would give the same advice twice while
+suggesting a measurement the skill does not ask for, and an exact node count
+is domain dependent enough that this proposal already rejected it as an
+alternative. The estimate alone is what makes the reader pick small numbers;
+the multiplication is the whole step.
+- **No inline worked example for the correlated gate.** The bullet stays at
+the level of "derive them from one draw". Section 5 is dense and its other
+bullets carry decisions, not examples; an equal-size example needs domain
+vocabulary (frames, sizes) that the rest of the section avoids. The failure
+mode is already named (independent draws make reachability a product of
+probabilities, so the gate fails intermittently), which is what a reader
+needs to recognize and fix their own case. The arithmetic stays in
+Motivation, where it justifies the rule rather than restating it.
+
 ## Unresolved questions
 
-- Whether the recursion bullet should also mention a total-nodes budget in
-  addition to the `branch_factor ^ depth` estimate, or whether the estimate
-  alone is enough to make the reader pick small numbers.
-- Whether the correlated-gate bullet should carry a worked example (the
-  equal-size case) inline or stay at the level of "derive them from one
-  draw". An inline example is clearer but lengthens a section that is
-  already dense.
+None. Both questions raised in draft were settled in
+[Outcome](#outcome).
 
 ## Future possibilities
 

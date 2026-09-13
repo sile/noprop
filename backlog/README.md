@@ -101,6 +101,18 @@ git mv backlog/20260913-rfc-add-typed-samplers.md backlog/done/
 
 Update the `Status` field in the same commit.
 
+## Pull requests
+
+An RFC that is implemented reaches `main` through a pull request, like any
+other change. The same one-way rule applies to it: a pull request must make
+sense to someone who never opens `backlog/`.
+
+Write the title and body as a description of the change itself, not of the
+proposal process. Name what the change does and why, the way any other pull
+request would. Do not mention that an RFC was accepted or rejected, and do
+not cite a path under `backlog/`; a reviewer who wants the reasoning can
+find it, and a reader who does not need it is not sent there.
+
 ## Packaging
 
 The `backlog/` directory is development material and is excluded from the
