@@ -57,7 +57,14 @@ For every generator, decide its support, distribution, and termination.
   Draw a length before its payload, a protocol version before its dependent
   fields, and consult model state before choosing a legal command.
 - Keep loops and recursion explicitly bounded. Sample the bound or depth from
-  a finite range and include both short and long cases deliberately.
+  a finite range and include both short and long cases deliberately. For a
+  recursive generator, write the per-case cost as `branch_factor ^ depth`
+  before the first run, where `depth` is the nesting count and
+  `branch_factor` the number of children per level. Keep both as named
+  constants in one place. Start from a depth in the low single digits and a
+  branch factor of 2, and relax a bound only with evidence that more is
+  needed; if the product is in the thousands, the first run will be slow no
+  matter how cheap one node is.
 - Use `sample_with_boundaries` to give domain boundaries meaningful
   probability without discarding the interior distribution.
 - Use `sample_weighted_index` for branch or command selection. Keep the
@@ -101,6 +108,20 @@ Coverage gates use interior mutability because the property closure implements
   (a bounded history of witnesses, a set of reached buckets).
 - Per-case temporaries live in a plain `let mut` inside the closure, not in
   interior mutability.
+
+When reaching the gated code depends on two or more draws agreeing (equal
+sizes, equal lengths, a match between two independent samples), derive all of
+them from one draw rather than drawing them independently. Independent draws
+make the gate's reachability a product of probabilities, usually far below
+the weight a reader imagines, so the gate fails intermittently rather than
+never. Drawing a coin and having every dependent quantity obey it is a
+structural fix; no weight tuning is needed.
+
+When the gate means "alternative strategy B was taken" and there is no flag
+for B, compare an observable that both strategies move — but compare a
+per-case increment, not a cumulative total. A cumulative total already
+includes the work of every earlier case, so it is positive from the first
+case and the gate is vacuous.
 
 Increment the cell at the invariant-eval site — not where the target value
 was drawn, not where a branch was selected. Order the closure so every
