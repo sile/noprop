@@ -254,10 +254,11 @@ The alternatives below are recorded here so the same ground is not re-argued.
   reasoning still holds: a 128-bit range needs its own rejection core (the
   current helpers are 64-bit), so it is not the same "narrow the existing
   sampler" change as the rest. Leave both out until a consumer asks.
-- Whether the doc on `sample_u64_in` (which today explains "why no other
-  integer `_in` variants") should be rewritten once this RFC lands, since its
-  premise becomes obsolete. This is a documentation change that should land in
-  the same commit as the code, or explicitly be left for a follow-up.
+- The doc on `sample_u64_in` explains "why no other integer `_in` variants"
+  and a `u128` rationale; the first half becomes obsolete once this RFC lands.
+  It is rewritten in the same commit as the implementation, so the docstring
+  never contradicts the shipping API: the section is replaced by a pointer to
+  the typed family, keeping only the `u128` reasoning.
 
 ## Future possibilities
 
