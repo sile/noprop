@@ -23,7 +23,7 @@ decision matters to a reader, write it where the reader is looking instead.
 ```
 backlog/
   README.md                       # this file: process, naming, states
-  template-rfc.md                 # template for a new RFC
+  00000000-rfc-template.md        # template for a new RFC
   YYYYMMDD-rfc-slug.md            # an open RFC
   done/
     YYYYMMDD-rfc-slug.md          # a settled RFC
@@ -55,6 +55,12 @@ should be merged.
 
 Because no numbering is used, there is no counter file to maintain.
 
+The template is named `00000000-rfc-template.md`, not `template-rfc.md`, so
+that it sorts ahead of every real proposal (digits sort before letters in
+git's ordering, so a leading `t` would not). The `00000000` is a date
+placeholder that no RFC will ever use; the `rfc-` kind prefix keeps it
+consistent with the naming scheme above.
+
 ## States
 
 An RFC has one of two states, expressed by its location:
@@ -65,8 +71,8 @@ An RFC has one of two states, expressed by its location:
 | `done` | `backlog/done/`   | Settled; no longer being worked on.            |
 
 Whether a settled RFC was **accepted** or **rejected** is recorded in its
-`Status` field (see `template-rfc.md`) and in its body. It is deliberately not
-split into separate directories:
+`Status` field (see `00000000-rfc-template.md`) and in its body. It is
+deliberately not split into separate directories:
 
 - noprop does not value long-term stability as a primary goal, so "accepted"
 is not a permanent commitment. An accepted RFC may later be changed or even

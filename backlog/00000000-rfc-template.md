@@ -1,7 +1,6 @@
 # RFC: <title>
 
 - Status: draft | accepted | rejected | postponed
-- Date: YYYYMMDD
 
 ## Summary
 
